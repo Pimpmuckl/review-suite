@@ -1,0 +1,1878 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import copy
+import json
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+from review_suite_core import (
+    AxiArgumentParser,
+    DEFAULT_PROGRESS_INTERVAL_SECONDS,
+    effective_execution_cwd,
+    emit_error,
+    emit_toon,
+    format_command,
+    record_review_anchor,
+    resolve_repo_root,
+    utc_now_iso,
+    validate_codex_runtime,
+    write_text,
+)
+from review_suite_local import (
+    OPERATIONAL_STATE_FILENAME,
+    RUN_LOG_FILENAME,
+    TASK_CLASSES,
+    _finalized_run_summary,
+    _run_is_finalized,
+    aggregate_records,
+    append_record_if_new,
+    build_manual_review_prompt,
+    build_record_from_grade,
+    build_reroll_slot_payload,
+    compact_benchmark_record,
+    collect_round_results,
+    default_roster_path,
+    default_rubric_path,
+    default_state_dir,
+    ensure_clean_git_worktree,
+    find_blocking_rounds_for_caller,
+    find_pending_rounds_for_caller,
+    guard_no_stage_step_down,
+    includes_deep_review_effort,
+    launch_round,
+    load_operational_state,
+    load_roster,
+    normalize_record_review_cwd_value,
+    load_round,
+    load_rubric,
+    normalize_review_cwd_value,
+    normalize_grade_basis,
+    iter_round_payloads,
+    print_deep_review_wait_note,
+    promote,
+    public_round_payload,
+    public_round_result,
+    read_jsonl,
+    round_needs_caller_grade,
+    record_identity_key,
+    resolve_caller_id,
+    run_round,
+    select_pair,
+    state_lock,
+    ungraded_round_exposure_records,
+    payload_has_blocked_runs,
+    public_task_name,
+    round_has_live_reviewer_process,
+    output_isatty,
+    reviewer_output_heading,
+    usable_output_slots,
+    write_json,
+    write_jsonl,
+    write_reports,
+    write_round,
+    final_display_body,
+)
+from review_gate import (
+    GATE_FINDINGS_SCOPE_CHECK,
+    PUBLIC_TASK_BY_GATE,
+    _gate_output_refs,
+    gate_record_status,
+    gate_signoff_decision_for_round,
+    gate_signoff_decisions_by_round,
+    load_gate_record,
+    record_gate_signoff_decision,
+)
+from review_costs import (
+    DEFAULT_COST_REPORT_FILENAME,
+    collect_review_cost_rows,
+    refresh_review_cost_report_best_effort,
+    update_review_cost_row_cache,
+    write_review_cost_report,
+)
+
+
+PUBLIC_ARENA_TASK_CLASS_ALIASES = {
+    "review_t1": "phase_review",
+    "review_t3": "pr_review",
+}
+
+
+def _blocking_round_message(
+    *,
+    payload: dict[str, object],
+    action: str,
+) -> str:
+    round_id = str(payload.get("round_id") or "")
+    status = str(payload.get("status") or "unknown")
+    if round_needs_caller_grade(payload):
+        lines = [
+            f"grade the completed round before {action}: {round_id}",
+            f"grade_command: {_grade_command()}",
+        ]
+    else:
+        lines = [
+            f"wait for the existing round before {action}: {round_id} ({status})",
+        ]
+    lines.append(
+        f"dismiss_command: {_dismiss_round_command(round_id=round_id)}"
+    )
+    lines.append("Pass --ignore-pending-grades only if you intentionally want to bypass this safeguard.")
+    return "\n".join(lines)
+
+
+def _raise_if_blocking_round_exists(
+    *,
+    action: str,
+    ignore_pending_grades: bool,
+    state_dir: Path,
+    caller_id: str | None,
+    review_cwd: Path,
+    roster_path: Path,
+    rubric_path: Path,
+) -> None:
+    if ignore_pending_grades:
+        return
+    blocking = find_blocking_rounds_for_caller(state_dir=state_dir, caller_id=caller_id, review_cwd=review_cwd)
+    if not blocking:
+        return
+    latest = blocking[-1]
+    raise ValueError(
+        _blocking_round_message(
+            payload=latest,
+            action=action,
+        )
+    )
+
+
+def _resolve_review_cwd(cd: str | None) -> Path:
+    return resolve_repo_root(cd)
+
+
+def _summary_equivalence_view(summary: dict[str, object]) -> dict[str, object]:
+    comparable = copy.deepcopy(summary)
+    comparable.pop("generated_at", None)
+    return comparable
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = AxiArgumentParser(description="Review Suite paired local review orchestration.")
+    sub = parser.add_subparsers(dest="command", required=True, parser_class=AxiArgumentParser)
+    task_class_choices = tuple(TASK_CLASSES) + tuple(PUBLIC_ARENA_TASK_CLASS_ALIASES)
+
+    run = sub.add_parser("run")
+    run.add_argument("--task-class", required=True, choices=task_class_choices)
+    run.add_argument("--cd")
+    run.add_argument("--task-id")
+    run.add_argument("--base", required=True)
+    run.add_argument("--seed", type=int)
+    run.add_argument("--roster", default=str(default_roster_path()))
+    run.add_argument("--rubric", default=str(default_rubric_path()))
+    run.add_argument("--state-dir", default=str(default_state_dir()))
+    run.add_argument("--sqlite-path", default=str(Path.home() / ".codex" / "state_5.sqlite"))
+    run.add_argument("--allow-dirty", action="store_true")
+    run.add_argument("--wsl", action="store_true")
+    run.add_argument("--caller-id")
+    run.add_argument("--ignore-pending-grades", action="store_true")
+    run.add_argument("--winner", help="alpha, bravo, or tie")
+    run.add_argument("--basis", help="why the winner won")
+    run.add_argument("--note")
+    run.add_argument("--alpha-note")
+    run.add_argument("--bravo-note")
+
+    sample = sub.add_parser("sample")
+    sample.add_argument("--task-class", required=True, choices=task_class_choices)
+    sample.add_argument("--seed", type=int)
+    sample.add_argument("--roster", default=str(default_roster_path()))
+    sample.add_argument("--state-dir", default=str(default_state_dir()))
+    sample.add_argument("--caller-id")
+    sample.add_argument("--ignore-pending-grades", action="store_true")
+    sample.add_argument("--exclude-variant-id", action="append", default=[])
+
+    run = sub.add_parser("run-round")
+    run.add_argument("--round-id", required=True)
+    run.add_argument("--cd")
+    run.add_argument("--roster", default=str(default_roster_path()))
+    run.add_argument("--state-dir", default=str(default_state_dir()))
+    run.add_argument("--sqlite-path", default=str(Path.home() / ".codex" / "state_5.sqlite"))
+    run.add_argument("--base", required=True)
+    run.add_argument("--allow-dirty", action="store_true")
+    run.add_argument("--wsl", action="store_true")
+
+    resume = sub.add_parser("resume-round")
+    resume.add_argument("--round-id", required=True)
+    resume.add_argument("--cd")
+    resume.add_argument("--roster", default=str(default_roster_path()))
+    resume.add_argument("--state-dir", default=str(default_state_dir()))
+    resume.add_argument("--sqlite-path", default=str(Path.home() / ".codex" / "state_5.sqlite"))
+
+    show = sub.add_parser("show-round")
+    show.add_argument("--round-id", required=True)
+    show.add_argument("--state-dir", default=str(default_state_dir()))
+    show.add_argument("--json", action="store_true")
+
+    show_last = sub.add_parser("show-last", aliases=["show_last"])
+    show_last.add_argument("--cd")
+    show_last.add_argument("--task", choices=["review_t1", "review_t2", "review_t3", "review_t4"])
+    show_last.add_argument("--state-dir", default=str(default_state_dir()))
+    show_last.add_argument("--json", action="store_true")
+
+    close_gate = sub.add_parser("close-gate", aliases=["close-signoff"])
+    close_gate.add_argument("--round-id", required=True)
+    close_gate.add_argument("--verdict", required=True, choices=["clean", "findings"])
+    close_gate.add_argument("--state-dir", default=str(default_state_dir()))
+    close_gate.add_argument("--note")
+
+    costs = sub.add_parser("costs")
+    costs.add_argument("--cd")
+    costs.add_argument("--all", action="store_true")
+    costs.add_argument("--state-dir", default=str(default_state_dir()))
+    costs.add_argument("--codex-home")
+    costs.add_argument("--output")
+    costs.add_argument("--json", action="store_true")
+
+    run_manual = sub.add_parser("run-manual-round")
+    run_manual.add_argument("--round-id", required=True)
+    run_manual.add_argument("--cd")
+    run_manual.add_argument("--roster", default=str(default_roster_path()))
+    run_manual.add_argument("--state-dir", default=str(default_state_dir()))
+    run_manual.add_argument("--sqlite-path", default=str(Path.home() / ".codex" / "state_5.sqlite"))
+    run_manual.add_argument("--diff-file", required=True)
+    run_manual.add_argument("--instructions")
+    run_manual.add_argument("--instructions-file")
+    run_manual.add_argument("--wsl", action="store_true")
+
+    grade = sub.add_parser("grade")
+    grade.add_argument("--round-id")
+    grade.add_argument("--task-id")
+    grade.add_argument("--winner", required=True, help="alpha, bravo, tie, or a concrete variant id")
+    grade.add_argument("--basis", required=True, help="why the winner won")
+    grade.add_argument("--note")
+    grade.add_argument("--alpha-note")
+    grade.add_argument("--bravo-note")
+    grade.add_argument("--roster", default=str(default_roster_path()))
+    grade.add_argument("--rubric", default=str(default_rubric_path()))
+    grade.add_argument("--state-dir", default=str(default_state_dir()))
+    grade.add_argument("--caller-id")
+    grade.add_argument("--refresh-report", action="store_true")
+
+    dismiss = sub.add_parser("dismiss-round")
+    dismiss.add_argument("--round-id", required=True)
+    dismiss.add_argument("--state-dir", default=str(default_state_dir()))
+    dismiss.add_argument("--reason", default="manual_dismiss")
+    dismiss.add_argument("--caller-id")
+
+    report = sub.add_parser("report")
+    report.add_argument("--roster", default=str(default_roster_path()))
+    report.add_argument("--state-dir", default=str(default_state_dir()))
+    report.add_argument("--round-id", help=argparse.SUPPRESS)
+
+    refresh = sub.add_parser("refresh")
+    refresh.add_argument("--roster", default=str(default_roster_path()))
+    refresh.add_argument("--state-dir", default=str(default_state_dir()))
+
+    promote_parser = sub.add_parser("promote")
+    promote_parser.add_argument("--roster", default=str(default_roster_path()))
+    promote_parser.add_argument("--state-dir", default=str(default_state_dir()))
+    promote_parser.add_argument("--apply", action="store_true")
+
+    compact = sub.add_parser("compact-runs")
+    compact.add_argument("--roster", default=str(default_roster_path()))
+    compact.add_argument("--state-dir", default=str(default_state_dir()))
+    compact.add_argument("--backup-suffix", default=".bak")
+    compact.add_argument("--apply", action="store_true")
+
+    reroll = sub.add_parser("reroll-slot")
+    reroll.add_argument("--round-id", required=True)
+    reroll.add_argument("--slot", required=True, choices=["alpha", "bravo"])
+    reroll.add_argument("--cd")
+    reroll.add_argument("--base")
+    reroll.add_argument("--seed", type=int)
+    reroll.add_argument("--roster", default=str(default_roster_path()))
+    reroll.add_argument("--rubric", default=str(default_rubric_path()))
+    reroll.add_argument("--state-dir", default=str(default_state_dir()))
+    reroll.add_argument("--sqlite-path", default=str(Path.home() / ".codex" / "state_5.sqlite"))
+    reroll.add_argument("--allow-dirty", action="store_true")
+    reroll.add_argument("--wsl", action="store_true")
+
+    return parser
+
+
+def cmd_sample(args: argparse.Namespace) -> int:
+    task_class = _normalize_arena_task_class(str(args.task_class))
+    caller_id, caller_id_source = resolve_caller_id(args.caller_id)
+    review_cwd = _resolve_review_cwd(getattr(args, "cd", None))
+    roster = load_roster(Path(args.roster))
+    state_dir = Path(args.state_dir)
+    _raise_if_blocking_round_exists(
+        action="sampling another round",
+        ignore_pending_grades=bool(args.ignore_pending_grades),
+        state_dir=state_dir,
+        caller_id=caller_id,
+        review_cwd=review_cwd,
+        roster_path=Path(args.roster),
+        rubric_path=Path(getattr(args, "rubric", default_rubric_path())),
+    )
+    records = read_jsonl(state_dir / RUN_LOG_FILENAME) + ungraded_round_exposure_records(state_dir)
+    operational_state = load_operational_state(state_dir / OPERATIONAL_STATE_FILENAME)
+    payload = select_pair(
+        roster=roster,
+        operational_state=operational_state,
+        records=records,
+        task_class=task_class,
+        review_cwd=review_cwd,
+        seed=args.seed,
+        caller_id=caller_id,
+        caller_id_source=caller_id_source,
+        excluded_variant_ids=set(args.exclude_variant_id),
+    )
+    write_round(state_dir, payload)
+    emit_toon(public_round_payload(payload, task_name=_public_local_task_name(task_class)))
+    return 0
+
+
+def _current_branch_name(review_cwd: Path) -> str | None:
+    proc = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        cwd=str(review_cwd),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        return None
+    branch = proc.stdout.strip()
+    if not branch or branch == "HEAD":
+        return None
+    return branch
+
+
+def _validate_benchmarked_review_runtime(
+    *,
+    review_cwd: Path,
+    allow_unsafe_windows_wsl_fallback: bool,
+) -> None:
+    codex_executable = shutil.which("codex") or shutil.which("codex.cmd") or "codex"
+    validate_codex_runtime(
+        tool_name="review-suite",
+        codex_executable=codex_executable,
+        review_root=review_cwd,
+        allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
+        unsafe_command_hint="codex exec review --dangerously-bypass-approvals-and-sandbox",
+    )
+
+
+def _prompt_line(label: str, default: str | None = None) -> str:
+    suffix = f" [{default}]" if default else ""
+    print(f"{label}{suffix}:", file=sys.stderr, flush=True)
+    try:
+        value = input().strip()
+    except EOFError:
+        raise EOFError(f"no interactive input available for prompt: {label}")
+    if value:
+        return value
+    return default or ""
+
+
+def _prompt_winner(default: str | None = None) -> str:
+    while True:
+        winner = _prompt_line(
+            "Winner (alpha/bravo/tie; use tie only when materially indistinguishable)",
+            default=default,
+        ).strip().lower()
+        if winner in {"alpha", "bravo", "tie"}:
+            return winner
+        print("[review-suite] winner must be alpha, bravo, or tie", file=sys.stderr, flush=True)
+
+
+def _prompt_basis(rubric: dict[str, object]) -> str:
+    basis_values = [str(item) for item in list(rubric.get("basis") or [])]
+    default = "valid_findings_vs_none"
+    while True:
+        value = _prompt_line(
+            "Basis",
+            default=default,
+        )
+        try:
+            return normalize_grade_basis(value, rubric)
+        except Exception as exc:
+            print(f"[review-suite] invalid basis: {exc}", file=sys.stderr, flush=True)
+            if basis_values:
+                print(f"[review-suite] basis values: {', '.join(basis_values)}", file=sys.stderr, flush=True)
+
+
+def _print_findings(result: dict[str, object]) -> None:
+    streamed_bodies = {str(key): str(value) for key, value in dict(result.get("live_output_streamed_bodies", {})).items()}
+    printed = False
+    for raw_run in result.get("runs", []):
+        run = _finalized_run_summary(raw_run) if isinstance(raw_run, dict) else {}
+        slot = str(run.get("slot") or "reviewer")
+        emitted_body = streamed_bodies.get(str(slot))
+        final_body = final_display_body(run)
+        if bool(run.get("grade_blocked")):
+            if emitted_body and emitted_body == final_body:
+                continue
+            print(reviewer_output_heading(run), file=sys.stderr, flush=True)
+            print(final_body, file=sys.stderr, flush=True)
+            print("", file=sys.stderr, flush=True)
+            printed = True
+            continue
+        if emitted_body and emitted_body == final_body:
+            continue
+        print(reviewer_output_heading(run), file=sys.stderr, flush=True)
+        print(final_body, file=sys.stderr, flush=True)
+        print("", file=sys.stderr, flush=True)
+        printed = True
+    return printed
+
+
+def _ensure_no_pending_grades(
+    *,
+    ignore_pending_grades: bool,
+    state_dir: Path,
+    caller_id: str | None,
+    review_cwd: Path,
+    roster_path: Path,
+    rubric_path: Path,
+) -> None:
+    _raise_if_blocking_round_exists(
+        action="starting another round",
+        ignore_pending_grades=ignore_pending_grades,
+        state_dir=state_dir,
+        caller_id=caller_id,
+        review_cwd=review_cwd,
+        roster_path=roster_path,
+        rubric_path=rubric_path,
+    )
+
+
+def _script_command() -> str:
+    return format_command([sys.executable, Path(__file__).resolve().as_posix()])
+
+
+def _grade_command(
+    *,
+    round_id: str | None = None,
+    task_id: str | None = None,
+) -> str:
+    parts = [
+        sys.executable,
+        Path(__file__).resolve().as_posix(),
+        "grade",
+    ]
+    if round_id:
+        parts.extend(["--round-id", round_id])
+    if task_id:
+        parts.extend(["--task-id", task_id])
+    parts.extend(
+        [
+            "--winner",
+            "WINNER",
+            "--basis",
+            "BASIS",
+        ]
+    )
+    return format_command(parts)
+
+
+def _dismiss_round_command(
+    *,
+    round_id: str,
+) -> str:
+    return format_command(
+        [
+            sys.executable,
+            Path(__file__).resolve().as_posix(),
+            "dismiss-round",
+            "--round-id",
+            round_id,
+        ]
+    )
+
+
+def _reroll_command(
+    *,
+    round_id: str,
+    slot: str,
+    review_cwd: Path,
+    base: str | None,
+    roster_path: Path,
+    rubric_path: Path,
+    state_dir: Path,
+    sqlite_path: Path,
+    allow_dirty: bool,
+    allow_unsafe_windows_wsl_fallback: bool,
+) -> str:
+    parts = [
+        sys.executable,
+        Path(__file__).resolve().as_posix(),
+        "reroll-slot",
+        "--round-id",
+        round_id,
+        "--slot",
+        slot,
+    ]
+    if allow_dirty:
+        parts.append("--allow-dirty")
+    if allow_unsafe_windows_wsl_fallback:
+        parts.append("--wsl")
+    return format_command(parts)
+
+
+def _blocked_slots(round_result: dict[str, object]) -> list[str]:
+    blocked: list[str] = []
+    for run in round_result.get("runs", []):
+        if run.get("blocked"):
+            blocked.append(str(run["slot"]))
+    return blocked
+
+
+def _newly_usable_output_slots(
+    *, previous_payload: dict[str, object], completed_payload: dict[str, object]
+) -> set[str]:
+    previous_visible = usable_output_slots(previous_payload)
+    return usable_output_slots(completed_payload) - previous_visible
+
+
+def _visible_completed_output_slots(
+    *, previous_payload: dict[str, object], completed_payload: dict[str, object], show_all_when_gradeable: bool
+) -> set[str] | None:
+    if show_all_when_gradeable:
+        if payload_has_blocked_runs(completed_payload):
+            return usable_output_slots(completed_payload)
+        return None
+    return _newly_usable_output_slots(previous_payload=previous_payload, completed_payload=completed_payload)
+
+
+def _reroll_rows(
+    *,
+    round_result: dict[str, object],
+    round_id: str,
+    review_cwd: Path,
+    base: str | None,
+    roster_path: Path,
+    rubric_path: Path,
+    state_dir: Path,
+    sqlite_path: Path,
+    allow_dirty: bool,
+    allow_unsafe_windows_wsl_fallback: bool,
+) -> list[dict[str, str]]:
+    return [
+        {
+            "slot": slot,
+            "command": _reroll_command(
+                round_id=round_id,
+                slot=slot,
+                review_cwd=review_cwd,
+                base=base,
+                roster_path=roster_path,
+                rubric_path=rubric_path,
+                state_dir=state_dir,
+                sqlite_path=sqlite_path,
+                allow_dirty=allow_dirty,
+                allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
+            ),
+        }
+        for slot in _blocked_slots(round_result)
+    ]
+
+
+def _has_direct_grade_inputs(
+    *,
+    task_id: str | None,
+    winner: str | None,
+    basis: str | None,
+) -> bool:
+    return all(bool(str(value or "").strip()) for value in (task_id, winner, basis))
+
+
+def _resolve_pending_round_for_direct_grade(
+    *,
+    state_dir: Path,
+    caller_id: str | None,
+    review_cwd: Path,
+    task_class: str,
+) -> dict[str, object] | None:
+    pending = [
+        payload
+        for payload in find_pending_rounds_for_caller(state_dir=state_dir, caller_id=caller_id, review_cwd=review_cwd)
+        if str(payload.get("task_class") or "") == task_class
+    ]
+    if len(pending) == 1:
+        return pending[-1]
+    if len(pending) > 1:
+        raise ValueError(
+            f"multiple pending {task_class} rounds found for this caller in this repo; use review_suite_arena.py grade --round-id ... to choose one explicitly"
+        )
+    review_cwd_normalized = normalize_review_cwd_value(review_cwd)
+    repo_pending = [
+        payload
+        for payload in iter_round_payloads(state_dir)
+        if str(payload.get("task_class") or "") == task_class
+        and normalize_record_review_cwd_value(payload) == review_cwd_normalized
+        and round_needs_caller_grade(payload)
+    ]
+    if len(repo_pending) == 1:
+        return repo_pending[0]
+    if len(repo_pending) > 1:
+        raise ValueError(
+            f"multiple pending {task_class} rounds found in this repo; use review_suite_arena.py grade --round-id ... to choose one explicitly"
+        )
+    return None
+
+
+def _completed_round_payload(
+    *,
+    round_result: dict[str, object],
+    grade_command: str | None = None,
+    reroll_rows: list[dict[str, str]] | None = None,
+    status: str = "completed_ungraded",
+    grade: dict[str, object] | None = None,
+    manual: bool | None = None,
+) -> dict[str, object]:
+    actions: list[dict[str, object]] = []
+    if grade_command:
+        actions.append({"kind": "grade", "cmd": grade_command})
+    if reroll_rows:
+        actions.extend({"kind": "reroll", "slot": row["slot"], "cmd": row["command"]} for row in reroll_rows)
+    if (
+        status == "completed_ungraded"
+        and grade_command
+        and not bool(round_result.get("blocked"))
+        and not reroll_rows
+        and grade is None
+        and not manual
+    ):
+        return {"To-Do": {"grade": grade_command}}
+    payload: dict[str, object] = {
+        "status": status,
+        "blocked": bool(round_result.get("blocked")),
+        "runs": round_result["runs"],
+    }
+    if actions:
+        payload["actions"] = actions
+    if grade is not None:
+        payload["grade"] = grade
+    if manual:
+        payload["manual"] = True
+    return payload
+
+
+def _public_local_task_name(task_class: str) -> str:
+    return public_task_name(task_class)
+
+
+def _output_isatty() -> bool:
+    return output_isatty()
+
+
+def _print_round_banner(*, task_name: str, round_id: str) -> None:
+    print(f"[review-suite] round {task_name} {round_id}", file=sys.stderr, flush=True)
+
+
+def _public_summary(summary: dict[str, object]) -> dict[str, object]:
+    public = copy.deepcopy(summary)
+    task_classes = dict(public.get("task_classes") or {})
+    public["task_classes"] = {_public_local_task_name(task): value for task, value in task_classes.items()}
+    return public
+
+
+def _normalize_arena_task_class(task_class: str) -> str:
+    return PUBLIC_ARENA_TASK_CLASS_ALIASES.get(task_class, task_class)
+
+
+def _public_operational_state(state: dict[str, object]) -> dict[str, object]:
+    rows: list[dict[str, object]] = []
+    task_classes = dict(state.get("task_classes") or {})
+    for task in TASK_CLASSES:
+        slot = dict(task_classes.get(task) or {})
+        champions = [str(value) for value in list(slot.get("champion_variant_ids") or []) if str(value).strip()]
+        probation = [str(value) for value in list(slot.get("probation_variant_ids") or []) if str(value).strip()]
+        stable = [str(value) for value in list(slot.get("stable_variant_ids") or []) if str(value).strip()]
+        rows.append(
+            {
+                "task": _public_local_task_name(task),
+                "champions": ",".join(champions) if champions else None,
+                "probation": ",".join(probation) if probation else None,
+                "stable": ",".join(stable) if stable else None,
+                "cooldowns": len(dict(slot.get("cooldowns") or {})),
+            }
+        )
+    return {
+        "status": "ok",
+        "tasks": rows,
+    }
+
+
+def _print_next_steps(
+    *,
+    round_id: str,
+    task_id: str,
+    round_result: dict[str, object],
+    review_cwd: Path,
+    base: str | None,
+    roster_path: Path,
+    rubric_path: Path,
+    state_dir: Path,
+    sqlite_path: Path,
+    allow_dirty: bool,
+    allow_unsafe_windows_wsl_fallback: bool,
+) -> None:
+    blocked_slots = _blocked_slots(round_result)
+    if blocked_slots:
+        for slot in blocked_slots:
+            print(f"Reroll {slot}:", file=sys.stderr, flush=True)
+            print(
+                _reroll_command(round_id=round_id, slot=slot, review_cwd=review_cwd, base=base, roster_path=roster_path, rubric_path=rubric_path, state_dir=state_dir, sqlite_path=sqlite_path, allow_dirty=allow_dirty, allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback),
+                file=sys.stderr,
+                flush=True,
+            )
+        return
+    print("Grade:", file=sys.stderr, flush=True)
+    print(
+        _grade_command(),
+        file=sys.stderr,
+        flush=True,
+    )
+
+
+def _review_output_refs(runs: list[dict[str, object]]) -> list[str]:
+    refs: list[str] = []
+    for run in runs:
+        ref = str(run.get("reviewer_output_ref") or "").strip()
+        if ref:
+            refs.append(ref)
+    return refs
+
+
+def _record_anchor_warning(exc: Exception) -> None:
+    print(f"[review-suite] WARNING: failed to record workflow anchor: {exc}", file=sys.stderr, flush=True)
+
+
+def run_benchmarked_round(
+    *,
+    task_class: str,
+    review_cwd: Path,
+    roster_path: Path,
+    rubric_path: Path,
+    state_dir: Path,
+    sqlite_path: Path,
+    seed: int | None,
+    allow_dirty: bool,
+    progress_interval_seconds: int,
+    allow_unsafe_windows_wsl_fallback: bool,
+    review_scope: dict[str, object],
+    prompt: str,
+    caller_id: str | None,
+    caller_id_source: str | None,
+    ignore_pending_grades: bool,
+    task_id: str | None,
+    winner: str | None,
+    basis: str | None,
+    note: str | None,
+    alpha_note: str | None,
+    bravo_note: str | None,
+    public_task_name: str | None = None,
+    allow_stage_step_down: bool = False,
+) -> int:
+    public_task = str(public_task_name or _public_local_task_name(task_class))
+    direct_grade_requested = _has_direct_grade_inputs(
+        task_id=task_id,
+        winner=winner,
+        basis=basis,
+    )
+    if direct_grade_requested:
+        pending_round = _resolve_pending_round_for_direct_grade(
+            state_dir=state_dir,
+            caller_id=caller_id,
+            review_cwd=review_cwd,
+            task_class=task_class,
+        )
+        if pending_round is not None:
+            roster = load_roster(roster_path)
+            rubric = load_rubric(rubric_path)
+            result = _record_grade_result(
+                roster=roster,
+                rubric=rubric,
+                state_dir=state_dir,
+                round_id=str(pending_round["round_id"]),
+                task_id=str(task_id),
+                winner=str(winner),
+                basis=str(basis),
+                note=note,
+                alpha_note=alpha_note,
+                bravo_note=bravo_note,
+                caller_id=caller_id,
+                caller_id_source=caller_id_source,
+                refresh_report=True,
+            )
+            result = dict(result)
+            result["task"] = public_task
+            emit_toon(result)
+            return 0
+    _ensure_no_pending_grades(
+        ignore_pending_grades=ignore_pending_grades,
+        state_dir=state_dir,
+        caller_id=caller_id,
+        review_cwd=review_cwd,
+        roster_path=roster_path,
+        rubric_path=rubric_path,
+    )
+    if not allow_stage_step_down:
+        guard_no_stage_step_down(
+            lane=public_task,
+            review_cwd=review_cwd,
+            base=str(review_scope.get("base") or ""),
+            state_dir=state_dir,
+            review_scope=review_scope,
+        )
+    if review_scope.get("base"):
+        ensure_clean_git_worktree(review_cwd, allow_dirty=allow_dirty, review_scope=review_scope)
+    _validate_benchmarked_review_runtime(
+        review_cwd=review_cwd,
+        allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
+    )
+    roster = load_roster(roster_path)
+    rubric = load_rubric(rubric_path)
+    records = read_jsonl(state_dir / RUN_LOG_FILENAME) + ungraded_round_exposure_records(state_dir)
+    operational_state = load_operational_state(state_dir / OPERATIONAL_STATE_FILENAME)
+    payload = select_pair(
+        roster=roster,
+        operational_state=operational_state,
+        records=records,
+        task_class=task_class,
+        review_cwd=review_cwd,
+        seed=seed,
+        caller_id=caller_id,
+        caller_id_source=caller_id_source,
+        excluded_variant_ids=set(),
+    )
+    payload["roster_path"] = str(roster_path)
+    payload["rubric_path"] = str(rubric_path)
+    write_round(state_dir, payload)
+    _print_round_banner(task_name=public_task, round_id=str(payload["round_id"]))
+    if includes_deep_review_effort(list(payload.get("runs") or [])):
+        print_deep_review_wait_note()
+    completed = run_round(
+        round_payload=payload,
+        roster=roster,
+        state_dir=state_dir,
+        review_cwd=review_cwd,
+        prompt=prompt,
+        review_scope=review_scope,
+        sqlite_path=sqlite_path,
+        progress_interval_seconds=progress_interval_seconds,
+        allow_dirty=allow_dirty,
+        allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
+    )
+    round_result = public_round_result(
+        completed,
+        output_slots=_newly_usable_output_slots(previous_payload=payload, completed_payload=completed),
+    )
+    _print_findings(completed)
+
+    branch_default = task_id or _current_branch_name(review_cwd) or payload["round_id"]
+    completed["task_id_hint"] = branch_default
+    completed["roster_path"] = str(roster_path)
+    completed["rubric_path"] = str(rubric_path)
+    write_round(state_dir, completed)
+    refresh_review_cost_report_best_effort(state_dir=state_dir, review_cwd=review_cwd)
+    if not bool(round_result.get("blocked")):
+        try:
+            record_review_anchor(
+                state_dir=state_dir,
+                review_cwd=review_cwd,
+                lane=public_task,
+                base=str(review_scope.get("base") or "") or None,
+                review_scope=review_scope,
+                round_id=str(payload["round_id"]),
+                task_id=branch_default,
+                output_refs=_review_output_refs(list(completed.get("runs") or [])),
+            )
+        except Exception as exc:  # pragma: no cover - warning path only
+            _record_anchor_warning(exc)
+    interactive_output = _output_isatty()
+    if interactive_output:
+        _print_next_steps(
+            round_id=payload["round_id"],
+            task_id=branch_default,
+            round_result=round_result,
+            review_cwd=review_cwd,
+            base=str(review_scope.get("base") or "") or None,
+            roster_path=roster_path,
+            rubric_path=rubric_path,
+            state_dir=state_dir,
+            sqlite_path=sqlite_path,
+            allow_dirty=allow_dirty,
+            allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
+        )
+    if not all([task_id, winner, basis]):
+        if not interactive_output:
+            grade_command = _grade_command()
+            reroll_rows = _reroll_rows(
+                round_result=round_result,
+                round_id=payload["round_id"],
+                review_cwd=review_cwd,
+                base=str(review_scope.get("base") or "") or None,
+                roster_path=roster_path,
+                rubric_path=rubric_path,
+                state_dir=state_dir,
+                sqlite_path=sqlite_path,
+                allow_dirty=allow_dirty,
+                allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
+            )
+            if round_result.get("blocked"):
+                grade_command = None
+            emit_toon(
+                _completed_round_payload(
+                    round_result=round_result,
+                    grade_command=grade_command,
+                    reroll_rows=reroll_rows,
+                )
+            )
+            return 0
+        if round_result.get("blocked"):
+            if not interactive_output:
+                emit_toon(
+                    _completed_round_payload(
+                        round_result=round_result,
+                        reroll_rows=_reroll_rows(
+                            round_result=round_result,
+                            round_id=payload["round_id"],
+                            review_cwd=review_cwd,
+                            base=str(review_scope.get("base") or "") or None,
+                            roster_path=roster_path,
+                            rubric_path=rubric_path,
+                            state_dir=state_dir,
+                            sqlite_path=sqlite_path,
+                            allow_dirty=allow_dirty,
+                            allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
+                        ),
+                    )
+                )
+            return 0
+        try:
+            task_id = task_id or _prompt_line("Task id", default=branch_default)
+            winner = winner or _prompt_winner()
+            basis = basis or _prompt_basis(rubric)
+            alpha_note = alpha_note if alpha_note is not None else _prompt_line("Alpha note", default="")
+            bravo_note = bravo_note if bravo_note is not None else _prompt_line("Bravo note", default="")
+            note = note if note is not None else _prompt_line("Shared note", default="")
+        except EOFError:
+            if not interactive_output:
+                emit_toon(
+                    _completed_round_payload(
+                        round_result=round_result,
+                        grade_command=_grade_command(),
+                    )
+                )
+            return 0
+
+    grade_result = _record_grade_result(
+        roster=roster,
+        rubric=rubric,
+        state_dir=state_dir,
+        round_id=payload["round_id"],
+        task_id=str(task_id),
+        winner=str(winner),
+        basis=str(basis),
+        note=note,
+        alpha_note=alpha_note,
+        bravo_note=bravo_note,
+        caller_id=caller_id,
+        caller_id_source=caller_id_source,
+        refresh_report=True,
+    )
+    emit_toon(
+        _completed_round_payload(
+            round_result=round_result,
+            status="graded",
+            grade=grade_result,
+        )
+    )
+    return 0
+
+
+def _record_grade_result(
+    *,
+    roster: dict[str, object],
+    rubric: dict[str, object],
+    state_dir: Path,
+    round_id: str,
+    task_id: str,
+    winner: str,
+    basis: str,
+    note: str | None,
+    alpha_note: str | None,
+    bravo_note: str | None,
+    refresh_report: bool,
+    caller_id: str | None,
+    caller_id_source: str | None,
+) -> dict[str, object]:
+    round_payload = load_round(state_dir, round_id)
+    record = build_record_from_grade(
+        round_payload=round_payload,
+        roster=roster,
+        rubric=rubric,
+        task_id=task_id,
+        winner=winner,
+        basis=basis,
+        alpha_note=alpha_note,
+        bravo_note=bravo_note,
+        shared_note=note,
+    )
+    if not append_record_if_new(state_dir, record):
+        result: dict[str, object] = {
+            "status": "ok",
+            "duplicate": True,
+            "recorded": False,
+            "round_id": round_id,
+        }
+    else:
+        result = {
+            "status": "ok",
+            "recorded": True,
+            "duplicate": False,
+            "round_id": round_id,
+        }
+    if refresh_report:
+        _refresh_state_and_reports(state_dir=state_dir, roster=roster)
+        result["refreshed"] = True
+    else:
+        result["refreshed"] = False
+    round_payload["graded_at"] = str(record["recorded_at"])
+    round_payload["graded_by_caller_id"] = caller_id
+    round_payload["graded_by_caller_id_source"] = caller_id_source
+    round_payload["graded_task_id"] = task_id
+    round_payload["grade_recorded"] = bool(result["recorded"] or result["duplicate"])
+    write_round(state_dir, round_payload)
+    round_review_cwd = str(round_payload.get("review_cwd") or "").strip()
+    refresh_review_cost_report_best_effort(
+        state_dir=state_dir,
+        review_cwd=Path(round_review_cwd) if round_review_cwd else None,
+    )
+    return result
+
+
+def _refresh_state_and_reports(*, state_dir: Path, roster: dict[str, object]) -> None:
+    with state_lock(state_dir, "reports"):
+        _refresh_state_and_reports_locked(state_dir=state_dir, roster=roster)
+
+
+def _refresh_state_and_reports_locked(
+    *,
+    state_dir: Path,
+    roster: dict[str, object],
+    records: list[dict[str, object]] | None = None,
+) -> None:
+    operational_state = load_operational_state(state_dir / OPERATIONAL_STATE_FILENAME)
+    current_records = records if records is not None else read_jsonl(state_dir / RUN_LOG_FILENAME)
+    summary = aggregate_records(
+        roster=roster,
+        records=current_records,
+        operational_state=operational_state,
+    )
+    next_state = promote(roster, summary, operational_state)
+    write_json(state_dir / OPERATIONAL_STATE_FILENAME, next_state)
+    refreshed_summary = aggregate_records(
+        roster=roster,
+        records=current_records,
+        operational_state=next_state,
+    )
+    write_reports(state_dir, refreshed_summary)
+
+
+def cmd_run(args: argparse.Namespace) -> int:
+    task_class = _normalize_arena_task_class(str(args.task_class))
+    review_cwd = _resolve_review_cwd(args.cd)
+    caller_id, caller_id_source = resolve_caller_id(args.caller_id)
+    return run_benchmarked_round(
+        task_class=task_class,
+        review_cwd=review_cwd,
+        roster_path=Path(args.roster),
+        rubric_path=Path(args.rubric),
+        state_dir=Path(args.state_dir),
+        sqlite_path=Path(args.sqlite_path),
+        seed=args.seed,
+        allow_dirty=bool(args.allow_dirty),
+        progress_interval_seconds=DEFAULT_PROGRESS_INTERVAL_SECONDS,
+        allow_unsafe_windows_wsl_fallback=bool(args.wsl),
+        review_scope={"base": args.base},
+        prompt="",
+        caller_id=caller_id,
+        caller_id_source=caller_id_source,
+        ignore_pending_grades=bool(args.ignore_pending_grades),
+        task_id=args.task_id,
+        winner=args.winner,
+        basis=args.basis,
+        note=args.note,
+        alpha_note=args.alpha_note,
+        bravo_note=args.bravo_note,
+        public_task_name=_public_local_task_name(task_class),
+    )
+
+
+def cmd_run_round(args: argparse.Namespace) -> int:
+    review_cwd = _resolve_review_cwd(args.cd)
+    print(
+        f"[review-suite] input_repo={review_cwd} effective_cwd={effective_execution_cwd(review_cwd, bool(args.wsl))} cwd={Path.cwd()}",
+        file=sys.stderr,
+        flush=True,
+    )
+    roster = load_roster(Path(args.roster))
+    state_dir = Path(args.state_dir)
+    payload = load_round(state_dir, args.round_id)
+    review_scope = {
+        "base": args.base,
+    }
+    completed = run_round(
+        round_payload=payload,
+        roster=roster,
+        state_dir=state_dir,
+        review_cwd=review_cwd,
+        prompt="",
+        review_scope=review_scope,
+        sqlite_path=Path(args.sqlite_path),
+        progress_interval_seconds=DEFAULT_PROGRESS_INTERVAL_SECONDS,
+        allow_dirty=bool(args.allow_dirty),
+        allow_unsafe_windows_wsl_fallback=bool(args.wsl),
+    )
+    completed["task_id_hint"] = _current_branch_name(review_cwd) or str(payload["round_id"])
+    write_round(state_dir, completed)
+    refresh_review_cost_report_best_effort(state_dir=state_dir, review_cwd=review_cwd)
+    result = public_round_result(
+        completed,
+        output_slots=_visible_completed_output_slots(
+            previous_payload=payload,
+            completed_payload=completed,
+            show_all_when_gradeable=False,
+        ),
+    )
+    if not bool(result.get("blocked")):
+        try:
+            record_review_anchor(
+                state_dir=state_dir,
+                review_cwd=review_cwd,
+                lane=_public_local_task_name(str(payload.get("task_class") or completed.get("task_class") or "")),
+                base=str(review_scope.get("base") or "") or None,
+                review_scope=review_scope,
+                round_id=str(completed.get("round_id") or payload["round_id"]),
+                task_id=str(completed["task_id_hint"]),
+                output_refs=_review_output_refs(list(completed.get("runs") or [])),
+            )
+        except Exception as exc:  # pragma: no cover - warning path only
+            _record_anchor_warning(exc)
+    if not _output_isatty():
+        emit_toon(result)
+    return 0
+
+
+def cmd_reroll_slot(args: argparse.Namespace) -> int:
+    roster = load_roster(Path(args.roster))
+    state_dir = Path(args.state_dir)
+    records = read_jsonl(state_dir / RUN_LOG_FILENAME) + ungraded_round_exposure_records(state_dir)
+    original = load_round(state_dir, args.round_id)
+    payload = build_reroll_slot_payload(
+        round_payload=original,
+        roster=roster,
+        operational_state=load_operational_state(state_dir / OPERATIONAL_STATE_FILENAME),
+        records=records,
+        slot=args.slot,
+        seed=args.seed,
+    )
+    review_cwd = Path(args.cd).resolve() if args.cd else Path(str(original["review_cwd"])).resolve()
+    if _output_isatty():
+        _print_round_banner(
+            task_name=_public_local_task_name(str(original.get("task_class") or payload.get("task_class") or "")),
+            round_id=str(payload["round_id"]),
+        )
+    print(f"[review-suite] reroll {args.slot}", file=sys.stderr, flush=True)
+    write_round(state_dir, payload)
+    review_scope = copy.deepcopy(original.get("review_scope") or {})
+    if args.base:
+        review_scope["base"] = args.base
+    completed = run_round(
+        round_payload=payload,
+        roster=roster,
+        state_dir=state_dir,
+        review_cwd=review_cwd,
+        prompt=str(original.get("requested_prompt") or ""),
+        review_scope=review_scope,
+        sqlite_path=Path(args.sqlite_path),
+        progress_interval_seconds=DEFAULT_PROGRESS_INTERVAL_SECONDS,
+        allow_dirty=bool(args.allow_dirty),
+        allow_unsafe_windows_wsl_fallback=bool(args.wsl),
+    )
+    result = public_round_result(
+        completed,
+        output_slots=_visible_completed_output_slots(
+            previous_payload=payload,
+            completed_payload=completed,
+            show_all_when_gradeable=True,
+        ),
+    )
+    _print_findings(completed)
+    if _output_isatty():
+        _print_next_steps(
+            round_id=payload["round_id"],
+            task_id=_current_branch_name(review_cwd) or payload["round_id"],
+            round_result=result,
+            review_cwd=review_cwd,
+            base=str(review_scope.get("base") or "") or None,
+            roster_path=Path(args.roster),
+            rubric_path=Path(args.rubric),
+            state_dir=state_dir,
+            sqlite_path=Path(args.sqlite_path),
+            allow_dirty=bool(args.allow_dirty),
+            allow_unsafe_windows_wsl_fallback=bool(args.wsl),
+        )
+    completed["task_id_hint"] = _current_branch_name(review_cwd) or payload["round_id"]
+    if not bool(result.get("blocked")):
+        try:
+            record_review_anchor(
+                state_dir=state_dir,
+                review_cwd=review_cwd,
+                lane=_public_local_task_name(str(original.get("task_class") or payload.get("task_class") or "")),
+                base=str(review_scope.get("base") or "") or None,
+                review_scope=review_scope,
+                round_id=str(payload["round_id"]),
+                task_id=str(completed["task_id_hint"]),
+                output_refs=_review_output_refs(list(completed.get("runs") or [])),
+            )
+        except Exception as exc:  # pragma: no cover - warning path only
+            _record_anchor_warning(exc)
+    write_round(state_dir, completed)
+    refresh_review_cost_report_best_effort(state_dir=state_dir, review_cwd=review_cwd)
+    if not _output_isatty():
+        emit_toon(result)
+    return 0
+
+
+def cmd_resume_round(args: argparse.Namespace) -> int:
+    if args.cd:
+        print(
+            f"[review-suite] ignoring --cd={Path(args.cd).resolve()} on resume-round; stored round review_cwd is authoritative",
+            file=sys.stderr,
+            flush=True,
+        )
+    roster = load_roster(Path(args.roster))
+    state_dir = Path(args.state_dir)
+    payload = load_round(state_dir, args.round_id)
+    if payload.get("status") == "completed":
+        emit_toon(public_round_result(payload))
+        return 0
+    if payload.get("status") != "running":
+        raise ValueError(f"round {args.round_id} is {payload.get('status')}, not running")
+    review_cwd = Path(str(payload["review_cwd"]))
+    completed = collect_round_results(
+        round_payload=payload,
+        roster=roster,
+        state_dir=state_dir,
+        review_cwd=review_cwd,
+        sqlite_path=Path(args.sqlite_path),
+        progress_interval_seconds=DEFAULT_PROGRESS_INTERVAL_SECONDS,
+        wait=True,
+    )
+    result = public_round_result(
+        completed,
+        output_slots=_visible_completed_output_slots(
+            previous_payload=payload,
+            completed_payload=completed,
+            show_all_when_gradeable=True,
+        ),
+    )
+    completed["task_id_hint"] = _current_branch_name(review_cwd) or str(payload["round_id"])
+    if not bool(result.get("blocked")):
+        try:
+            review_scope = dict(completed.get("review_scope") or payload.get("review_scope") or {})
+            record_review_anchor(
+                state_dir=state_dir,
+                review_cwd=review_cwd,
+                lane=_public_local_task_name(str(payload.get("task_class") or completed.get("task_class") or "")),
+                base=str(review_scope.get("base") or "") or None,
+                review_scope=review_scope,
+                round_id=str(completed.get("round_id") or payload["round_id"]),
+                task_id=str(completed["task_id_hint"]),
+                output_refs=_review_output_refs(list(completed.get("runs") or [])),
+            )
+        except Exception as exc:  # pragma: no cover - warning path only
+            _record_anchor_warning(exc)
+    if not _output_isatty():
+        emit_toon(result)
+    return 0
+
+
+def _round_output_payload(payload: dict[str, object]) -> dict[str, object]:
+    return {
+        "round_id": payload.get("round_id"),
+        "task": public_task_name(str(payload.get("task_class") or "")),
+        "task_class": payload.get("task_class"),
+        "status": payload.get("status"),
+        "signoff_status": payload.get("signoff_status"),
+        "signoff_verdict": payload.get("signoff_verdict"),
+        "signoff_recorded_at": payload.get("signoff_recorded_at"),
+        "recorded_at": payload.get("recorded_at"),
+        "review_cwd": payload.get("review_cwd") or payload.get("review_cwd_normalized"),
+        "graded_at": payload.get("graded_at"),
+        "runs": [
+            {
+                "slot": run.get("slot"),
+                "variant_id": run.get("variant_id"),
+                "model": run.get("model"),
+                "reasoning_effort": run.get("reasoning_effort"),
+                "review_status": run.get("review_status"),
+                "grade_blocked": run.get("grade_blocked"),
+                "grade_block_reason": run.get("grade_block_reason"),
+                "reviewer_output_ref": run.get("reviewer_output_ref"),
+                "reviewer_output": final_display_body(run),
+            }
+            for run in list(payload.get("runs") or [])
+            if isinstance(run, dict)
+        ],
+    }
+
+
+def _print_round_outputs(payload: dict[str, object]) -> None:
+    write_text(f"round_id: {payload.get('round_id')}")
+    write_text(f"task: {public_task_name(str(payload.get('task_class') or ''))}")
+    write_text(f"task_class: {payload.get('task_class')}")
+    write_text(f"status: {payload.get('status')}")
+    signoff_verdict = str(payload.get("signoff_verdict") or "").strip()
+    signoff_status = str(payload.get("signoff_status") or "").strip()
+    if signoff_verdict:
+        write_text(f"signoff: {signoff_verdict}")
+    elif signoff_status:
+        write_text(f"signoff: {signoff_status}")
+    recorded_at = str(payload.get("recorded_at") or "").strip()
+    if recorded_at:
+        write_text(f"recorded_at: {recorded_at}")
+    review_cwd = str(payload.get("review_cwd") or payload.get("review_cwd_normalized") or "").strip()
+    if review_cwd:
+        write_text(f"review_cwd: {review_cwd}")
+    graded_at = str(payload.get("graded_at") or "").strip()
+    if graded_at:
+        write_text(f"graded_at: {graded_at}")
+    write_text("")
+    runs = [run for run in list(payload.get("runs") or []) if isinstance(run, dict)]
+    if not runs:
+        write_text("(no runs recorded)")
+        return
+    for run in runs:
+        write_text(reviewer_output_heading(run))
+        write_text(final_display_body(run))
+        write_text("")
+
+
+def _round_output_sort_key(payload: dict[str, object]) -> str:
+    return str(
+        payload.get("review_completed_at")
+        or payload.get("recorded_at")
+        or payload.get("sampled_at")
+        or payload.get("round_id")
+        or ""
+    )
+
+
+def _gate_record_as_round_payload(record: dict[str, object], decision: dict[str, object] | None = None) -> dict[str, object]:
+    payload = {
+        "round_id": record.get("round_id"),
+        "task_class": record.get("task_class"),
+        "status": gate_record_status(dict(record), dict(decision) if decision else None),
+        "recorded_at": record.get("recorded_at"),
+        "review_cwd": record.get("review_cwd"),
+        "review_cwd_normalized": record.get("review_cwd_normalized"),
+        "runs": list(record.get("runs") or []),
+    }
+    if record.get("signoff_status"):
+        payload["signoff_status"] = record.get("signoff_status")
+    if decision:
+        payload["signoff_verdict"] = decision.get("verdict")
+        payload["signoff_recorded_at"] = decision.get("recorded_at")
+    return payload
+
+
+def _load_gate_round_payload(state_dir: Path, round_id: str) -> dict[str, object] | None:
+    for record in read_jsonl(state_dir / "gate_runs.jsonl"):
+        if str(record.get("round_id") or "") == round_id:
+            return _gate_record_as_round_payload(record, gate_signoff_decision_for_round(state_dir, round_id))
+    return None
+
+
+def _iter_recoverable_round_outputs(state_dir: Path) -> list[dict[str, object]]:
+    payloads: list[dict[str, object]] = []
+    gate_decisions = gate_signoff_decisions_by_round(state_dir)
+    for payload in iter_round_payloads(state_dir):
+        task_class = str(payload.get("task_class") or "")
+        if task_class in {"phase_review", "pr_review"}:
+            payloads.append(payload)
+    for record in read_jsonl(state_dir / "gate_runs.jsonl"):
+        task_class = str(record.get("task_class") or "")
+        if task_class in {"phase_gate", "pr_gate"}:
+            round_id = str(record.get("round_id") or "")
+            payloads.append(_gate_record_as_round_payload(record, gate_decisions.get(round_id)))
+    return payloads
+
+
+def _last_round_outputs(
+    *,
+    state_dir: Path,
+    review_cwd: Path | None,
+    task: str | None,
+) -> list[dict[str, object]]:
+    normalized_cwd = normalize_review_cwd_value(review_cwd) if review_cwd is not None else None
+    latest_by_task: dict[str, dict[str, object]] = {}
+    for payload in _iter_recoverable_round_outputs(state_dir):
+        public_task = public_task_name(str(payload.get("task_class") or ""))
+        if task and public_task != task:
+            continue
+        if normalized_cwd:
+            payload_cwd = str(normalize_record_review_cwd_value(payload) or "")
+            if payload_cwd != normalized_cwd:
+                continue
+        previous = latest_by_task.get(public_task)
+        if previous is None or _round_output_sort_key(payload) > _round_output_sort_key(previous):
+            latest_by_task[public_task] = payload
+    return [latest_by_task[key] for key in sorted(latest_by_task)]
+
+
+def cmd_show_round(args: argparse.Namespace) -> int:
+    state_dir = Path(args.state_dir)
+    try:
+        payload = load_round(state_dir, args.round_id)
+    except ValueError:
+        payload = _load_gate_round_payload(state_dir, args.round_id)
+        if payload is None:
+            raise
+    if bool(getattr(args, "json", False)):
+        write_text(json.dumps(_round_output_payload(payload), indent=2, ensure_ascii=False))
+        return 0
+    _print_round_outputs(payload)
+    return 0
+
+
+def cmd_show_last(args: argparse.Namespace) -> int:
+    review_cwd = resolve_repo_root(args.cd) if getattr(args, "cd", None) else None
+    payloads = _last_round_outputs(
+        state_dir=Path(args.state_dir),
+        review_cwd=review_cwd,
+        task=getattr(args, "task", None),
+    )
+    if bool(getattr(args, "json", False)):
+        write_text(json.dumps([_round_output_payload(payload) for payload in payloads], indent=2, ensure_ascii=False))
+        return 0
+    if not payloads:
+        target = f" for {review_cwd}" if review_cwd is not None else ""
+        task = f" ({args.task})" if getattr(args, "task", None) else ""
+        write_text(f"no stored local review outputs found{target}{task}")
+        return 0
+    for idx, payload in enumerate(payloads):
+        if idx:
+            write_text("=" * 72)
+        _print_round_outputs(payload)
+    return 0
+
+
+def cmd_close_gate(args: argparse.Namespace) -> int:
+    state_dir = Path(args.state_dir)
+    round_id = str(args.round_id or "").strip()
+    gate_record = load_gate_record(state_dir, round_id)
+    if gate_record is None:
+        raise ValueError(f"gate round not found: {round_id}")
+    task_class = str(gate_record.get("task_class") or "").strip()
+    if task_class not in PUBLIC_TASK_BY_GATE:
+        raise ValueError(f"round is not a T2/T4 gate round: {round_id}")
+    existing = gate_signoff_decision_for_round(state_dir, round_id)
+    status = gate_record_status(gate_record, existing)
+    if status == "blocked":
+        raise ValueError(f"blocked gate rounds cannot be closed as signoff decisions: {round_id}")
+    verdict = str(args.verdict or "").strip()
+    if existing:
+        existing_verdict = str(existing.get("verdict") or "").strip()
+        if existing_verdict != verdict:
+            raise ValueError(f"gate round already closed as {existing_verdict}: {round_id}")
+        emit_toon(
+            {
+                "status": "ok",
+                "closed": True,
+                "already_closed": True,
+                "round_id": round_id,
+                "verdict": existing_verdict,
+                "anchored": bool(existing.get("workflow_anchor_recorded")),
+                **({"scope_check": GATE_FINDINGS_SCOPE_CHECK} if existing_verdict == "findings" else {}),
+            }
+        )
+        return 0
+
+    workflow_anchor_recorded = False
+    lane = PUBLIC_TASK_BY_GATE[task_class]
+    review_cwd_text = str(gate_record.get("review_cwd") or "").strip()
+    if verdict == "clean":
+        if not review_cwd_text:
+            raise ValueError(f"gate round is missing review_cwd and cannot be anchored: {round_id}")
+        review_scope = dict(gate_record.get("review_scope") or {})
+        record_review_anchor(
+            state_dir=state_dir,
+            review_cwd=Path(review_cwd_text),
+            lane=lane,
+            base=str(review_scope.get("base") or "") or None,
+            review_scope=review_scope,
+            round_id=round_id,
+            task_id=str(gate_record.get("task_id") or round_id),
+            output_refs=_gate_output_refs(list(gate_record.get("runs") or [])),
+        )
+        workflow_anchor_recorded = True
+
+    decision, recorded = record_gate_signoff_decision(
+        state_dir=state_dir,
+        gate_record=gate_record,
+        verdict=verdict,
+        note=str(args.note or "").strip() or None,
+        workflow_anchor_recorded=workflow_anchor_recorded,
+    )
+    refresh_review_cost_report_best_effort(
+        state_dir=state_dir,
+        review_cwd=Path(review_cwd_text) if review_cwd_text else None,
+    )
+    output = {
+        "status": "ok",
+        "closed": True,
+        "recorded": recorded,
+        "round_id": round_id,
+        "lane": lane,
+        "verdict": decision.get("verdict"),
+        "anchored": workflow_anchor_recorded,
+    }
+    if verdict == "findings":
+        output["scope_check"] = GATE_FINDINGS_SCOPE_CHECK
+    emit_toon(output)
+    return 0
+
+
+def _cost_row_payload(row) -> dict[str, object]:
+    return {
+        "repo": row.repo,
+        "folder": row.folder,
+        "branch": row.branch,
+        "pr": row.pr_number,
+        "worker_model": row.worker_model,
+        "implementation_tokens": row.implementation_tokens,
+        "implementation_cost_usd": row.implementation_cost_usd,
+        "latest_review": row.latest_review,
+        "t1_sessions": row.lane_sessions.get("review_t1", 0),
+        "t2_sessions": row.lane_sessions.get("review_t2", 0),
+        "t3_sessions": row.lane_sessions.get("review_t3", 0),
+        "t4_sessions": row.lane_sessions.get("review_t4", 0),
+        "review_seconds": int(round(row.review_seconds)),
+        "tokens": row.tokens,
+        "cost_usd": row.cost_usd,
+    }
+
+
+def cmd_costs(args: argparse.Namespace) -> int:
+    state_dir = Path(args.state_dir)
+    include_all = bool(getattr(args, "all", False))
+    review_cwd = None if include_all else (resolve_repo_root(args.cd) if getattr(args, "cd", None) else None)
+    if review_cwd is None and not include_all:
+        review_cwd = resolve_repo_root(None)
+    rows = collect_review_cost_rows(
+        state_dir=state_dir,
+        review_cwd=review_cwd,
+        include_all=include_all,
+        codex_home=Path(args.codex_home) if getattr(args, "codex_home", None) else None,
+    )
+    output_path = Path(args.output) if getattr(args, "output", None) else state_dir / DEFAULT_COST_REPORT_FILENAME
+    update_review_cost_row_cache(state_dir=state_dir, rows=rows)
+    write_review_cost_report(rows=rows, output_path=output_path)
+    payload = {
+        "status": "ok",
+        "rows": len(rows),
+        "report": str(output_path),
+        "total_tokens": sum(row.tokens for row in rows),
+        "total_cost_usd": round(sum(row.cost_usd for row in rows), 6),
+        "total_implementation_tokens": sum(row.implementation_tokens for row in rows),
+        "total_implementation_cost_usd": round(sum(row.implementation_cost_usd for row in rows), 6),
+        "costs": [_cost_row_payload(row) for row in rows],
+    }
+    if bool(getattr(args, "json", False)):
+        print(json.dumps(payload, indent=2))
+    else:
+        emit_toon(payload)
+    return 0
+
+
+def _load_manual_instructions(args: argparse.Namespace) -> str:
+    if args.instructions and args.instructions_file:
+        raise ValueError("use either --instructions or --instructions-file")
+    if args.instructions_file:
+        return Path(args.instructions_file).read_text(encoding="utf-8")
+    if args.instructions:
+        return args.instructions
+    raise ValueError("run-manual-round requires --instructions or --instructions-file")
+
+
+def cmd_run_manual_round(args: argparse.Namespace) -> int:
+    review_cwd = _resolve_review_cwd(args.cd)
+    print(
+        f"[review-suite] input_repo={review_cwd} effective_cwd={effective_execution_cwd(review_cwd, bool(args.wsl))} cwd={Path.cwd()}",
+        file=sys.stderr,
+        flush=True,
+    )
+    roster = load_roster(Path(args.roster))
+    state_dir = Path(args.state_dir)
+    payload = load_round(state_dir, args.round_id)
+    instructions = _load_manual_instructions(args)
+    diff_text = Path(args.diff_file).read_text(encoding="utf-8")
+    prompt = build_manual_review_prompt(instructions=instructions, diff_text=diff_text)
+    completed = run_round(
+        round_payload=payload,
+        roster=roster,
+        state_dir=state_dir,
+        review_cwd=review_cwd,
+        prompt=prompt,
+        review_scope={},
+        sqlite_path=Path(args.sqlite_path),
+        progress_interval_seconds=DEFAULT_PROGRESS_INTERVAL_SECONDS,
+        allow_dirty=True,
+        allow_unsafe_windows_wsl_fallback=bool(args.wsl),
+    )
+    write_round(state_dir, completed)
+    result = public_round_result(
+        completed,
+        output_slots=_visible_completed_output_slots(
+            previous_payload=payload,
+            completed_payload=completed,
+            show_all_when_gradeable=False,
+        ),
+    )
+    emit_toon(
+        _completed_round_payload(
+            round_result=result,
+            manual=True,
+        )
+    )
+    return 0
+
+
+def cmd_grade(args: argparse.Namespace) -> int:
+    roster = load_roster(Path(args.roster))
+    rubric = load_rubric(Path(args.rubric))
+    state_dir = Path(args.state_dir)
+    caller_id, caller_id_source = resolve_caller_id(args.caller_id)
+    round_id = str(args.round_id or "").strip()
+    if not round_id:
+        review_cwd = resolve_repo_root(None)
+        blocking = [
+            payload
+            for payload in find_blocking_rounds_for_caller(state_dir=state_dir, caller_id=caller_id, review_cwd=review_cwd)
+            if round_needs_caller_grade(payload)
+        ]
+        if not blocking:
+            raise ValueError("no completed ungraded round found for this caller/worktree; pass --round-id to grade a specific round")
+        round_id = str(blocking[-1].get("round_id") or "").strip()
+    round_payload = load_round(state_dir, round_id)
+    task_id = str(args.task_id or round_payload.get("task_id_hint") or round_payload.get("graded_task_id") or round_id).strip()
+    result = _record_grade_result(
+        roster=roster,
+        rubric=rubric,
+        state_dir=state_dir,
+        round_id=round_id,
+        task_id=task_id,
+        winner=args.winner,
+        basis=args.basis,
+        note=args.note,
+        alpha_note=args.alpha_note,
+        bravo_note=args.bravo_note,
+        caller_id=caller_id,
+        caller_id_source=caller_id_source,
+        refresh_report=bool(args.refresh_report),
+    )
+    result["task"] = _public_local_task_name(str(round_payload["task_class"]))
+    if not _output_isatty():
+        emit_toon(result)
+    return 0
+
+
+def cmd_dismiss_round(args: argparse.Namespace) -> int:
+    state_dir = Path(args.state_dir)
+    payload = load_round(state_dir, args.round_id)
+    caller_id, caller_id_source = resolve_caller_id(args.caller_id)
+    previous_status = str(payload.get("status") or "unknown")
+    if str(payload.get("graded_at") or "").strip():
+        raise ValueError(f"round {args.round_id} is already graded and cannot be dismissed")
+    if previous_status == "dismissed":
+        emit_toon(
+            {
+                "status": "ok",
+                "dismissed": True,
+                "already_dismissed": True,
+                "round_id": args.round_id,
+                "reason": str(payload.get("dismissed_reason") or ""),
+            }
+        )
+        return 0
+    if round_has_live_reviewer_process(payload):
+        raise ValueError(f"round {args.round_id} still has live reviewer processes; refusing dismissal")
+    dismissed_at = utc_now_iso()
+    payload["status"] = "dismissed"
+    payload["dismissed_at"] = dismissed_at
+    payload["dismissed_reason"] = str(args.reason or "").strip() or "manual_dismiss"
+    if caller_id:
+        payload["dismissed_by_caller_id"] = caller_id
+        payload["dismissed_by_caller_id_source"] = caller_id_source
+    write_round(state_dir, payload)
+    emit_toon(
+        {
+            "status": "ok",
+            "dismissed": True,
+            "round_id": args.round_id,
+            "previous_status": previous_status,
+            "reason": payload["dismissed_reason"],
+        }
+    )
+    return 0
+
+
+def cmd_report(args: argparse.Namespace) -> int:
+    if getattr(args, "round_id", None):
+        return cmd_show_round(args)
+    roster = load_roster(Path(args.roster))
+    state_dir = Path(args.state_dir)
+    with state_lock(state_dir, "reports"):
+        records = read_jsonl(state_dir / RUN_LOG_FILENAME)
+        summary = aggregate_records(
+            roster=roster,
+            records=records,
+            operational_state=load_operational_state(state_dir / OPERATIONAL_STATE_FILENAME),
+        )
+        write_reports(state_dir, summary)
+    emit_toon(_public_summary(summary))
+    return 0
+
+
+def cmd_refresh(args: argparse.Namespace) -> int:
+    roster = load_roster(Path(args.roster))
+    state_dir = Path(args.state_dir)
+    _refresh_state_and_reports(state_dir=state_dir, roster=roster)
+    emit_toon(
+        {
+            "status": "ok",
+            "refreshed": True,
+            "summary": str(state_dir / "summary.json"),
+            "leaderboard": str(state_dir / "leaderboard.md"),
+            "state": str(state_dir / OPERATIONAL_STATE_FILENAME),
+        }
+    )
+    return 0
+
+
+def cmd_promote(args: argparse.Namespace) -> int:
+    roster = load_roster(Path(args.roster))
+    state_dir = Path(args.state_dir)
+    with state_lock(state_dir, "reports"):
+        records = read_jsonl(state_dir / RUN_LOG_FILENAME)
+        operational_state = load_operational_state(state_dir / OPERATIONAL_STATE_FILENAME)
+        summary = aggregate_records(
+            roster=roster,
+            records=records,
+            operational_state=operational_state,
+        )
+        next_state = promote(roster, summary, operational_state)
+        if args.apply:
+            write_json(state_dir / OPERATIONAL_STATE_FILENAME, next_state)
+    emit_toon(_public_operational_state(next_state))
+    return 0
+
+
+def cmd_compact_runs(args: argparse.Namespace) -> int:
+    roster = load_roster(Path(args.roster))
+    state_dir = Path(args.state_dir)
+    run_log_path = state_dir / RUN_LOG_FILENAME
+    with state_lock(state_dir, "runs"), state_lock(state_dir, "reports"):
+        records = read_jsonl(run_log_path)
+        compacted_records = [compact_benchmark_record(record) for record in records]
+        operational_state = load_operational_state(state_dir / OPERATIONAL_STATE_FILENAME)
+        summary_before = aggregate_records(roster=roster, records=records, operational_state=operational_state)
+        summary_after = aggregate_records(roster=roster, records=compacted_records, operational_state=operational_state)
+        if _summary_equivalence_view(summary_before) != _summary_equivalence_view(summary_after):
+            raise ValueError("compacted runs would change aggregate output; aborting migration")
+        before_bytes = run_log_path.stat().st_size if run_log_path.exists() else 0
+        compacted_text = ""
+        if compacted_records:
+            compacted_text = "\n".join(json.dumps(record, sort_keys=True) for record in compacted_records) + "\n"
+        after_bytes = len(compacted_text.encode("utf-8"))
+        backup_path = None
+        report_refreshed = False
+        if args.apply:
+            if run_log_path.exists():
+                backup_path = run_log_path.with_name(f"{run_log_path.name}{args.backup_suffix}")
+                shutil.copy2(run_log_path, backup_path)
+            write_jsonl(run_log_path, compacted_records)
+            write_reports(state_dir, summary_after)
+            report_refreshed = True
+    payload = {
+        "status": "ok",
+        "verified": True,
+        "applied": bool(args.apply),
+        "records": len(records),
+        "before_b": before_bytes,
+        "after_b": after_bytes,
+        "saved_b": before_bytes - after_bytes,
+        "reduction_pct": round((((before_bytes - after_bytes) / before_bytes) * 100.0), 3) if before_bytes else 0.0,
+        "runs": str(run_log_path),
+        "backup": str(backup_path) if backup_path else None,
+        "reports": report_refreshed,
+    }
+    emit_toon(payload)
+    return 0
+
+
+def main() -> int:
+    parser = build_parser()
+    try:
+        args = parser.parse_args()
+        if args.command == "run":
+            return cmd_run(args)
+        if args.command == "sample":
+            return cmd_sample(args)
+        if args.command == "run-round":
+            return cmd_run_round(args)
+        if args.command == "resume-round":
+            return cmd_resume_round(args)
+        if args.command == "show-round":
+            return cmd_show_round(args)
+        if args.command in {"show-last", "show_last"}:
+            return cmd_show_last(args)
+        if args.command in {"close-gate", "close-signoff"}:
+            return cmd_close_gate(args)
+        if args.command == "costs":
+            return cmd_costs(args)
+        if args.command == "reroll-slot":
+            return cmd_reroll_slot(args)
+        if args.command == "run-manual-round":
+            return cmd_run_manual_round(args)
+        if args.command == "grade":
+            return cmd_grade(args)
+        if args.command == "dismiss-round":
+            return cmd_dismiss_round(args)
+        if args.command == "report":
+            return cmd_report(args)
+        if args.command == "refresh":
+            return cmd_refresh(args)
+        if args.command == "promote":
+            return cmd_promote(args)
+        if args.command == "compact-runs":
+            return cmd_compact_runs(args)
+    except ValueError as exc:
+        return emit_error(
+            str(exc),
+            status="usage_error",
+            help_items=[f"{_script_command()} --help"],
+        )
+    raise SystemExit(f"unknown command: {args.command}")
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

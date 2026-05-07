@@ -1,0 +1,41 @@
+{
+  "name": "review-suite",
+  "version": "0.1.0",
+  "description": "Stateful review workflows for plan review, deslop, follow-up, t1-t4, and GitHub review.",
+  "author": {
+    "name": "Jonathan",
+    "url": "https://github.com/Pimpmuckl"
+  },
+  "homepage": "https://github.com/Pimpmuckl/review-suite",
+  "repository": "https://github.com/Pimpmuckl/review-suite",
+  "license": "MIT",
+  "keywords": [
+    "codex",
+    "review",
+    "github",
+    "benchmark",
+    "plugin"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Review Suite",
+    "shortDescription": "Stateful review workflows",
+    "longDescription": "Use Review Suite for plan review, deslop, review-state, follow-up, t1-t4, and GitHub review.",
+    "developerName": "Jonathan",
+    "category": "Coding",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/Pimpmuckl/review-suite",
+    "privacyPolicyURL": "https://github.com/Pimpmuckl/review-suite",
+    "termsOfServiceURL": "https://github.com/Pimpmuckl/review-suite",
+    "defaultPrompt": [
+      "Route review work to review-plan, review-state, follow-up, deslop, t1-t4, or review-github."
+    ],
+    "brandColor": "#0F766E",
+    "composerIcon": "./assets/colosseum.png",
+    "logo": "./assets/colosseum.png",
+    "screenshots": []
+  }
+}

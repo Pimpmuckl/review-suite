@@ -1,0 +1,16 @@
+[project]
+name = "review-suite"
+version = "0.1.0"
+description = "Codex plugin for stateful local and GitHub review workflows."
+requires-python = ">=3.11"
+license = "MIT"
+readme = "README.md"
+
+[project.optional-dependencies]
+dev = [
+  "pytest",
+  "pytest-xdist",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["plugins/review-suite/tests"]

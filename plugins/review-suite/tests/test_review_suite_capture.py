@@ -1,0 +1,938 @@
+from __future__ import annotations
+
+import json
+import sqlite3
+import sys
+from pathlib import Path
+
+import pytest
+
+SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "scripts"
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
+import rollout_capture  # noqa: E402
+import review_suite_local  # noqa: E402
+
+
+THREAD_SCHEMA = """
+create table threads (
+    id text primary key,
+    rollout_path text,
+    cwd text,
+    source text,
+    created_at integer,
+    updated_at integer,
+    tokens_used integer,
+    model text,
+    reasoning_effort text,
+    title text
+)
+"""
+
+
+def _write_jsonl(path: Path, rows: list[dict[str, object]]) -> None:
+    path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+
+
+def _assistant_message(text: str) -> dict[str, object]:
+    return {
+        "type": "response_item",
+        "payload": {
+            "type": "message",
+            "role": "assistant",
+            "content": [{"text": text}],
+        },
+    }
+
+
+def _launcher_rollout(path: Path, text: str) -> None:
+    _write_jsonl(
+        path,
+        [
+            {"type": "session_meta", "payload": {}},
+            {"type": "event_msg", "payload": {"type": "entered_review_mode"}},
+            _assistant_message(text),
+            {"type": "event_msg", "payload": {"type": "task_complete"}},
+        ],
+    )
+
+
+def _child_rollout(
+    path: Path,
+    *,
+    model: str,
+    reasoning_effort: str,
+    usage: dict[str, int],
+    text: str,
+) -> None:
+    total_tokens = int(usage["input_tokens"]) + int(usage["output_tokens"])
+    _write_jsonl(
+        path,
+        [
+            {"type": "session_meta", "payload": {}},
+            {
+                "type": "turn_context",
+                "payload": {
+                    "model": model,
+                    "effort": reasoning_effort,
+                },
+            },
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "token_count",
+                    "info": {
+                        "total_token_usage": {
+                            **usage,
+                            "reasoning_output_tokens": 0,
+                            "total_tokens": total_tokens,
+                        },
+                        "last_token_usage": {
+                            **usage,
+                            "reasoning_output_tokens": 0,
+                            "total_tokens": total_tokens,
+                        },
+                    },
+                },
+            },
+            _assistant_message(text),
+        ],
+    )
+
+
+def test_rollout_activity_summary_ignores_token_count_heartbeats(tmp_path: Path) -> None:
+    rollout = tmp_path / "heartbeat-only.jsonl"
+    _write_jsonl(
+        rollout,
+        [
+            {"timestamp": "2026-04-23T20:00:00Z", "type": "session_meta", "payload": {}},
+            {"timestamp": "2026-04-23T20:00:01Z", "type": "turn_context", "payload": {}},
+            {
+                "timestamp": "2026-04-23T20:05:01Z",
+                "type": "event_msg",
+                "payload": {"type": "token_count", "info": {}},
+            },
+        ],
+    )
+
+    summary = rollout_capture.rollout_activity_summary(rollout)
+
+    assert summary["last_event_at"].isoformat() == "2026-04-23T20:05:01+00:00"
+    assert summary["last_meaningful_at"] is None
+    assert summary["last_meaningful_type"] is None
+
+
+def test_rollout_activity_summary_tracks_assistant_activity(tmp_path: Path) -> None:
+    rollout = tmp_path / "assistant-output.jsonl"
+    _write_jsonl(
+        rollout,
+        [
+            {"timestamp": "2026-04-23T20:00:00Z", "type": "session_meta", "payload": {}},
+            {"timestamp": "2026-04-23T20:00:01Z", "type": "turn_context", "payload": {}},
+            {
+                "timestamp": "2026-04-23T20:03:01Z",
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"text": "No findings."}],
+                },
+            },
+        ],
+    )
+
+    summary = rollout_capture.rollout_activity_summary(rollout)
+
+    assert summary["last_meaningful_at"].isoformat() == "2026-04-23T20:03:01+00:00"
+    assert summary["last_meaningful_type"] == "message"
+
+
+def test_rollout_activity_summary_tracks_custom_tool_activity(tmp_path: Path) -> None:
+    rollout = tmp_path / "tool-output.jsonl"
+    _write_jsonl(
+        rollout,
+        [
+            {"timestamp": "2026-04-23T20:00:00Z", "type": "session_meta", "payload": {}},
+            {"timestamp": "2026-04-23T20:00:01Z", "type": "turn_context", "payload": {}},
+            {
+                "timestamp": "2026-04-23T20:04:01Z",
+                "type": "response_item",
+                "payload": {"type": "custom_tool_call", "name": "exec_command"},
+            },
+        ],
+    )
+
+    summary = rollout_capture.rollout_activity_summary(rollout)
+
+    assert summary["last_meaningful_at"].isoformat() == "2026-04-23T20:04:01+00:00"
+    assert summary["last_meaningful_type"] == "custom_tool_call"
+
+
+def _insert_thread(
+    con: sqlite3.Connection,
+    *,
+    thread_id: str,
+    rollout_path: Path,
+    cwd: str,
+    source: str,
+    created_at: int,
+    updated_at: int,
+    tokens_used: int,
+    title: str,
+    model: str | None = None,
+    reasoning_effort: str | None = None,
+) -> None:
+    con.execute(
+        """
+        insert into threads (
+            id, rollout_path, cwd, source, created_at, updated_at, tokens_used, model, reasoning_effort, title
+        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            thread_id,
+            str(rollout_path),
+            cwd,
+            source,
+            created_at,
+            updated_at,
+            tokens_used,
+            model,
+            reasoning_effort,
+            title,
+        ],
+    )
+
+
+def _minimal_roster() -> dict[str, object]:
+    return {
+        "variants": [
+            {
+                "id": "gpt-5.4-xhigh",
+                "model": "gpt-5.4",
+                "reasoning_effort": "xhigh",
+                "pricing": {
+                    "input_per_million_usd": 2.5,
+                    "cached_input_per_million_usd": 0.25,
+                    "output_per_million_usd": 15.0,
+                },
+            },
+            {
+                "id": "gpt-5.3-codex-medium",
+                "model": "gpt-5.3-codex",
+                "reasoning_effort": "medium",
+                "pricing": {
+                    "input_per_million_usd": 1.75,
+                    "cached_input_per_million_usd": 0.175,
+                    "output_per_million_usd": 14.0,
+                },
+            },
+        ]
+    }
+
+
+def _minimal_rubric() -> dict[str, object]:
+    return {
+        "basis": [
+            "valid_findings_vs_none",
+            "more_valid_findings",
+            "better_finding_validity",
+            "better_bug_coverage",
+            "false_positive_loss",
+            "hallucinated_finding_loss",
+            "fringe_finding_loss",
+            "tie_clean",
+            "tie_both_useful",
+        ],
+    }
+
+
+def test_collect_round_results_persists_each_exited_reviewer_immediately(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    state_dir = tmp_path / "state"
+    review_cwd = tmp_path / "repo"
+    review_cwd.mkdir()
+    sqlite_path = tmp_path / "state_5.sqlite"
+
+    alpha_stdout = tmp_path / "alpha.stdout"
+    alpha_stderr = tmp_path / "alpha.stderr"
+    bravo_stdout = tmp_path / "bravo.stdout"
+    bravo_stderr = tmp_path / "bravo.stderr"
+    alpha_stdout.write_text("alpha completed body\n", encoding="utf-8")
+    alpha_stderr.write_text("", encoding="utf-8")
+    bravo_stdout.write_text("bravo completed body\n", encoding="utf-8")
+    bravo_stderr.write_text("", encoding="utf-8")
+
+    round_payload = {
+        "round_id": "round-live-capture",
+        "task_class": "pr_review",
+        "selection_mode": "scramble",
+        "status": "running",
+        "runs": [
+            {
+                "slot": "alpha",
+                "variant_id": "gpt-5.4-xhigh",
+                "title": "review-suite::round-live-capture::alpha::gpt-5.4-xhigh",
+                "command": ["codex", "review"],
+                "pid": 101,
+                "started_at": "2026-04-23T12:00:00Z",
+                "stdout_path": str(alpha_stdout),
+                "stderr_path": str(alpha_stderr),
+            },
+            {
+                "slot": "bravo",
+                "variant_id": "gpt-5.3-codex-medium",
+                "title": "review-suite::round-live-capture::bravo::gpt-5.3-codex-medium",
+                "command": ["codex", "review"],
+                "pid": 202,
+                "started_at": "2026-04-23T12:00:00Z",
+                "stdout_path": str(bravo_stdout),
+                "stderr_path": str(bravo_stderr),
+            },
+        ],
+    }
+
+    bravo_checks = {"count": 0}
+
+    def fake_process_is_running(pid: int | None) -> bool:
+        if pid == 101:
+            return False
+        if pid == 202:
+            bravo_checks["count"] += 1
+            return bravo_checks["count"] == 1
+        return False
+
+    writes: list[dict[str, object]] = []
+    streamed: list[dict[str, object]] = []
+
+    def fake_write_round(_state_dir: Path, payload: dict[str, object]) -> Path:
+        writes.append(json.loads(json.dumps(payload)))
+        return _state_dir / "rounds" / f"{payload['round_id']}.json"
+
+    monkeypatch.setattr(review_suite_local, "_process_is_running", fake_process_is_running)
+    monkeypatch.setattr(review_suite_local, "find_review_child_thread", lambda **_: None)
+    monkeypatch.setattr(review_suite_local, "find_thread_by_title", lambda **_: None)
+    monkeypatch.setattr(review_suite_local, "write_round", fake_write_round)
+    monkeypatch.setattr(review_suite_local, "_print_live_completed_run", lambda run: streamed.append(dict(run)))
+    monkeypatch.setattr(review_suite_local.time, "sleep", lambda _: None)
+
+    completed = review_suite_local.collect_round_results(
+        round_payload=round_payload,
+        roster=_minimal_roster(),
+        state_dir=state_dir,
+        review_cwd=review_cwd,
+        sqlite_path=sqlite_path,
+        progress_interval_seconds=3600,
+        wait=True,
+    )
+
+    alpha_partial = next(
+        snapshot
+        for snapshot in writes
+        if snapshot["status"] == "running"
+        and snapshot["runs"][0].get("reviewer_output") == "alpha completed body"
+        and not snapshot["runs"][1].get("reviewer_output")
+    )
+    assert alpha_partial["runs"][0]["review_status"] == "completed"
+    assert [run["slot"] for run in streamed] == ["alpha", "bravo"]
+    assert completed["live_output_streamed_bodies"] == {
+        "alpha": "alpha completed body",
+        "bravo": "bravo completed body",
+    }
+    assert all("stdout_path" not in run and "stderr_path" not in run and "pid" not in run for run in completed["runs"])
+    assert not alpha_stdout.exists()
+    assert not alpha_stderr.exists()
+    assert not bravo_stdout.exists()
+    assert not bravo_stderr.exists()
+
+
+def test_collect_round_results_rebinds_launcher_sessions_to_review_children(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    sqlite_path = tmp_path / "state_5.sqlite"
+    review_cwd = r"C:\repo\demo"
+    prompt_title = "Review the code changes against the base branch 'main'."
+
+    launcher_alpha_rollout = tmp_path / "launcher-alpha.jsonl"
+    child_alpha_rollout = tmp_path / "child-alpha.jsonl"
+    launcher_bravo_rollout = tmp_path / "launcher-bravo.jsonl"
+    child_bravo_rollout = tmp_path / "child-bravo.jsonl"
+    _launcher_rollout(launcher_alpha_rollout, "launcher alpha text")
+    _launcher_rollout(launcher_bravo_rollout, "launcher bravo text")
+    _child_rollout(
+        child_alpha_rollout,
+        model="gpt-5.4",
+        reasoning_effort="xhigh",
+        usage={"input_tokens": 1200, "cached_input_tokens": 300, "output_tokens": 70},
+        text="alpha child findings",
+    )
+    _child_rollout(
+        child_bravo_rollout,
+        model="gpt-5.3-codex",
+        reasoning_effort="medium",
+        usage={"input_tokens": 900, "cached_input_tokens": 200, "output_tokens": 40},
+        text="bravo child findings",
+    )
+
+    con = sqlite3.connect(sqlite_path)
+    con.execute(THREAD_SCHEMA)
+    _insert_thread(
+        con,
+        thread_id="launcher-alpha",
+        rollout_path=launcher_alpha_rollout,
+        cwd=review_cwd,
+        source="exec",
+        created_at=1_700_000_100,
+        updated_at=1_700_000_160,
+        tokens_used=0,
+        title=prompt_title,
+    )
+    _insert_thread(
+        con,
+        thread_id="child-alpha",
+        rollout_path=child_alpha_rollout,
+        cwd=review_cwd,
+        source='{"subagent":"review"}',
+        created_at=1_700_000_101,
+        updated_at=1_700_000_160,
+        tokens_used=1_570,
+        title=prompt_title,
+        model="gpt-5.4",
+        reasoning_effort="xhigh",
+    )
+    _insert_thread(
+        con,
+        thread_id="launcher-bravo",
+        rollout_path=launcher_bravo_rollout,
+        cwd=review_cwd,
+        source="exec",
+        created_at=1_700_000_100,
+        updated_at=1_700_000_140,
+        tokens_used=0,
+        title=prompt_title,
+    )
+    _insert_thread(
+        con,
+        thread_id="child-bravo",
+        rollout_path=child_bravo_rollout,
+        cwd=review_cwd,
+        source='{"subagent":"review"}',
+        created_at=1_700_000_101,
+        updated_at=1_700_000_140,
+        tokens_used=1_140,
+        title=prompt_title,
+        model="gpt-5.3-codex",
+        reasoning_effort="medium",
+    )
+    con.commit()
+    con.close()
+
+    alpha_stdout = tmp_path / "alpha.stdout"
+    alpha_stderr = tmp_path / "alpha.stderr"
+    bravo_stdout = tmp_path / "bravo.stdout"
+    bravo_stderr = tmp_path / "bravo.stderr"
+    alpha_stdout.write_text("", encoding="utf-8")
+    bravo_stdout.write_text("", encoding="utf-8")
+    alpha_stderr.write_text("Session ID: launcher-alpha\n", encoding="utf-8")
+    bravo_stderr.write_text("Session ID: launcher-bravo\n", encoding="utf-8")
+
+    round_payload = {
+        "round_id": "round-1",
+        "task_class": "pr_review",
+        "selection_mode": "scramble",
+        "status": "running",
+        "runs": [
+            {
+                "slot": "alpha",
+                "variant_id": "gpt-5.4-xhigh",
+                "title": "review-suite::round-1::alpha::gpt-5.4-xhigh",
+                "command": ["codex", "review"],
+                "started_at": "2023-11-14T22:15:00Z",
+                "stdout_path": str(alpha_stdout),
+                "stderr_path": str(alpha_stderr),
+            },
+            {
+                "slot": "bravo",
+                "variant_id": "gpt-5.3-codex-medium",
+                "title": "review-suite::round-1::bravo::gpt-5.3-codex-medium",
+                "command": ["codex", "review"],
+                "started_at": "2023-11-14T22:15:00Z",
+                "stdout_path": str(bravo_stdout),
+                "stderr_path": str(bravo_stderr),
+            },
+        ],
+    }
+
+    completed = review_suite_local.collect_round_results(
+        round_payload=round_payload,
+        roster=_minimal_roster(),
+        state_dir=state_dir,
+        review_cwd=Path(review_cwd),
+        sqlite_path=sqlite_path,
+        wait=False,
+    )
+
+    runs_by_slot = {run["slot"]: run for run in completed["runs"]}
+    assert runs_by_slot["alpha"]["session_id"] == "launcher-alpha"
+    assert runs_by_slot["alpha"]["thread_id"] == "child-alpha"
+    assert runs_by_slot["alpha"]["tokens_used"] == 1_570
+    assert runs_by_slot["alpha"]["usage"] == {
+        "input_tokens": 1200,
+        "cached_input_tokens": 300,
+        "output_tokens": 70,
+    }
+    assert runs_by_slot["alpha"]["cost_usd"] == pytest.approx(0.003375)
+    assert runs_by_slot["alpha"]["reviewer_output"] == "alpha child findings"
+    assert runs_by_slot["alpha"]["reviewer_output_ref"] == "rollout://child-alpha/gpt-5.4-xhigh"
+
+    assert runs_by_slot["bravo"]["session_id"] == "launcher-bravo"
+    assert runs_by_slot["bravo"]["thread_id"] == "child-bravo"
+    assert runs_by_slot["bravo"]["tokens_used"] == 1_140
+    assert runs_by_slot["bravo"]["usage"] == {
+        "input_tokens": 900,
+        "cached_input_tokens": 200,
+        "output_tokens": 40,
+    }
+    assert runs_by_slot["bravo"]["cost_usd"] == pytest.approx(0.00182)
+    assert runs_by_slot["bravo"]["reviewer_output"] == "bravo child findings"
+    assert runs_by_slot["bravo"]["reviewer_output_ref"] == "rollout://child-bravo/gpt-5.3-codex-medium"
+    assert review_suite_local.total_usage_tokens(runs_by_slot["alpha"]["usage"]) == 1_270
+    assert review_suite_local.total_usage_tokens(runs_by_slot["bravo"]["usage"]) == 940
+
+    record = review_suite_local.build_record_from_grade(
+        round_payload=completed,
+        roster=_minimal_roster(),
+        rubric=_minimal_rubric(),
+        task_id="demo",
+        winner="alpha",
+        basis="valid_findings_vs_none",
+        alpha_note=None,
+        bravo_note=None,
+        shared_note="ok",
+    )
+    record_runs = {run["variant_id"]: run for run in record["runs"]}
+    assert record_runs["gpt-5.4-xhigh"]["cost_usd"] == pytest.approx(0.003375)
+    assert record_runs["gpt-5.3-codex-medium"]["cost_usd"] == pytest.approx(0.00182)
+
+    with pytest.raises(ValueError, match="non-tie winner"):
+        review_suite_local.build_record_from_grade(
+            round_payload=completed,
+            roster=_minimal_roster(),
+            rubric=_minimal_rubric(),
+            task_id="demo",
+            winner="alpha",
+            basis="tie_clean",
+            alpha_note=None,
+            bravo_note=None,
+            shared_note="ok",
+        )
+    with pytest.raises(ValueError, match="tie winner"):
+        review_suite_local.build_record_from_grade(
+            round_payload=completed,
+            roster=_minimal_roster(),
+            rubric=_minimal_rubric(),
+            task_id="demo",
+            winner="tie",
+            basis="valid_findings_vs_none",
+            alpha_note=None,
+            bravo_note=None,
+            shared_note="ok",
+        )
+
+
+def test_collect_round_results_falls_back_to_child_lookup_when_session_id_is_missing(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    sqlite_path = tmp_path / "state_5.sqlite"
+    review_cwd = r"C:\repo\demo"
+    prompt_title = "You are reviewing a manually supplied diff artifact."
+
+    child_rollout = tmp_path / "child-only.jsonl"
+    _child_rollout(
+        child_rollout,
+        model="gpt-5.4",
+        reasoning_effort="xhigh",
+        usage={"input_tokens": 500, "cached_input_tokens": 100, "output_tokens": 25},
+        text="child only findings",
+    )
+
+    con = sqlite3.connect(sqlite_path)
+    con.execute(THREAD_SCHEMA)
+    _insert_thread(
+        con,
+        thread_id="child-only",
+        rollout_path=child_rollout,
+        cwd=review_cwd,
+        source='{"subagent":"review"}',
+        created_at=1_700_000_200,
+        updated_at=1_700_000_240,
+        tokens_used=625,
+        title=prompt_title,
+        model="gpt-5.4",
+        reasoning_effort="xhigh",
+    )
+    con.commit()
+    con.close()
+
+    stdout_path = tmp_path / "stdout.txt"
+    stderr_path = tmp_path / "stderr.txt"
+    stdout_path.write_text("", encoding="utf-8")
+    stderr_path.write_text("no session marker here\n", encoding="utf-8")
+
+    round_payload = {
+        "round_id": "round-2",
+        "task_class": "pr_review",
+        "selection_mode": "scramble",
+        "status": "running",
+        "runs": [
+            {
+                "slot": "alpha",
+                "variant_id": "gpt-5.4-xhigh",
+                "title": "review-suite::round-2::alpha::gpt-5.4-xhigh",
+                "command": ["codex", "review"],
+                "started_at": "2023-11-14T22:16:40Z",
+                "stdout_path": str(stdout_path),
+                "stderr_path": str(stderr_path),
+            }
+        ],
+    }
+
+    completed = review_suite_local.collect_round_results(
+        round_payload=round_payload,
+        roster={"variants": [_minimal_roster()["variants"][0]]},
+        state_dir=state_dir,
+        review_cwd=Path(review_cwd),
+        sqlite_path=sqlite_path,
+        wait=False,
+    )
+
+    run = completed["runs"][0]
+    assert run["session_id"] is None
+    assert run["thread_id"] == "child-only"
+    assert run["tokens_used"] == 625
+    assert run["usage"] == {
+        "input_tokens": 500,
+        "cached_input_tokens": 100,
+        "output_tokens": 25,
+    }
+    assert run["cost_usd"] == pytest.approx(0.0014)
+    assert run["reviewer_output"] == "child only findings"
+
+
+def test_collect_round_results_matches_review_child_created_after_default_window(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    sqlite_path = tmp_path / "state_5.sqlite"
+    review_cwd = r"C:\repo\demo"
+    prompt_title = "Review the code changes against the base branch 'main'."
+
+    launcher_rollout = tmp_path / "launcher.jsonl"
+    child_rollout = tmp_path / "child.jsonl"
+    _launcher_rollout(launcher_rollout, "launcher text")
+    _child_rollout(
+        child_rollout,
+        model="gpt-5.4",
+        reasoning_effort="xhigh",
+        usage={"input_tokens": 840, "cached_input_tokens": 240, "output_tokens": 36},
+        text="slow child findings",
+    )
+
+    con = sqlite3.connect(sqlite_path)
+    con.execute(THREAD_SCHEMA)
+    _insert_thread(
+        con,
+        thread_id="launcher-alpha",
+        rollout_path=launcher_rollout,
+        cwd=review_cwd,
+        source="exec",
+        created_at=1_700_000_100,
+        updated_at=1_700_000_200,
+        tokens_used=0,
+        title=prompt_title,
+    )
+    _insert_thread(
+        con,
+        thread_id="child-alpha",
+        rollout_path=child_rollout,
+        cwd=review_cwd,
+        source='{"subagent":"review"}',
+        created_at=1_700_000_112,
+        updated_at=1_700_000_190,
+        tokens_used=876,
+        title=prompt_title,
+        model="gpt-5.4",
+        reasoning_effort="xhigh",
+    )
+    con.commit()
+    con.close()
+
+    stdout_path = tmp_path / "stdout.txt"
+    stderr_path = tmp_path / "stderr.txt"
+    stdout_path.write_text("", encoding="utf-8")
+    stderr_path.write_text("Session ID: launcher-alpha\n", encoding="utf-8")
+
+    round_payload = {
+        "round_id": "round-slow-child",
+        "task_class": "pr_review",
+        "selection_mode": "scramble",
+        "status": "running",
+        "runs": [
+            {
+                "slot": "alpha",
+                "variant_id": "gpt-5.4-xhigh",
+                "title": "review-suite::round-slow-child::alpha::gpt-5.4-xhigh",
+                "command": ["codex", "review"],
+                "started_at": "2023-11-14T22:15:00Z",
+                "stdout_path": str(stdout_path),
+                "stderr_path": str(stderr_path),
+            }
+        ],
+    }
+
+    completed = review_suite_local.collect_round_results(
+        round_payload=round_payload,
+        roster={"variants": [_minimal_roster()["variants"][0]]},
+        state_dir=state_dir,
+        review_cwd=Path(review_cwd),
+        sqlite_path=sqlite_path,
+        wait=False,
+    )
+
+    run = completed["runs"][0]
+    assert run["session_id"] == "launcher-alpha"
+    assert run["thread_id"] == "child-alpha"
+    assert run["tokens_used"] == 876
+    assert run["usage"] == {
+        "input_tokens": 840,
+        "cached_input_tokens": 240,
+        "output_tokens": 36,
+    }
+    assert run["cost_usd"] == pytest.approx(0.0021)
+    assert run["reviewer_output"] == "slow child findings"
+
+
+def test_collect_round_results_retries_child_lookup_after_launcher_match(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state_dir = tmp_path / "state"
+    sqlite_path = tmp_path / "state_5.sqlite"
+    review_cwd = r"C:\repo\demo"
+    prompt_title = "Review the code changes against the base branch 'main'."
+
+    launcher_rollout = tmp_path / "launcher.jsonl"
+    child_rollout = tmp_path / "child.jsonl"
+    _launcher_rollout(launcher_rollout, "launcher text")
+    _child_rollout(
+        child_rollout,
+        model="gpt-5.4",
+        reasoning_effort="xhigh",
+        usage={"input_tokens": 750, "cached_input_tokens": 200, "output_tokens": 30},
+        text="delayed child findings",
+    )
+
+    launcher_thread = {
+        "id": "launcher-alpha",
+        "rollout_path": str(launcher_rollout),
+        "cwd": review_cwd,
+        "source": "exec",
+        "created_at": 1_700_000_100,
+        "updated_at": 1_700_000_140,
+        "tokens_used": 0,
+        "model": None,
+        "reasoning_effort": None,
+        "title": prompt_title,
+    }
+    child_thread = {
+        "id": "child-alpha",
+        "rollout_path": str(child_rollout),
+        "cwd": review_cwd,
+        "source": '{"subagent":"review"}',
+        "created_at": 1_700_000_101,
+        "updated_at": 1_700_000_150,
+        "tokens_used": 780,
+        "model": "gpt-5.4",
+        "reasoning_effort": "xhigh",
+        "title": prompt_title,
+    }
+
+    stdout_path = tmp_path / "stdout.txt"
+    stderr_path = tmp_path / "stderr.txt"
+    stdout_path.write_text("", encoding="utf-8")
+    stderr_path.write_text("Session ID: launcher-alpha\n", encoding="utf-8")
+
+    round_payload = {
+        "round_id": "round-3",
+        "task_class": "pr_review",
+        "selection_mode": "scramble",
+        "status": "running",
+        "runs": [
+            {
+                "slot": "alpha",
+                "variant_id": "gpt-5.4-xhigh",
+                "title": "review-suite::round-3::alpha::gpt-5.4-xhigh",
+                "command": ["codex", "review"],
+                "started_at": "2023-11-14T22:15:00Z",
+                "stdout_path": str(stdout_path),
+                "stderr_path": str(stderr_path),
+            }
+        ],
+    }
+
+    child_lookup_calls = {"count": 0}
+
+    monkeypatch.setattr(review_suite_local, "find_thread_by_id", lambda **_: launcher_thread)
+
+    def delayed_child_lookup(**_: object) -> dict[str, object] | None:
+        child_lookup_calls["count"] += 1
+        if child_lookup_calls["count"] == 1:
+            return None
+        return child_thread
+
+    monkeypatch.setattr(review_suite_local, "find_review_child_thread", delayed_child_lookup)
+    monkeypatch.setattr(review_suite_local, "find_thread_by_title", lambda **_: None)
+    monkeypatch.setattr(review_suite_local.time, "sleep", lambda _: None)
+
+    completed = review_suite_local.collect_round_results(
+        round_payload=round_payload,
+        roster={"variants": [_minimal_roster()["variants"][0]]},
+        state_dir=state_dir,
+        review_cwd=Path(review_cwd),
+        sqlite_path=sqlite_path,
+        wait=False,
+    )
+
+    run = completed["runs"][0]
+    assert child_lookup_calls["count"] >= 2
+    assert run["session_id"] == "launcher-alpha"
+    assert run["thread_id"] == "child-alpha"
+    assert run["tokens_used"] == 780
+    assert run["usage"] == {
+        "input_tokens": 750,
+        "cached_input_tokens": 200,
+        "output_tokens": 30,
+    }
+    assert run["cost_usd"] == pytest.approx(0.001875)
+    assert run["reviewer_output"] == "delayed child findings"
+
+
+def test_compute_cost_and_total_tokens_treat_cached_input_as_subset() -> None:
+    variant = _minimal_roster()["variants"][0]
+    usage = {"input_tokens": 2_417_374, "cached_input_tokens": 2_340_864, "output_tokens": 23_880}
+
+    assert review_suite_local.total_usage_tokens(usage) == 2_441_254
+    assert review_suite_local.compute_cost_usd(variant, usage) == pytest.approx(1.134691)
+
+
+def test_collect_round_results_preserves_foreign_review_cwd_for_capture(monkeypatch, tmp_path: Path) -> None:
+    class ForeignReviewCwd:
+        def __str__(self) -> str:
+            return r"C:\repo\demo"
+
+        def resolve(self) -> Path:
+            raise AssertionError("foreign review cwd should not be resolved during capture lookup")
+
+    state_dir = tmp_path / "state"
+    stdout_path = tmp_path / "stdout.txt"
+    stderr_path = tmp_path / "stderr.txt"
+    stdout_path.write_text("", encoding="utf-8")
+    stderr_path.write_text("Session ID: launcher-alpha\n", encoding="utf-8")
+    captured: dict[str, object] = {}
+
+    def fake_collect(**kwargs: object) -> dict[str, object]:
+        captured["review_cwd"] = kwargs["review_cwd"]
+        return {
+            "slot": "alpha",
+            "variant_id": "gpt-5.4-xhigh",
+            "status": "completed",
+            "reviewer_output": "No findings.",
+        }
+
+    monkeypatch.setattr(review_suite_local, "_collect_completed_run_from_artifacts", fake_collect)
+    monkeypatch.setattr(review_suite_local, "_cleanup_run_artifacts", lambda item: None)
+
+    completed = review_suite_local.collect_round_results(
+        round_payload={
+            "round_id": "round-foreign-cwd",
+            "task_class": "pr_review",
+            "selection_mode": "scramble",
+            "status": "running",
+            "runs": [
+                {
+                    "slot": "alpha",
+                    "variant_id": "gpt-5.4-xhigh",
+                    "title": "review-suite::round-foreign-cwd::alpha::gpt-5.4-xhigh",
+                    "stdout_path": str(stdout_path),
+                    "stderr_path": str(stderr_path),
+                }
+            ],
+        },
+        roster={"variants": [_minimal_roster()["variants"][0]]},
+        state_dir=state_dir,
+        review_cwd=ForeignReviewCwd(),  # type: ignore[arg-type]
+        wait=False,
+    )
+
+    assert completed["status"] == "completed"
+    assert str(captured["review_cwd"]) == r"C:\repo\demo"
+
+
+def test_collect_completed_review_capture_uses_started_at_for_title_fallback(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    stdout_path = tmp_path / "review.stdout.txt"
+    stderr_path = tmp_path / "review.stderr.txt"
+    stdout_path.write_text("No findings.\n", encoding="utf-8")
+    stderr_path.write_text("", encoding="utf-8")
+
+    observed: dict[str, object] = {}
+
+    monkeypatch.setattr(review_suite_local, "find_thread_by_id", lambda **_: None)
+    monkeypatch.setattr(review_suite_local, "find_review_child_thread", lambda **_: None)
+
+    def fake_find_thread_by_title(**kwargs: object) -> None:
+        observed["created_after"] = kwargs["created_after"]
+        return None
+
+    monkeypatch.setattr(review_suite_local, "find_thread_by_title", fake_find_thread_by_title)
+    monkeypatch.setattr(review_suite_local, "enrich_thread_record", lambda thread: {})
+
+    variant = {
+        "id": "gpt-5.4-mini-medium",
+        "model": "gpt-5.4-mini",
+        "reasoning_effort": "medium",
+        "pricing": {
+            "input_per_million_usd": 0.75,
+            "cached_input_per_million_usd": 0.075,
+            "output_per_million_usd": 4.5,
+        },
+    }
+    started_at = "2026-04-13T10:00:00Z"
+    review_suite_local.collect_completed_review_capture(
+        slot="review-1",
+        variant_id="gpt-5.4-mini-medium",
+        variant=variant,
+        title="local-review::repo::review-1",
+        command=["codex", "review"],
+        stdout_path=stdout_path,
+        stderr_path=stderr_path,
+        started_at=started_at,
+        sqlite_path=tmp_path / "state_5.sqlite",
+        review_cwd=tmp_path,
+    )
+
+    assert observed["created_after"] == review_suite_local._started_at_epoch_seconds(started_at) - 5
+
+
+def test_rollout_capture_missing_threads_table_returns_none(tmp_path: Path) -> None:
+    sqlite_path = tmp_path / "state_5.sqlite"
+    sqlite3.connect(sqlite_path).close()
+
+    assert rollout_capture.find_thread_by_id(sqlite_path=sqlite_path, thread_id="thread-1") is None
+    assert rollout_capture.find_thread_by_title(sqlite_path=sqlite_path, title="review") is None
+    assert (
+        rollout_capture.find_review_child_thread(
+            sqlite_path=sqlite_path,
+            cwd=r"C:\repo\demo",
+            model="gpt-5.4",
+            reasoning_effort="medium",
+        )
+        is None
+    )

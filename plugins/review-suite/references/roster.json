@@ -1,0 +1,203 @@
+{
+  "version": 1,
+  "settings": {
+    "default_bootstrap_target_samples": 8,
+    "bootstrap_weight_boost": 2.0,
+    "relative_underuse_ratio": 0.7,
+    "selection_mode": "true_scramble",
+    "slight_bias_elo_weight": 0.15,
+    "elo_k_factor": 24,
+    "promotion_min_samples": 20,
+    "promotion_min_elo": 1550.0,
+    "promotion_champion_group_window": 25.0,
+    "promotion_min_elo_lead": 25.0,
+    "promotion_close_contender_gap": 10.0,
+    "probation_min_samples": 20,
+    "probation_max_elo": 1500.0
+  },
+  "task_classes": {
+    "phase_review": {},
+    "pr_review": {}
+  },
+  "variants": [
+    {
+      "id": "gpt-5.3-codex-low",
+      "model": "gpt-5.3-codex",
+      "reasoning_effort": "low",
+      "task_classes": ["phase_review"],
+      "state": "active",
+      "bootstrap_target_samples": 10,
+      "pricing": { "input_per_million_usd": 1.75, "cached_input_per_million_usd": 0.175, "output_per_million_usd": 14.0 }
+    },
+    {
+      "id": "gpt-5.3-codex-medium",
+      "model": "gpt-5.3-codex",
+      "reasoning_effort": "medium",
+      "task_classes": ["phase_review", "pr_review"],
+      "state": "active",
+      "bootstrap_target_samples": 10,
+      "pricing": { "input_per_million_usd": 1.75, "cached_input_per_million_usd": 0.175, "output_per_million_usd": 14.0 }
+    },
+    {
+      "id": "gpt-5.3-codex-high",
+      "model": "gpt-5.3-codex",
+      "reasoning_effort": "high",
+      "task_classes": ["pr_review"],
+      "state": "active",
+      "bootstrap_target_samples": 10,
+      "pricing": { "input_per_million_usd": 1.75, "cached_input_per_million_usd": 0.175, "output_per_million_usd": 14.0 }
+    },
+    {
+      "id": "gpt-5.3-codex-xhigh",
+      "model": "gpt-5.3-codex",
+      "reasoning_effort": "xhigh",
+      "task_classes": ["pr_review"],
+      "state": "active",
+      "bootstrap_target_samples": 10,
+      "pricing": { "input_per_million_usd": 1.75, "cached_input_per_million_usd": 0.175, "output_per_million_usd": 14.0 }
+    },
+    {
+      "id": "gpt-5.3-codex-spark-low",
+      "model": "gpt-5.3-codex-spark",
+      "reasoning_effort": "low",
+      "task_classes": ["phase_review"],
+      "state": "retired",
+      "bootstrap_target_samples": 10,
+      "pricing": { "input_per_million_usd": 1.75, "cached_input_per_million_usd": 0.175, "output_per_million_usd": 14.0 }
+    },
+    {
+      "id": "gpt-5.3-codex-spark-medium",
+      "model": "gpt-5.3-codex-spark",
+      "reasoning_effort": "medium",
+      "task_classes": ["phase_review"],
+      "state": "active",
+      "bootstrap_target_samples": 10,
+      "pricing": { "input_per_million_usd": 1.75, "cached_input_per_million_usd": 0.175, "output_per_million_usd": 14.0 }
+    },
+    {
+      "id": "gpt-5.3-codex-spark-high",
+      "model": "gpt-5.3-codex-spark",
+      "reasoning_effort": "high",
+      "task_classes": ["phase_review"],
+      "state": "active",
+      "bootstrap_target_samples": 10,
+      "pricing": { "input_per_million_usd": 1.75, "cached_input_per_million_usd": 0.175, "output_per_million_usd": 14.0 }
+    },
+    {
+      "id": "gpt-5.3-codex-spark-xhigh",
+      "model": "gpt-5.3-codex-spark",
+      "reasoning_effort": "xhigh",
+      "task_classes": ["phase_review", "pr_review"],
+      "state": "retired",
+      "bootstrap_target_samples": 10,
+      "pricing": { "input_per_million_usd": 1.75, "cached_input_per_million_usd": 0.175, "output_per_million_usd": 14.0 }
+    },
+    {
+      "id": "gpt-5.4-low",
+      "model": "gpt-5.4",
+      "reasoning_effort": "low",
+      "task_classes": ["phase_review"],
+      "state": "active",
+      "supported_service_tiers": ["fast"],
+      "bootstrap_target_samples": 10,
+      "pricing": { "input_per_million_usd": 2.5, "cached_input_per_million_usd": 0.25, "output_per_million_usd": 15.0 }
+    },
+    {
+      "id": "gpt-5.4-mini-medium",
+      "model": "gpt-5.4-mini",
+      "reasoning_effort": "medium",
+      "task_classes": ["phase_review"],
+      "state": "active",
+      "bootstrap_target_samples": 10,
+      "pricing": { "input_per_million_usd": 0.75, "cached_input_per_million_usd": 0.075, "output_per_million_usd": 4.5 }
+    },
+    {
+      "id": "gpt-5.4-mini-high",
+      "model": "gpt-5.4-mini",
+      "reasoning_effort": "high",
+      "task_classes": ["phase_review"],
+      "state": "active",
+      "bootstrap_target_samples": 10,
+      "pricing": { "input_per_million_usd": 0.75, "cached_input_per_million_usd": 0.075, "output_per_million_usd": 4.5 }
+    },
+    {
+      "id": "gpt-5.4-mini-xhigh",
+      "model": "gpt-5.4-mini",
+      "reasoning_effort": "xhigh",
+      "task_classes": ["pr_review"],
+      "state": "active",
+      "bootstrap_target_samples": 10,
+      "pricing": { "input_per_million_usd": 0.75, "cached_input_per_million_usd": 0.075, "output_per_million_usd": 4.5 }
+    },
+    {
+      "id": "gpt-5.4-medium",
+      "model": "gpt-5.4",
+      "reasoning_effort": "medium",
+      "task_classes": ["phase_review", "pr_review"],
+      "state": "active",
+      "supported_service_tiers": ["fast"],
+      "bootstrap_target_samples": 10,
+      "pricing": { "input_per_million_usd": 2.5, "cached_input_per_million_usd": 0.25, "output_per_million_usd": 15.0 }
+    },
+    {
+      "id": "gpt-5.4-high",
+      "model": "gpt-5.4",
+      "reasoning_effort": "high",
+      "task_classes": ["pr_review"],
+      "state": "active",
+      "supported_service_tiers": ["fast"],
+      "bootstrap_target_samples": 10,
+      "pricing": { "input_per_million_usd": 2.5, "cached_input_per_million_usd": 0.25, "output_per_million_usd": 15.0 }
+    },
+    {
+      "id": "gpt-5.4-xhigh",
+      "model": "gpt-5.4",
+      "reasoning_effort": "xhigh",
+      "task_classes": ["pr_review"],
+      "state": "active",
+      "supported_service_tiers": ["fast"],
+      "bootstrap_target_samples": 10,
+      "pricing": { "input_per_million_usd": 2.5, "cached_input_per_million_usd": 0.25, "output_per_million_usd": 15.0 }
+    },
+    {
+      "id": "gpt-5.5-low",
+      "model": "gpt-5.5",
+      "reasoning_effort": "low",
+      "task_classes": ["phase_review", "pr_review"],
+      "state": "active",
+      "supported_service_tiers": ["fast"],
+      "bootstrap_target_samples": 10,
+      "pricing": { "input_per_million_usd": 5.0, "cached_input_per_million_usd": 0.5, "output_per_million_usd": 30.0 }
+    },
+    {
+      "id": "gpt-5.5-medium",
+      "model": "gpt-5.5",
+      "reasoning_effort": "medium",
+      "task_classes": ["phase_review", "pr_review"],
+      "state": "active",
+      "supported_service_tiers": ["fast"],
+      "bootstrap_target_samples": 10,
+      "pricing": { "input_per_million_usd": 5.0, "cached_input_per_million_usd": 0.5, "output_per_million_usd": 30.0 }
+    },
+    {
+      "id": "gpt-5.5-high",
+      "model": "gpt-5.5",
+      "reasoning_effort": "high",
+      "task_classes": ["pr_review"],
+      "state": "active",
+      "supported_service_tiers": ["fast"],
+      "bootstrap_target_samples": 10,
+      "pricing": { "input_per_million_usd": 5.0, "cached_input_per_million_usd": 0.5, "output_per_million_usd": 30.0 }
+    },
+    {
+      "id": "gpt-5.5-xhigh",
+      "model": "gpt-5.5",
+      "reasoning_effort": "xhigh",
+      "task_classes": ["pr_review"],
+      "state": "active",
+      "supported_service_tiers": ["fast"],
+      "bootstrap_target_samples": 10,
+      "pricing": { "input_per_million_usd": 5.0, "cached_input_per_million_usd": 0.5, "output_per_million_usd": 30.0 }
+    }
+  ]
+}

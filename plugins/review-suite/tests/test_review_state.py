@@ -1,0 +1,1911 @@
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+
+SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts"
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+import review_suite_core.workflow_state as workflow_state_module
+import review_state
+
+from review_suite_core.workflow_state import branch_token, inspect_workflow_status, load_workflow_state, record_review_anchor, workflow_state_path
+
+
+def _git(repo: Path, *args: str) -> str:
+    proc = subprocess.run(
+        ["git", *args],
+        cwd=str(repo),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise AssertionError(proc.stderr or proc.stdout or f"git {' '.join(args)} failed")
+    return proc.stdout.strip()
+
+
+def _init_repo(repo: Path) -> None:
+    repo.mkdir()
+    _git(repo, "init")
+    _git(repo, "checkout", "-b", "main")
+    _git(repo, "config", "user.email", "codex@example.invalid")
+    _git(repo, "config", "user.name", "Codex")
+
+
+def _commit_file(repo: Path, relative_path: str, content: str, message: str) -> str:
+    path = repo / relative_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+    _git(repo, "add", relative_path)
+    _git(repo, "commit", "-m", message)
+    return _git(repo, "rev-parse", "HEAD")
+
+
+def _write_gate_run(state_dir: Path, payload: dict[str, object]) -> None:
+    path = state_dir / "gate_runs.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload) + "\n")
+
+
+def _write_gate_signoff(state_dir: Path, payload: dict[str, object]) -> None:
+    path = state_dir / "gate_signoffs.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload) + "\n")
+
+
+def test_inspect_workflow_status_without_anchor_recommends_full_review(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "one\n", "initial")
+
+    payload = inspect_workflow_status(
+        state_dir=tmp_path / "state",
+        review_cwd=repo,
+        base="main",
+    )
+
+    assert payload["recommendation"] == "full-review"
+    assert payload["reason"] == "no_review_anchor"
+    assert "state_file" not in payload
+
+
+def test_review_state_status_stays_on_existing_gate_stage_without_anchor(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    emitted: list[dict[str, object]] = []
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "base.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/gate-stage")
+    head = _commit_file(repo, "app.txt", "one\n", "one")
+    _write_gate_run(
+        state_dir,
+        {
+            "recorded_at": "2026-04-25T10:00:00Z",
+            "round_id": "t2-findings",
+            "task_class": "phase_gate",
+            "task_id": "feature/gate-stage",
+            "review_cwd": str(repo),
+            "review_cwd_normalized": workflow_state_module.normalize_cwd(str(repo)),
+            "review_scope": {"base": "main", "reviewed_head": head},
+            "signoff_status": "pending",
+            "runs": [{"review_status": "completed"}],
+        },
+    )
+    _write_gate_signoff(
+        state_dir,
+        {
+            "recorded_at": "2026-04-25T10:05:00Z",
+            "round_id": "t2-findings",
+            "task_class": "phase_gate",
+            "task_id": "feature/gate-stage",
+            "verdict": "findings",
+            "review_cwd": str(repo),
+            "review_cwd_normalized": workflow_state_module.normalize_cwd(str(repo)),
+        },
+    )
+
+    monkeypatch.setattr(review_state, "emit_toon", lambda payload: emitted.append(payload))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "review_state.py",
+            "status",
+            "--cd",
+            str(repo),
+            "--base",
+            "main",
+            "--state-dir",
+            str(state_dir),
+        ],
+    )
+
+    exit_code = review_state.main()
+
+    assert exit_code == 0
+    assert emitted[0]["recommendation"] == "fix-gate-findings"
+    assert emitted[0]["reason"] == "gate_findings_current_head"
+    assert emitted[0]["current_stage_lane"] == "review_t2"
+    assert emitted[0]["last_gate_findings_round_id"] == "t2-findings"
+    assert emitted[0]["action"]["lane"] == "gate-findings"
+    assert "show-round" in str(emitted[0]["action"]["show_cmd"])
+    assert emitted[0]["action"]["cwd"] == str(repo)
+
+
+def test_review_state_status_ignores_blocked_gate_for_monotonic_stage_without_anchor(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    emitted: list[dict[str, object]] = []
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "base.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/blocked-gate")
+    head = _commit_file(repo, "app.txt", "one\n", "one")
+    _write_gate_run(
+        state_dir,
+        {
+            "recorded_at": "2026-04-25T10:00:00Z",
+            "round_id": "blocked-t4",
+            "task_class": "pr_gate",
+            "task_id": "feature/blocked-gate",
+            "review_cwd": str(repo),
+            "review_cwd_normalized": workflow_state_module.normalize_cwd(str(repo)),
+            "review_scope": {"base": "main", "reviewed_head": head},
+            "signoff_status": "blocked",
+            "runs": [{"review_status": "interrupted", "grade_blocked": True}],
+        },
+    )
+
+    monkeypatch.setattr(review_state, "emit_toon", lambda payload: emitted.append(payload))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "review_state.py",
+            "status",
+            "--cd",
+            str(repo),
+            "--base",
+            "main",
+            "--state-dir",
+            str(state_dir),
+        ],
+    )
+
+    exit_code = review_state.main()
+
+    assert exit_code == 0
+    assert emitted[0]["recommendation"] == "full-review"
+    assert emitted[0]["reason"] == "no_review_anchor"
+    assert "current_stage_lane" not in emitted[0]
+    assert "recommended_lane" not in emitted[0]
+    assert emitted[0]["action"]["lane"] == "full-review"
+    assert emitted[0]["action"]["cwd"] == str(repo)
+
+
+def test_inspect_workflow_status_recommends_followup_after_t4_findings_amended_head(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "base.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/test")
+    reviewed_head = _commit_file(repo, "app.txt", "bug\n", "bug")
+    merge_base = _git(repo, "merge-base", "main", "HEAD")
+    record_review_anchor(
+        state_dir=state_dir,
+        review_cwd=repo,
+        lane="review_t3",
+        base="main",
+        review_scope={"base": "main", "merge_base": merge_base, "reviewed_head": reviewed_head},
+        reviewed_head=reviewed_head,
+    )
+    _write_gate_run(
+        state_dir,
+        {
+            "recorded_at": "2026-04-25T10:00:00Z",
+            "review_completed_at": "2026-04-25T10:02:00Z",
+            "round_id": "t4-findings",
+            "task_class": "pr_gate",
+            "task_id": "feature/test",
+            "review_cwd": str(repo),
+            "review_cwd_normalized": workflow_state_module.normalize_cwd(str(repo)),
+            "review_scope": {"base": "main", "reviewed_head": reviewed_head},
+            "signoff_status": "pending",
+            "signoff_required": True,
+            "runs": [{"slot": "alpha", "review_status": "completed", "grade_blocked": False}],
+        },
+    )
+    _write_gate_signoff(
+        state_dir,
+        {
+            "recorded_at": "2026-04-25T10:05:00Z",
+            "round_id": "t4-findings",
+            "task_class": "pr_gate",
+            "task_id": "feature/test",
+            "verdict": "findings",
+            "review_cwd": str(repo),
+            "review_cwd_normalized": workflow_state_module.normalize_cwd(str(repo)),
+        },
+    )
+    (repo / "app.txt").write_text("fix\n", encoding="utf-8")
+    _git(repo, "add", "app.txt")
+    _git(repo, "commit", "--amend", "--no-edit")
+
+    payload = inspect_workflow_status(
+        state_dir=state_dir,
+        review_cwd=repo,
+        base="main",
+    )
+
+    assert payload["recommendation"] == "review-followup"
+    assert payload["reason"] == "gate_findings_fix_delta"
+    assert payload["current_stage_lane"] == "review_t4"
+    assert payload["last_reviewed_lane"] == "review_t4"
+    assert payload["last_reviewed_head"] == reviewed_head
+    assert payload["last_gate_findings_round_id"] == "t4-findings"
+    assert payload["gate_findings_anchor_not_ancestor"] is True
+
+
+def test_inspect_workflow_status_reports_current_head_gate_findings_as_unresolved(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "base.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/current-findings")
+    reviewed_head = _commit_file(repo, "app.txt", "bug\n", "bug")
+    merge_base = _git(repo, "merge-base", "main", "HEAD")
+    record_review_anchor(
+        state_dir=state_dir,
+        review_cwd=repo,
+        lane="review_t3",
+        base="main",
+        review_scope={"base": "main", "merge_base": merge_base, "reviewed_head": reviewed_head},
+        reviewed_head=reviewed_head,
+    )
+    _write_gate_run(
+        state_dir,
+        {
+            "recorded_at": "2026-05-03T10:00:00Z",
+            "review_completed_at": "2026-05-03T10:02:00Z",
+            "round_id": "t4-current-findings",
+            "task_class": "pr_gate",
+            "task_id": "feature/current-findings",
+            "review_cwd": str(repo),
+            "review_cwd_normalized": workflow_state_module.normalize_cwd(str(repo)),
+            "review_scope": {"base": "main", "reviewed_head": reviewed_head},
+            "signoff_status": "pending",
+            "signoff_required": True,
+            "runs": [{"slot": "alpha", "review_status": "completed", "grade_blocked": False}],
+        },
+    )
+    _write_gate_signoff(
+        state_dir,
+        {
+            "recorded_at": "2026-05-03T10:05:00Z",
+            "round_id": "t4-current-findings",
+            "task_class": "pr_gate",
+            "task_id": "feature/current-findings",
+            "verdict": "findings",
+            "review_cwd": str(repo),
+            "review_cwd_normalized": workflow_state_module.normalize_cwd(str(repo)),
+        },
+    )
+
+    payload = inspect_workflow_status(
+        state_dir=state_dir,
+        review_cwd=repo,
+        base="main",
+    )
+
+    assert payload["recommendation"] == "fix-gate-findings"
+    assert payload["reason"] == "gate_findings_current_head"
+    assert payload["current_stage_lane"] == "review_t4"
+    assert payload["last_gate_findings_round_id"] == "t4-current-findings"
+    assert payload["last_reviewed_head"] == reviewed_head
+
+
+def test_inspect_workflow_status_routes_dirty_fix_after_current_gate_findings_to_followup(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "base.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/dirty-current-findings")
+    reviewed_head = _commit_file(repo, "app.txt", "bug\n", "bug")
+    merge_base = _git(repo, "merge-base", "main", "HEAD")
+    record_review_anchor(
+        state_dir=state_dir,
+        review_cwd=repo,
+        lane="review_t3",
+        base="main",
+        review_scope={"base": "main", "merge_base": merge_base, "reviewed_head": reviewed_head},
+        reviewed_head=reviewed_head,
+    )
+    _write_gate_run(
+        state_dir,
+        {
+            "recorded_at": "2026-05-03T11:00:00Z",
+            "review_completed_at": "2026-05-03T11:02:00Z",
+            "round_id": "t4-dirty-findings",
+            "task_class": "pr_gate",
+            "task_id": "feature/dirty-current-findings",
+            "review_cwd": str(repo),
+            "review_cwd_normalized": workflow_state_module.normalize_cwd(str(repo)),
+            "review_scope": {"base": "main", "reviewed_head": reviewed_head},
+            "signoff_status": "pending",
+            "signoff_required": True,
+            "runs": [{"slot": "alpha", "review_status": "completed", "grade_blocked": False}],
+        },
+    )
+    _write_gate_signoff(
+        state_dir,
+        {
+            "recorded_at": "2026-05-03T11:05:00Z",
+            "round_id": "t4-dirty-findings",
+            "task_class": "pr_gate",
+            "task_id": "feature/dirty-current-findings",
+            "verdict": "findings",
+            "review_cwd": str(repo),
+            "review_cwd_normalized": workflow_state_module.normalize_cwd(str(repo)),
+        },
+    )
+    (repo / "app.txt").write_text("bug\nfix\n", encoding="utf-8")
+
+    payload = inspect_workflow_status(
+        state_dir=state_dir,
+        review_cwd=repo,
+        base="main",
+    )
+
+    assert payload["recommendation"] == "review-followup"
+    assert payload["reason"] == "gate_findings_dirty_fix_delta"
+    assert payload["worktree_dirty"] is True
+    assert payload["last_gate_findings_round_id"] == "t4-dirty-findings"
+
+
+def test_inspect_workflow_status_routes_clean_followup_after_gate_findings_back_to_same_gate(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "base.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/linked-followup")
+    reviewed_head = _commit_file(repo, "app.txt", "bug\n", "bug")
+    merge_base = _git(repo, "merge-base", "main", "HEAD")
+    record_review_anchor(
+        state_dir=state_dir,
+        review_cwd=repo,
+        lane="review_t3",
+        base="main",
+        review_scope={"base": "main", "merge_base": merge_base, "reviewed_head": reviewed_head},
+        reviewed_head=reviewed_head,
+    )
+    _write_gate_run(
+        state_dir,
+        {
+            "recorded_at": "2026-05-03T12:00:00Z",
+            "review_completed_at": "2026-05-03T12:02:00Z",
+            "round_id": "t4-linked-findings",
+            "task_class": "pr_gate",
+            "task_id": "feature/linked-followup",
+            "review_cwd": str(repo),
+            "review_cwd_normalized": workflow_state_module.normalize_cwd(str(repo)),
+            "review_scope": {"base": "main", "reviewed_head": reviewed_head},
+            "signoff_status": "pending",
+            "signoff_required": True,
+            "runs": [{"slot": "alpha", "review_status": "completed", "grade_blocked": False}],
+        },
+    )
+    _write_gate_signoff(
+        state_dir,
+        {
+            "recorded_at": "2026-05-03T12:05:00Z",
+            "round_id": "t4-linked-findings",
+            "task_class": "pr_gate",
+            "task_id": "feature/linked-followup",
+            "verdict": "findings",
+            "review_cwd": str(repo),
+            "review_cwd_normalized": workflow_state_module.normalize_cwd(str(repo)),
+        },
+    )
+    fix_head = _commit_file(repo, "app.txt", "fix\n", "fix")
+    record_review_anchor(
+        state_dir=state_dir,
+        review_cwd=repo,
+        lane="review-followup",
+        base="main",
+        reviewed_head=fix_head,
+        review_scope={
+            "commit": reviewed_head,
+            "commit_end": fix_head,
+            "manual_prompt_mode": True,
+            "merge_base": merge_base,
+            "source_gate_lane": "review_t4",
+            "source_gate_reviewed_head": reviewed_head,
+            "source_gate_round_id": "t4-linked-findings",
+        },
+    )
+
+    payload = inspect_workflow_status(
+        state_dir=state_dir,
+        review_cwd=repo,
+        base="main",
+    )
+
+    assert payload["recommendation"] == "full-review"
+    assert payload["reason"] == "t4_findings_followup_needs_signoff"
+    assert payload["recommended_lane"] == "review_t4"
+    assert payload["last_gate_findings_round_id"] == "t4-linked-findings"
+    assert payload["source_gate_lane"] == "review_t4"
+
+
+def test_review_state_status_rejects_windows_wsl_unc_before_git(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    captured_errors: list[str] = []
+
+    monkeypatch.setattr(review_state.sys, "platform", "win32")
+    monkeypatch.setattr(
+        review_state,
+        "resolve_repo_root",
+        lambda cd: (_ for _ in ()).throw(AssertionError("UNC WSL path should fail before git")),
+    )
+    monkeypatch.setattr(review_state, "emit_error", lambda message, **kwargs: captured_errors.append(message) or 2)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "review_state.py",
+            "status",
+            "--cd",
+            "//wsl.localhost/Ubuntu/home/alice/code/repo",
+            "--base",
+            "main",
+            "--wsl",
+            "--state-dir",
+            str(tmp_path / "state"),
+        ],
+    )
+
+    exit_code = review_state.main()
+
+    assert exit_code == 2
+    assert "Run review_state from native WSL" in captured_errors[0]
+    assert "--wsl is not useful" in captured_errors[0]
+
+
+def test_inspect_workflow_status_warns_after_six_same_tier_runs_without_counting_followups(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/convergence")
+    reviewed_head = _commit_file(repo, "app.txt", "base\nfeature\n", "feature")
+    merge_base = _git(repo, "merge-base", "main", "HEAD")
+
+    for index in range(6):
+        record_review_anchor(
+            state_dir=state_dir,
+            review_cwd=repo,
+            lane="review_t3",
+            base="main",
+            reviewed_head=reviewed_head,
+            review_scope={"base": "main", "reviewed_head": reviewed_head, "merge_base": merge_base},
+            round_id=f"t3-{index}",
+        )
+    for index in range(4):
+        record_review_anchor(
+            state_dir=state_dir,
+            review_cwd=repo,
+            lane="review-followup",
+            base="main",
+            reviewed_head=reviewed_head,
+            review_scope={"commit": reviewed_head, "commit_end": reviewed_head},
+            round_id=f"followup-{index}",
+        )
+
+    payload = inspect_workflow_status(state_dir=state_dir, review_cwd=repo, base="main")
+
+    assert payload["recommendation"] == "none"
+    assert payload["convergence"]["status"] == "caution"
+    assert payload["convergence"]["tier"] == "review_t3"
+    assert payload["convergence"]["same_tier_true_run_count"] == 6
+    assert "not review-followup" in payload["convergence"]["note"]
+    assert "unclear product decisions" in payload["convergence"]["instruction"]
+
+
+def test_inspect_workflow_status_high_pressure_after_ten_same_tier_runs(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/high-pressure")
+    reviewed_head = _commit_file(repo, "app.txt", "base\nfeature\n", "feature")
+    merge_base = _git(repo, "merge-base", "main", "HEAD")
+
+    for index in range(10):
+        record_review_anchor(
+            state_dir=state_dir,
+            review_cwd=repo,
+            lane="review_t3",
+            base="main",
+            reviewed_head=reviewed_head,
+            review_scope={"base": "main", "reviewed_head": reviewed_head, "merge_base": merge_base},
+            round_id=f"t3-{index}",
+        )
+
+    payload = inspect_workflow_status(state_dir=state_dir, review_cwd=repo, base="main")
+
+    assert payload["recommendation"] == "none"
+    assert payload["convergence"]["status"] == "high_pressure"
+    assert payload["convergence"]["same_tier_true_run_count"] == 10
+    assert "full diff" in payload["convergence"]["instruction"]
+    assert "core approach is still right" in payload["convergence"]["instruction"]
+    assert "user or parent agent" in payload["convergence"]["instruction"]
+
+
+def test_record_review_anchor_compacts_tool_only_state(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    reviewed_head = _commit_file(repo, "app.txt", "one\n", "initial")
+
+    record_review_anchor(
+        state_dir=state_dir,
+        review_cwd=repo,
+        lane="review-followup",
+        base="main",
+        review_scope={
+            "commit": reviewed_head,
+            "commit_end": reviewed_head,
+            "merge_base": reviewed_head,
+            "manual_prompt_mode": True,
+            "target_label": f"interdiff `{reviewed_head}..{reviewed_head}`",
+            "manual_prompt_reason": "custom instructions",
+        },
+        reviewed_head=reviewed_head,
+        output_refs=["rollout://should-not-be-routing-state"],
+        session_id="session-should-not-be-routing-state",
+        note="invariant=" + ("very verbose root-cause note " * 20),
+    )
+
+    state = load_workflow_state(state_dir=state_dir, review_cwd=repo)
+    assert state is not None
+    anchor = state["anchors"][-1]
+    assert "note" not in anchor
+    assert "output_refs" not in anchor
+    assert "session_id" not in anchor
+    assert anchor["review_scope"] == {
+        "commit": reviewed_head,
+        "commit_end": reviewed_head,
+        "merge_base": reviewed_head,
+        "manual_prompt_mode": True,
+    }
+
+
+def test_inspect_workflow_status_recommends_followup_for_small_delta(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    reviewed_head = _commit_file(repo, "app.txt", "one\n", "initial")
+    record_review_anchor(
+        state_dir=state_dir,
+        review_cwd=repo,
+        lane="review_t1",
+        base="main",
+        reviewed_head=reviewed_head,
+    )
+    _commit_file(repo, "app.txt", "one\ntwo\n", "small fix")
+
+    payload = inspect_workflow_status(
+        state_dir=state_dir,
+        review_cwd=repo,
+        base="main",
+    )
+
+    assert payload["recommendation"] == "review-followup"
+    assert payload["reason"] == "small_delta_after_review"
+    assert payload["last_reviewed_head"] == reviewed_head
+    assert payload["commits_since_anchor"] == 1
+
+
+def test_inspect_workflow_status_recommends_coherence_for_large_delta(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    reviewed_head = _commit_file(repo, "app.txt", "one\n", "initial")
+    record_review_anchor(
+        state_dir=state_dir,
+        review_cwd=repo,
+        lane="review_t3",
+        base="main",
+        reviewed_head=reviewed_head,
+    )
+    for index in range(7):
+        _commit_file(repo, f"src/file_{index}.txt", f"{index}\n", f"touch file {index}")
+
+    payload = inspect_workflow_status(
+        state_dir=state_dir,
+        review_cwd=repo,
+        base="main",
+    )
+
+    assert payload["recommendation"] == "coherence-review"
+    assert payload["reason"] == "diff_churn_exceeded"
+    assert payload["files_changed"] == 7
+
+
+def test_inspect_workflow_status_escalates_small_delta_when_branch_review_pressure_is_high(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "base.txt", "base\n", "initial")
+    _git(repo, "checkout", "-b", "feature/pressure")
+
+    latest_reviewed_head = ""
+    for index in range(12):
+        latest_reviewed_head = _commit_file(repo, "app.txt", f"{index}\n", f"reviewed {index}")
+        record_review_anchor(
+            state_dir=state_dir,
+            review_cwd=repo,
+            lane="review-followup",
+            base="main",
+            reviewed_head=latest_reviewed_head,
+            review_scope={
+                "commit": latest_reviewed_head,
+                "commit_end": latest_reviewed_head,
+                "merge_base": _git(repo, "merge-base", "main", "HEAD"),
+                "manual_prompt_mode": True,
+            },
+        )
+    for index in range(12, 26):
+        _commit_file(repo, "app.txt", f"{index}\n", f"extra {index}")
+    latest_reviewed_head = _commit_file(repo, "app.txt", "reviewed\n", "latest reviewed")
+    record_review_anchor(
+        state_dir=state_dir,
+        review_cwd=repo,
+        lane="review-followup",
+        base="main",
+        reviewed_head=latest_reviewed_head,
+        review_scope={
+            "commit": latest_reviewed_head,
+            "commit_end": latest_reviewed_head,
+            "merge_base": _git(repo, "merge-base", "main", "HEAD"),
+            "manual_prompt_mode": True,
+        },
+    )
+    _commit_file(repo, "app.txt", "tip\n", "small fix")
+
+    payload = inspect_workflow_status(
+        state_dir=state_dir,
+        review_cwd=repo,
+        base="main",
+    )
+
+    assert payload["recommendation"] == "coherence-review"
+    assert payload["reason"] == "branch_review_pressure_exceeded"
+    assert payload["commits_since_anchor"] == 1
+    assert payload["branch_commits_since_base"] >= 25
+    assert payload["recorded_review_anchor_count"] >= 12
+    assert payload["followup_anchor_count"] >= 5
+
+
+def test_inspect_workflow_status_escalates_after_too_many_followups_since_full_checkpoint(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "base.txt", "base\n", "initial")
+    _git(repo, "checkout", "-b", "feature/followup-cap")
+    checkpoint_head = _commit_file(repo, "app.txt", "checkpoint\n", "checkpoint")
+    merge_base_at_checkpoint = _git(repo, "merge-base", "main", "HEAD")
+    record_review_anchor(
+        state_dir=state_dir,
+        review_cwd=repo,
+        lane="review_t3",
+        base="main",
+        reviewed_head=checkpoint_head,
+        review_scope={"base": "main", "reviewed_head": checkpoint_head, "merge_base": merge_base_at_checkpoint},
+    )
+
+    previous_head = checkpoint_head
+    for index in range(1, 4):
+        next_head = _commit_file(repo, "app.txt", f"followup {index}\n", f"followup {index}")
+        record_review_anchor(
+            state_dir=state_dir,
+            review_cwd=repo,
+            lane="review-followup",
+            base="main",
+            reviewed_head=next_head,
+            review_scope={
+                "commit": previous_head,
+                "commit_end": next_head,
+                "manual_prompt_mode": True,
+                "merge_base": merge_base_at_checkpoint,
+            },
+        )
+        previous_head = next_head
+    _commit_file(repo, "app.txt", "small fix\n", "small fix")
+
+    payload = inspect_workflow_status(
+        state_dir=state_dir,
+        review_cwd=repo,
+        base="main",
+    )
+
+    assert payload["recommendation"] == "coherence-review"
+    assert payload["reason"] == "followup_cycle_limit_exceeded"
+    assert payload["commits_since_anchor"] == 1
+    assert payload["followup_anchor_count_since_full_review"] == 3
+    assert payload["signoff_anchor_count_since_full_review"] == 0
+    assert payload["last_full_review_lane"] == "review_t3"
+
+
+def test_inspect_workflow_status_clean_t4_resets_followup_cycle_pressure(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "base.txt", "base\n", "initial")
+    _git(repo, "checkout", "-b", "feature/post-gate")
+    checkpoint_head = _commit_file(repo, "app.txt", "checkpoint\n", "checkpoint")
+    merge_base_at_checkpoint = _git(repo, "merge-base", "main", "HEAD")
+    record_review_anchor(
+        state_dir=state_dir,
+        review_cwd=repo,
+        lane="review_t3",
+        base="main",
+        reviewed_head=checkpoint_head,
+        review_scope={"base": "main", "reviewed_head": checkpoint_head, "merge_base": merge_base_at_checkpoint},
+    )
+
+    previous_head = checkpoint_head
+    for index in range(1, 3):
+        next_head = _commit_file(repo, "app.txt", f"followup {index}\n", f"followup {index}")
+        record_review_anchor(
+            state_dir=state_dir,
+            review_cwd=repo,
+            lane="review-followup",
+            base="main",
+            reviewed_head=next_head,
+            review_scope={
+                "commit": previous_head,
+                "commit_end": next_head,
+                "manual_prompt_mode": True,
+                "merge_base": merge_base_at_checkpoint,
+            },
+        )
+        previous_head = next_head
+    record_review_anchor(
+        state_dir=state_dir,
+        review_cwd=repo,
+        lane="review_t4",
+        base="main",
+        reviewed_head=previous_head,
+        review_scope={"base": "main", "reviewed_head": previous_head, "merge_base": merge_base_at_checkpoint},
+    )
+    next_head = _commit_file(repo, "app.txt", "followup 3\n", "followup 3")
+    record_review_anchor(
+        state_dir=state_dir,
+        review_cwd=repo,
+        lane="review-followup",
+        base="main",
+        reviewed_head=next_head,
+        review_scope={
+            "commit": previous_head,
+            "commit_end": next_head,
+            "manual_prompt_mode": True,
+            "merge_base": merge_base_at_checkpoint,
+        },
+    )
+    _commit_file(repo, "app.txt", "small fix\n", "small fix")
+
+    payload = inspect_workflow_status(
+        state_dir=state_dir,
+        review_cwd=repo,
+        base="main",
+    )
+
+    assert payload["recommendation"] == "review-followup"
+    assert payload["reason"] == "small_delta_after_review"
+    assert "followup_anchor_count_since_full_review" not in payload
+
+
+def test_inspect_workflow_status_routes_post_t4_findings_back_to_t4(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "base.txt", "base\n", "initial")
+    _git(repo, "checkout", "-b", "feature/post-gate-findings")
+    checkpoint_head = _commit_file(repo, "app.txt", "checkpoint\n", "checkpoint")
+    merge_base_at_checkpoint = _git(repo, "merge-base", "main", "HEAD")
+    record_review_anchor(
+        state_dir=state_dir,
+        review_cwd=repo,
+        lane="review_t3",
+        base="main",
+        reviewed_head=checkpoint_head,
+        review_scope={"base": "main", "reviewed_head": checkpoint_head, "merge_base": merge_base_at_checkpoint},
+    )
+    _write_gate_run(
+        state_dir,
+        {
+            "round_id": "t4-findings",
+            "task_class": "pr_gate",
+            "task_id": "feature/post-gate-findings",
+            "review_cwd": str(repo),
+            "review_cwd_normalized": workflow_state_module.normalize_cwd(str(repo)),
+            "review_scope": {"base": "main", "reviewed_head": checkpoint_head, "merge_base": merge_base_at_checkpoint},
+            "signoff_status": "pending",
+            "runs": [{"review_status": "completed"}],
+        },
+    )
+
+    previous_head = checkpoint_head
+    for index in range(1, 4):
+        next_head = _commit_file(repo, "app.txt", f"followup {index}\n", f"followup {index}")
+        record_review_anchor(
+            state_dir=state_dir,
+            review_cwd=repo,
+            lane="review-followup",
+            base="main",
+            reviewed_head=next_head,
+            review_scope={
+                "commit": previous_head,
+                "commit_end": next_head,
+                "manual_prompt_mode": True,
+                "merge_base": merge_base_at_checkpoint,
+            },
+        )
+        previous_head = next_head
+    _commit_file(repo, "app.txt", "small fix\n", "small fix")
+
+    payload = inspect_workflow_status(
+        state_dir=state_dir,
+        review_cwd=repo,
+        base="main",
+    )
+
+    assert payload["recommendation"] == "coherence-review"
+    assert payload["reason"] == "followup_cycle_limit_exceeded"
+    assert payload["recommended_lane"] == "review_t4"
+    assert "Run review_t4 as the fresh full-diff lane" in payload["note"]
+
+
+def test_inspect_workflow_status_recommends_full_review_when_anchor_is_not_ancestor(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    first = _commit_file(repo, "app.txt", "one\n", "initial")
+    reviewed_head = _commit_file(repo, "app.txt", "one\ntwo\n", "reviewed")
+    record_review_anchor(
+        state_dir=state_dir,
+        review_cwd=repo,
+        lane="review_t3",
+        base="main",
+        reviewed_head=reviewed_head,
+        review_scope={"base": "main", "reviewed_head": reviewed_head},
+    )
+    _git(repo, "reset", "--hard", first)
+    _commit_file(repo, "app.txt", "one\nthree\n", "rebased replacement")
+
+    payload = inspect_workflow_status(
+        state_dir=state_dir,
+        review_cwd=repo,
+        base="main",
+    )
+
+    assert payload["recommendation"] == "full-review"
+    assert payload["reason"] == "review_anchor_not_ancestor"
+
+
+def test_inspect_workflow_status_keeps_t4_stage_when_anchor_is_rewritten(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    first = _commit_file(repo, "app.txt", "one\n", "initial")
+    reviewed_head = _commit_file(repo, "app.txt", "one\ntwo\n", "reviewed")
+    record_review_anchor(
+        state_dir=state_dir,
+        review_cwd=repo,
+        lane="review_t3",
+        base="main",
+        reviewed_head=reviewed_head,
+        review_scope={"base": "main", "reviewed_head": reviewed_head},
+    )
+    _write_gate_run(
+        state_dir,
+        {
+            "round_id": "t4-findings",
+            "task_class": "pr_gate",
+            "task_id": "main",
+            "review_cwd": str(repo),
+            "review_cwd_normalized": workflow_state_module.normalize_cwd(str(repo)),
+            "review_scope": {"base": "main", "reviewed_head": reviewed_head},
+            "signoff_status": "pending",
+            "runs": [{"review_status": "completed"}],
+        },
+    )
+    _git(repo, "reset", "--hard", first)
+    _commit_file(repo, "app.txt", "one\nthree\n", "rebased replacement")
+
+    payload = inspect_workflow_status(
+        state_dir=state_dir,
+        review_cwd=repo,
+        base="main",
+    )
+
+    assert payload["recommendation"] == "full-review"
+    assert payload["reason"] == "review_anchor_not_ancestor"
+    assert payload["recommended_lane"] == "review_t4"
+    assert payload["current_stage_lane"] == "review_t4"
+
+
+def test_inspect_workflow_status_accepts_non_overlapping_equivalent_merge_base_drift(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    base_at_review = _commit_file(repo, "base.txt", "one\n", "initial")
+    _git(repo, "checkout", "-b", "feature/test")
+    reviewed_head = _commit_file(repo, "feature.txt", "feat\n", "feature work")
+    record_review_anchor(
+        state_dir=state_dir,
+        review_cwd=repo,
+        lane="review_t3",
+        base="main",
+        reviewed_head=reviewed_head,
+        review_scope={"base": "main", "reviewed_head": reviewed_head, "merge_base": base_at_review},
+    )
+    _git(repo, "checkout", "main")
+    _commit_file(repo, "base.txt", "one\ntwo\n", "main moves")
+    _git(repo, "checkout", "feature/test")
+    _git(repo, "merge", "--no-ff", "main", "-m", "merge main")
+
+    payload = inspect_workflow_status(
+        state_dir=state_dir,
+        review_cwd=repo,
+        base="main",
+    )
+
+    assert payload["recommendation"] == "none"
+    assert payload["reason"] == "current_head_already_reviewed"
+    assert payload["base_drift_review_equivalent"] is True
+    assert payload["base_drift_overlap_paths"] == []
+
+
+def test_inspect_workflow_status_recommends_full_review_when_merge_base_drift_overlaps_branch_paths(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    base_at_review = _commit_file(repo, "app.txt", "one\n", "initial")
+    _git(repo, "checkout", "-b", "feature/test")
+    reviewed_head = _commit_file(repo, "app.txt", "one\nfeature\n", "feature work")
+    record_review_anchor(
+        state_dir=state_dir,
+        review_cwd=repo,
+        lane="review_t3",
+        base="main",
+        reviewed_head=reviewed_head,
+        review_scope={"base": "main", "reviewed_head": reviewed_head, "merge_base": base_at_review},
+    )
+    _git(repo, "checkout", "main")
+    _commit_file(repo, "app.txt", "one\nmain\n", "main moves")
+    _git(repo, "checkout", "feature/test")
+    _git(repo, "merge", "-s", "ours", "--no-ff", "main", "-m", "merge main")
+
+    payload = inspect_workflow_status(
+        state_dir=state_dir,
+        review_cwd=repo,
+        base="main",
+    )
+
+    assert payload["recommendation"] == "full-review"
+    assert payload["reason"] == "base_merge_base_changed"
+    assert payload["base_drift_overlap_paths"] == ["app.txt"]
+
+
+def test_inspect_workflow_status_uses_latest_base_review_context_after_followup(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    stale_base = _commit_file(repo, "app.txt", "one\n", "initial")
+    _commit_file(repo, "app.txt", "one\nmain\n", "main moves")
+    current_base = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "checkout", "-b", "feature/test")
+    reviewed_head = _commit_file(repo, "feature.txt", "feat\n", "feature work")
+    record_review_anchor(
+        state_dir=state_dir,
+        review_cwd=repo,
+        lane="review_t1",
+        base="main",
+        reviewed_head=reviewed_head,
+        review_scope={"base": "main", "reviewed_head": reviewed_head, "merge_base": current_base},
+    )
+    final_head = _commit_file(repo, "feature.txt", "feat\nfix\n", "followup fix")
+    record_review_anchor(
+        state_dir=state_dir,
+        review_cwd=repo,
+        lane="review-followup",
+        base="main",
+        reviewed_head=final_head,
+        review_scope={
+            "commit": reviewed_head,
+            "commit_end": final_head,
+            "manual_prompt_mode": True,
+            "merge_base": stale_base,
+        },
+    )
+
+    payload = inspect_workflow_status(
+        state_dir=state_dir,
+        review_cwd=repo,
+        base="main",
+    )
+
+    assert payload["recommendation"] == "none"
+    assert payload["reason"] == "current_head_already_reviewed"
+    assert payload["recorded_merge_base"] == current_base
+
+
+def test_commit_only_review_anchor_does_not_advance_branch_review_state(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    initial_head = _commit_file(repo, "app.txt", "one\n", "initial")
+    reviewed_head = _commit_file(repo, "app.txt", "one\ntwo\n", "reviewed")
+    record_review_anchor(
+        state_dir=state_dir,
+        review_cwd=repo,
+        lane="review_t3",
+        base="main",
+        reviewed_head=reviewed_head,
+        review_scope={"base": "main", "reviewed_head": reviewed_head},
+    )
+    _commit_file(repo, "app.txt", "one\ntwo\nthree\n", "middle commit")
+    _commit_file(repo, "app.txt", "one\ntwo\nthree\nfour\n", "tip commit")
+    record_review_anchor(
+        state_dir=state_dir,
+        review_cwd=repo,
+        lane="review_t1",
+        base="main",
+        review_scope={"commit": initial_head},
+    )
+
+    payload = inspect_workflow_status(
+        state_dir=state_dir,
+        review_cwd=repo,
+        base="main",
+    )
+
+    assert payload["recommendation"] == "review-followup"
+    assert payload["last_reviewed_head"] == reviewed_head
+
+
+def test_inspect_workflow_status_falls_back_to_older_valid_branch_anchor(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    first = _commit_file(repo, "app.txt", "one\n", "initial")
+    reviewed_head = _commit_file(repo, "app.txt", "one\ntwo\n", "reviewed")
+    record_review_anchor(
+        state_dir=state_dir,
+        review_cwd=repo,
+        lane="review_t3",
+        base="main",
+        reviewed_head=reviewed_head,
+        review_scope={"base": "main", "reviewed_head": reviewed_head},
+    )
+    _commit_file(repo, "app.txt", "one\ntwo\nthree\n", "head")
+    _git(repo, "checkout", "-b", "side-review", first)
+    unrelated_reviewed_head = _commit_file(repo, "side.txt", "other\n", "side review")
+    _git(repo, "checkout", "main")
+    record_review_anchor(
+        state_dir=state_dir,
+        review_cwd=repo,
+        lane="review_t1",
+        base="main",
+        reviewed_head=unrelated_reviewed_head,
+        review_scope={"commit": unrelated_reviewed_head},
+    )
+
+    payload = inspect_workflow_status(
+        state_dir=state_dir,
+        review_cwd=repo,
+        base="main",
+    )
+
+    assert payload["recommendation"] == "review-followup"
+    assert payload["last_reviewed_head"] == reviewed_head
+
+
+def test_commit_only_review_anchor_overrides_older_branch_anchor_when_it_is_closer_to_head(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    reviewed_head = _commit_file(repo, "app.txt", "one\n", "initial")
+    record_review_anchor(
+        state_dir=state_dir,
+        review_cwd=repo,
+        lane="review_t3",
+        base="main",
+        reviewed_head=reviewed_head,
+        review_scope={"base": "main", "reviewed_head": reviewed_head},
+    )
+    focused_head = _commit_file(repo, "app.txt", "one\ntwo\n", "focused commit")
+    record_review_anchor(
+        state_dir=state_dir,
+        review_cwd=repo,
+        lane="review_t1",
+        base="main",
+        review_scope={"commit": focused_head},
+    )
+    _commit_file(repo, "app.txt", "one\ntwo\nthree\n", "tip commit")
+
+    payload = inspect_workflow_status(
+        state_dir=state_dir,
+        review_cwd=repo,
+        base="main",
+    )
+
+    assert payload["recommendation"] == "review-followup"
+    assert payload["last_reviewed_head"] == focused_head
+    assert payload["last_reviewed_lane"] == "review_t1"
+
+
+def test_commit_only_review_anchor_bootstraps_when_no_branch_anchor_exists(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    reviewed_head = _commit_file(repo, "app.txt", "one\n", "initial")
+    _commit_file(repo, "app.txt", "one\ntwo\n", "small fix")
+    record_review_anchor(
+        state_dir=state_dir,
+        review_cwd=repo,
+        lane="review_t1",
+        base="main",
+        review_scope={"commit": reviewed_head},
+    )
+
+    payload = inspect_workflow_status(
+        state_dir=state_dir,
+        review_cwd=repo,
+        base="main",
+    )
+
+    assert payload["recommendation"] == "review-followup"
+    assert payload["last_reviewed_head"] == reviewed_head
+
+
+def test_inspect_workflow_status_recommends_followup_for_dirty_same_head(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "base.txt", "base\n", "initial")
+    _git(repo, "checkout", "-b", "feature/dirty-followup")
+    reviewed_head = _commit_file(repo, "app.txt", "one\n", "feature work")
+    record_review_anchor(
+        state_dir=state_dir,
+        review_cwd=repo,
+        lane="review_t3",
+        base="main",
+        reviewed_head=reviewed_head,
+        review_scope={"base": "main", "reviewed_head": reviewed_head},
+    )
+    (repo / "app.txt").write_text("one\ntwo\n", encoding="utf-8")
+
+    payload = inspect_workflow_status(
+        state_dir=state_dir,
+        review_cwd=repo,
+        base="main",
+    )
+
+    assert payload["recommendation"] == "review-followup"
+    assert payload["reason"] == "dirty_worktree_after_review"
+    assert payload["worktree_dirty"] is True
+    assert payload["files_changed"] == 1
+    assert payload["last_reviewed_head"] == reviewed_head
+
+
+def test_inspect_workflow_status_ignores_dirty_paths_outside_branch_diff_on_same_head(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "base.txt", "base\n", "initial")
+    _git(repo, "checkout", "-b", "feature/clean-signoff")
+    reviewed_head = _commit_file(repo, "src/app.txt", "feature\n", "feature work")
+    record_review_anchor(
+        state_dir=state_dir,
+        review_cwd=repo,
+        lane="review_t3",
+        base="main",
+        reviewed_head=reviewed_head,
+        review_scope={"base": "main", "reviewed_head": reviewed_head, "merge_base": _git(repo, "merge-base", "main", "HEAD")},
+    )
+    (repo / "docs.md").write_text("notes\n", encoding="utf-8")
+
+    payload = inspect_workflow_status(
+        state_dir=state_dir,
+        review_cwd=repo,
+        base="main",
+    )
+
+    assert payload["recommendation"] == "none"
+    assert payload["reason"] == "dirty_worktree_outside_branch_diff"
+    assert payload["worktree_dirty"] is True
+    assert payload["ignored_dirty_path_count"] == 1
+    assert payload["ignored_dirty_paths"] == ["docs.md"]
+
+
+def test_inspect_workflow_status_keeps_quoted_dirty_branch_paths_related(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "base.txt", "base\n", "initial")
+    _git(repo, "checkout", "-b", "feature/quoted-path")
+    reviewed_head = _commit_file(repo, "src/a b.txt", "feature\n", "feature work")
+    record_review_anchor(
+        state_dir=state_dir,
+        review_cwd=repo,
+        lane="review_t3",
+        base="main",
+        reviewed_head=reviewed_head,
+        review_scope={"base": "main", "reviewed_head": reviewed_head, "merge_base": _git(repo, "merge-base", "main", "HEAD")},
+    )
+    (repo / "src" / "a b.txt").write_text("feature\ndirty\n", encoding="utf-8")
+
+    payload = inspect_workflow_status(
+        state_dir=state_dir,
+        review_cwd=repo,
+        base="main",
+    )
+
+    assert payload["recommendation"] == "review-followup"
+    assert payload["reason"] == "dirty_worktree_after_review"
+    assert payload["top_paths"][0].startswith("src/a b.txt ")
+
+
+def test_inspect_workflow_status_recommends_full_review_when_merge_base_is_unresolvable(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    reviewed_head = _commit_file(repo, "app.txt", "one\n", "initial")
+    record_review_anchor(
+        state_dir=state_dir,
+        review_cwd=repo,
+        lane="review_t3",
+        base="missing-base",
+        reviewed_head=reviewed_head,
+        review_scope={"base": "missing-base", "reviewed_head": reviewed_head, "merge_base": reviewed_head},
+    )
+
+    payload = inspect_workflow_status(
+        state_dir=state_dir,
+        review_cwd=repo,
+        base="missing-base",
+    )
+
+    assert payload["recommendation"] == "full-review"
+    assert payload["reason"] == "base_merge_base_unresolvable"
+
+
+def test_inspect_workflow_status_honors_requested_base_over_stored_base(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    base_at_review = _commit_file(repo, "base.txt", "one\n", "initial")
+    _git(repo, "checkout", "-b", "feature/test")
+    reviewed_head = _commit_file(repo, "feature.txt", "feat\n", "feature work")
+    record_review_anchor(
+        state_dir=state_dir,
+        review_cwd=repo,
+        lane="review_t3",
+        base="main",
+        reviewed_head=reviewed_head,
+        review_scope={"base": "main", "reviewed_head": reviewed_head, "merge_base": base_at_review},
+    )
+    _git(repo, "checkout", "-b", "release/x")
+    _git(repo, "checkout", "feature/test")
+
+    payload = inspect_workflow_status(
+        state_dir=state_dir,
+        review_cwd=repo,
+        base="release/x",
+    )
+
+    assert payload["recommendation"] == "full-review"
+    assert payload["reason"] == "base_merge_base_changed"
+
+
+def test_workflow_state_path_disambiguates_slug_colliding_branch_names(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    head = _commit_file(repo, "app.txt", "one\n", "initial")
+
+    feature_slash = workflow_state_path(
+        state_dir=state_dir,
+        review_cwd=repo,
+        branch="feature/a",
+        head=head,
+    )
+    feature_dash = workflow_state_path(
+        state_dir=state_dir,
+        review_cwd=repo,
+        branch="feature-a",
+        head=head,
+    )
+
+    assert feature_slash != feature_dash
+
+
+def test_branch_token_for_detached_head_includes_head_sha() -> None:
+    assert branch_token(None, "abc123456789") == "detached-abc123456789"
+    assert branch_token(None, "def987654321") == "detached-def987654321"
+
+
+def test_inspect_workflow_status_preserves_detached_head_state_after_new_commit(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    reviewed_head = _commit_file(repo, "app.txt", "one\n", "initial")
+    _git(repo, "checkout", reviewed_head)
+    record_review_anchor(
+        state_dir=state_dir,
+        review_cwd=repo,
+        lane="review_t3",
+        base="main",
+        reviewed_head=reviewed_head,
+        review_scope={"base": "main", "reviewed_head": reviewed_head},
+    )
+    _commit_file(repo, "app.txt", "one\ntwo\n", "detached follow-up")
+
+    payload = inspect_workflow_status(
+        state_dir=state_dir,
+        review_cwd=repo,
+        base="main",
+    )
+
+    assert payload["recommendation"] == "review-followup"
+    assert payload["last_reviewed_head"] == reviewed_head
+
+
+def test_inspect_workflow_status_does_not_reuse_unrelated_detached_head_state(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    base_head = _commit_file(repo, "app.txt", "one\n", "initial")
+    _git(repo, "checkout", base_head)
+    detached_reviewed_head = _commit_file(repo, "app.txt", "one\ndetached\n", "detached review")
+    record_review_anchor(
+        state_dir=state_dir,
+        review_cwd=repo,
+        lane="review_t3",
+        base="main",
+        reviewed_head=detached_reviewed_head,
+        review_scope={"base": "main", "reviewed_head": detached_reviewed_head},
+    )
+    _git(repo, "checkout", "main")
+    unrelated_head = _commit_file(repo, "main.txt", "main\n", "main follow-up")
+    _git(repo, "checkout", unrelated_head)
+
+    payload = inspect_workflow_status(
+        state_dir=state_dir,
+        review_cwd=repo,
+        base="main",
+    )
+
+    assert payload["recommendation"] == "full-review"
+    assert payload["reason"] == "no_review_anchor"
+
+
+def test_record_review_anchor_uses_branch_scoped_lock(monkeypatch, tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    reviewed_head = _commit_file(repo, "app.txt", "one\n", "initial")
+    entered: list[str] = []
+
+    class _Lock:
+        def __enter__(self) -> None:
+            entered.append("enter")
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            entered.append("exit")
+
+    monkeypatch.setattr(workflow_state_module, "workflow_state_lock", lambda **kwargs: _Lock())
+
+    record_review_anchor(
+        state_dir=state_dir,
+        review_cwd=repo,
+        lane="review_t3",
+        base="main",
+        reviewed_head=reviewed_head,
+        review_scope={"base": "main", "reviewed_head": reviewed_head},
+    )
+
+    assert entered == ["enter", "exit"]
+
+
+def test_review_state_status_does_not_route_coherence_to_review_deslop(monkeypatch, tmp_path: Path) -> None:
+    emitted: list[dict[str, object]] = []
+
+    monkeypatch.setattr(review_state, "resolve_repo_root", lambda cd: tmp_path)
+    monkeypatch.setattr(
+        review_state,
+        "inspect_workflow_status",
+        lambda **kwargs: {
+            "status": "ok",
+            "recommendation": "coherence-review",
+        },
+    )
+    monkeypatch.setattr(review_state, "emit_toon", lambda payload: emitted.append(payload))
+    monkeypatch.setattr(sys, "argv", ["review_state.py", "status", "--base", "main"])
+
+    exit_code = review_state.main()
+
+    assert exit_code == 0
+    assert emitted[0]["action"]["lane"] == "coherence-review"
+    assert "cmd" not in emitted[0]["action"]
+    assert "review-deslop" in emitted[0]["action"]["note"]
+
+
+def test_review_state_status_routes_stage_full_review_lane(monkeypatch, tmp_path: Path) -> None:
+    emitted: list[dict[str, object]] = []
+    state_dir = tmp_path / "state"
+
+    monkeypatch.setattr(review_state, "resolve_repo_root", lambda cd: tmp_path)
+    monkeypatch.setattr(
+        review_state,
+        "inspect_workflow_status",
+        lambda **kwargs: {
+            "status": "ok",
+            "recommendation": "coherence-review",
+            "recommended_lane": "review_t4",
+        },
+    )
+    monkeypatch.setattr(review_state, "emit_toon", lambda payload: emitted.append(payload))
+    monkeypatch.setattr(sys, "argv", ["review_state.py", "status", "--base", "main", "--state-dir", str(state_dir)])
+
+    exit_code = review_state.main()
+
+    assert exit_code == 0
+    assert emitted[0]["action"]["lane"] == "review_t4"
+    assert "review_t4.py" in str(emitted[0]["action"]["cmd"])
+    assert "review-deslop" not in str(emitted[0]["action"])
+
+
+def test_review_state_status_adds_followup_action(monkeypatch, tmp_path: Path) -> None:
+    emitted: list[dict[str, object]] = []
+    state_dir = tmp_path / "state"
+
+    monkeypatch.setattr(review_state, "resolve_repo_root", lambda cd: tmp_path)
+    monkeypatch.setattr(
+        review_state,
+        "inspect_workflow_status",
+        lambda **kwargs: {
+            "status": "ok",
+            "recommendation": "review-followup",
+            "last_reviewed_head": "abc123",
+        },
+    )
+    monkeypatch.setattr(review_state, "emit_toon", lambda payload: emitted.append(payload))
+    monkeypatch.setattr(sys, "argv", ["review_state.py", "status", "--base", "main", "--state-dir", str(state_dir)])
+
+    exit_code = review_state.main()
+
+    assert exit_code == 0
+    assert emitted[0]["action"]["lane"] == "review-followup"
+    cmd = str(emitted[0]["action"]["cmd"])
+    assert "review_followup.py" in cmd
+    assert "--base main" in cmd
+    assert "--since abc123" in cmd
+    assert "--note-file .review-suite/fix-note.md" in cmd
+    assert "--state-dir" not in cmd
+    assert "--cd" not in cmd
+
+
+def test_review_state_status_adds_allow_dirty_for_dirty_followup(monkeypatch, tmp_path: Path) -> None:
+    emitted: list[dict[str, object]] = []
+    state_dir = tmp_path / "state"
+
+    monkeypatch.setattr(review_state, "resolve_repo_root", lambda cd: tmp_path)
+    monkeypatch.setattr(
+        review_state,
+        "inspect_workflow_status",
+        lambda **kwargs: {
+            "status": "ok",
+            "recommendation": "review-followup",
+            "last_reviewed_head": "abc123",
+            "worktree_dirty": True,
+        },
+    )
+    monkeypatch.setattr(review_state, "emit_toon", lambda payload: emitted.append(payload))
+    monkeypatch.setattr(sys, "argv", ["review_state.py", "status", "--base", "main", "--state-dir", str(state_dir)])
+
+    exit_code = review_state.main()
+
+    assert exit_code == 0
+    assert emitted[0]["action"]["lane"] == "review-followup"
+    assert "--allow-dirty" in str(emitted[0]["action"]["cmd"])
+
+
+def test_review_state_status_routes_pending_gate_signoff_decision(monkeypatch, tmp_path: Path) -> None:
+    emitted: list[dict[str, object]] = []
+    state_dir = tmp_path / "state"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    state_dir.mkdir()
+    (state_dir / "gate_runs.jsonl").write_text(
+        json.dumps(
+            {
+                "recorded_at": "2026-04-25T10:00:00Z",
+                "round_id": "gate-round-1",
+                "task_class": "pr_gate",
+                "task_id": "feature/test",
+                "review_cwd": str(repo),
+                "review_cwd_normalized": str(repo),
+                "review_scope": {"base": "main", "reviewed_head": "head-sha"},
+                "signoff_status": "pending",
+                "signoff_required": True,
+                "runs": [
+                    {
+                        "slot": "alpha",
+                        "variant_id": "alpha-model",
+                        "review_status": "completed",
+                        "grade_blocked": False,
+                    },
+                    {
+                        "slot": "bravo",
+                        "variant_id": "bravo-model",
+                        "review_status": "completed",
+                        "grade_blocked": False,
+                    },
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(review_state, "resolve_repo_root", lambda cd: repo)
+    monkeypatch.setattr(review_state, "resolve_caller_id", lambda explicit: (None, None))
+    monkeypatch.setattr(
+        review_state,
+        "inspect_workflow_status",
+        lambda **kwargs: {
+            "status": "ok",
+            "head": "head-sha",
+            "recommendation": "full-review",
+            "reason": "no_review_anchor",
+        },
+    )
+    monkeypatch.setattr(review_state, "emit_toon", lambda payload: emitted.append(payload))
+    monkeypatch.setattr(sys, "argv", ["review_state.py", "status", "--base", "main", "--state-dir", str(state_dir)])
+
+    exit_code = review_state.main()
+
+    assert exit_code == 0
+    assert emitted[0]["recommendation"] == "signoff-decision"
+    assert emitted[0]["reason"] == "pending_gate_signoff_decision"
+    assert emitted[0]["pending_round_task"] == "review_t4"
+    assert emitted[0]["action"]["lane"] == "gate-signoff"
+    assert "show-round" in str(emitted[0]["action"]["show_cmd"])
+    assert "close-gate" in str(emitted[0]["action"]["clean_cmd"])
+    assert "--verdict clean" in str(emitted[0]["action"]["clean_cmd"])
+    assert "--verdict findings" in str(emitted[0]["action"]["findings_cmd"])
+
+
+def test_review_state_status_keeps_pending_gate_signoff_visible_after_amend(monkeypatch, tmp_path: Path) -> None:
+    emitted: list[dict[str, object]] = []
+    state_dir = tmp_path / "state"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    state_dir.mkdir()
+    (state_dir / "gate_runs.jsonl").write_text(
+        json.dumps(
+            {
+                "recorded_at": "2026-05-03T10:00:00Z",
+                "round_id": "gate-round-old-head",
+                "task_class": "pr_gate",
+                "task_id": "feature/test",
+                "review_cwd": str(repo),
+                "review_cwd_normalized": str(repo),
+                "review_scope": {"base": "main", "reviewed_head": "old-head"},
+                "signoff_status": "pending",
+                "signoff_required": True,
+                "runs": [
+                    {"slot": "alpha", "variant_id": "alpha-model", "review_status": "completed", "grade_blocked": False},
+                    {"slot": "bravo", "variant_id": "bravo-model", "review_status": "completed", "grade_blocked": False},
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(review_state, "resolve_repo_root", lambda cd: repo)
+    monkeypatch.setattr(review_state, "resolve_caller_id", lambda explicit: (None, None))
+    monkeypatch.setattr(
+        review_state,
+        "inspect_workflow_status",
+        lambda **kwargs: {
+            "status": "ok",
+            "head": "new-head",
+            "recommendation": "full-review",
+            "reason": "review_anchor_not_ancestor",
+        },
+    )
+    monkeypatch.setattr(review_state, "emit_toon", lambda payload: emitted.append(payload))
+    monkeypatch.setattr(sys, "argv", ["review_state.py", "status", "--base", "main", "--state-dir", str(state_dir)])
+
+    exit_code = review_state.main()
+
+    assert exit_code == 0
+    assert emitted[0]["recommendation"] == "signoff-decision"
+    assert emitted[0]["pending_round_id"] == "gate-round-old-head"
+    assert emitted[0]["pending_round_reviewed_head"] == "old-head"
+    assert emitted[0]["pending_round_current_head"] == "new-head"
+    assert emitted[0]["pending_round_head_matches_current"] is False
+    assert "branch has moved" in str(emitted[0]["note"])
+
+
+def test_review_state_status_adds_fix_gate_findings_action(monkeypatch, tmp_path: Path) -> None:
+    emitted: list[dict[str, object]] = []
+    repo = tmp_path / "repo"
+
+    monkeypatch.setattr(review_state, "resolve_repo_root", lambda cd: repo)
+    monkeypatch.setattr(review_state, "resolve_caller_id", lambda explicit: (None, None))
+    monkeypatch.setattr(review_state, "pending_gate_signoff_records", lambda **kwargs: [])
+    monkeypatch.setattr(
+        review_state,
+        "inspect_workflow_status",
+        lambda **kwargs: {
+            "status": "ok",
+            "head": "head-sha",
+            "recommendation": "fix-gate-findings",
+            "reason": "gate_findings_current_head",
+            "last_gate_findings_round_id": "gate-findings-1",
+        },
+    )
+    monkeypatch.setattr(review_state, "emit_toon", lambda payload: emitted.append(payload))
+    monkeypatch.setattr(sys, "argv", ["review_state.py", "status", "--base", "main", "--state-dir", str(tmp_path / "state")])
+
+    exit_code = review_state.main()
+
+    assert exit_code == 0
+    assert emitted[0]["action"]["lane"] == "gate-findings"
+    assert emitted[0]["action"]["round_id"] == "gate-findings-1"
+    assert "show-round" in str(emitted[0]["action"]["show_cmd"])
+
+
+def test_review_state_status_routes_t4_findings_followup_back_to_t4(monkeypatch, tmp_path: Path) -> None:
+    emitted: list[dict[str, object]] = []
+    state_dir = tmp_path / "state"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    state_dir.mkdir()
+    _write_gate_run(
+        state_dir,
+        {
+            "recorded_at": "2026-04-25T10:00:00Z",
+            "round_id": "gate-round-findings",
+            "task_class": "pr_gate",
+            "task_id": "feature/test",
+            "review_cwd": str(repo),
+            "review_cwd_normalized": str(repo),
+            "review_scope": {"base": "main", "reviewed_head": "old-head"},
+            "signoff_status": "pending",
+            "signoff_required": True,
+            "runs": [
+                {"slot": "alpha", "variant_id": "alpha-model", "review_status": "completed", "grade_blocked": False},
+                {"slot": "bravo", "variant_id": "bravo-model", "review_status": "completed", "grade_blocked": False},
+            ],
+        },
+    )
+    _write_gate_signoff(
+        state_dir,
+        {
+            "recorded_at": "2026-04-25T10:05:00Z",
+            "round_id": "gate-round-findings",
+            "task_class": "pr_gate",
+            "task_id": "feature/test",
+            "verdict": "findings",
+            "review_cwd": str(repo),
+            "review_cwd_normalized": str(repo),
+        },
+    )
+
+    monkeypatch.setattr(review_state, "resolve_repo_root", lambda cd: repo)
+    monkeypatch.setattr(review_state, "resolve_caller_id", lambda explicit: (None, None))
+    monkeypatch.setattr(
+        review_state,
+        "inspect_workflow_status",
+        lambda **kwargs: {
+            "status": "ok",
+            "base": "main",
+            "branch": "feature/test",
+            "head": "clean-followup-head",
+            "recommendation": "none",
+            "reason": "current_head_already_reviewed",
+            "last_reviewed_lane": "review-followup",
+        },
+    )
+    monkeypatch.setattr(review_state, "emit_toon", lambda payload: emitted.append(payload))
+    monkeypatch.setattr(sys, "argv", ["review_state.py", "status", "--base", "main", "--state-dir", str(state_dir)])
+
+    exit_code = review_state.main()
+
+    assert exit_code == 0
+    assert emitted[0]["recommendation"] == "full-review"
+    assert emitted[0]["reason"] == "t4_findings_followup_needs_signoff"
+    assert emitted[0]["recommended_lane"] == "review_t4"
+    assert emitted[0]["action"]["lane"] == "review_t4"
+    assert "review_t4.py" in str(emitted[0]["action"]["cmd"])
+
+
+def test_review_state_status_routes_t2_findings_followup_back_to_t2(monkeypatch, tmp_path: Path) -> None:
+    emitted: list[dict[str, object]] = []
+    state_dir = tmp_path / "state"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    state_dir.mkdir()
+    _write_gate_run(
+        state_dir,
+        {
+            "recorded_at": "2026-04-25T10:00:00Z",
+            "round_id": "phase-gate-findings",
+            "task_class": "phase_gate",
+            "task_id": "feature/test",
+            "review_cwd": str(repo),
+            "review_cwd_normalized": str(repo),
+            "review_scope": {"base": "main", "reviewed_head": "old-head"},
+            "signoff_status": "pending",
+            "signoff_required": True,
+            "runs": [
+                {"slot": "alpha", "variant_id": "alpha-model", "review_status": "completed", "grade_blocked": False},
+                {"slot": "bravo", "variant_id": "bravo-model", "review_status": "completed", "grade_blocked": False},
+            ],
+        },
+    )
+    _write_gate_signoff(
+        state_dir,
+        {
+            "recorded_at": "2026-04-25T10:05:00Z",
+            "round_id": "phase-gate-findings",
+            "task_class": "phase_gate",
+            "task_id": "feature/test",
+            "verdict": "findings",
+            "review_cwd": str(repo),
+            "review_cwd_normalized": str(repo),
+        },
+    )
+
+    monkeypatch.setattr(review_state, "resolve_repo_root", lambda cd: repo)
+    monkeypatch.setattr(review_state, "resolve_caller_id", lambda explicit: (None, None))
+    monkeypatch.setattr(
+        review_state,
+        "inspect_workflow_status",
+        lambda **kwargs: {
+            "status": "ok",
+            "base": "main",
+            "branch": "feature/test",
+            "head": "clean-followup-head",
+            "recommendation": "none",
+            "reason": "current_head_already_reviewed",
+            "last_reviewed_lane": "review-followup",
+        },
+    )
+    monkeypatch.setattr(review_state, "emit_toon", lambda payload: emitted.append(payload))
+    monkeypatch.setattr(sys, "argv", ["review_state.py", "status", "--base", "main", "--state-dir", str(state_dir)])
+
+    exit_code = review_state.main()
+
+    assert exit_code == 0
+    assert emitted[0]["recommendation"] == "full-review"
+    assert emitted[0]["reason"] == "t2_findings_followup_needs_signoff"
+    assert emitted[0]["recommended_lane"] == "review_t2"
+    assert emitted[0]["action"]["lane"] == "review_t2"
+    assert "review_t2.py" in str(emitted[0]["action"]["cmd"])
+
+
+def test_review_state_status_prefers_pending_grade_for_caller(monkeypatch, tmp_path: Path) -> None:
+    emitted: list[dict[str, object]] = []
+    state_dir = tmp_path / "state"
+
+    monkeypatch.setattr(review_state, "resolve_repo_root", lambda cd: tmp_path)
+    monkeypatch.setattr(review_state, "resolve_caller_id", lambda explicit: ("caller-1", "env"))
+    monkeypatch.setattr(
+        review_state,
+        "inspect_workflow_status",
+        lambda **kwargs: {
+            "status": "ok",
+            "recommendation": "review-followup",
+            "last_reviewed_head": "abc123",
+        },
+    )
+    monkeypatch.setattr(
+        review_state,
+        "find_blocking_rounds_for_caller",
+        lambda **kwargs: [
+            {
+                "round_id": "round-123",
+                "task_class": "phase_review",
+                "status": "completed",
+                "runs": [
+                    {
+                        "slot": "alpha",
+                        "review_status": "completed",
+                        "grade_blocked": False,
+                    }
+                ],
+                "task_id_hint": "feat-branch",
+            }
+        ],
+    )
+    monkeypatch.setattr(review_state, "emit_toon", lambda payload: emitted.append(payload))
+    monkeypatch.setattr(sys, "argv", ["review_state.py", "status", "--base", "main", "--state-dir", str(state_dir)])
+
+    exit_code = review_state.main()
+
+    assert exit_code == 0
+    assert emitted[0]["recommendation"] == "needs-grade"
+    assert emitted[0]["reason"] == "pending_caller_grade"
+    assert emitted[0]["action"]["lane"] == "arena-grade"
+    assert emitted[0]["action"]["round_id"] == "round-123"
+    assert emitted[0]["action"]["cwd"] == str(tmp_path)
+    assert "review_suite_arena.py" in str(emitted[0]["action"]["cmd"])
+    assert "grade" in str(emitted[0]["action"]["cmd"])
+    assert "--round-id" not in str(emitted[0]["action"]["cmd"])
+    assert "--refresh-report" not in str(emitted[0]["action"]["cmd"])
+    assert "dismiss-round" in str(emitted[0]["action"]["dismiss_cmd"])
+
+
+def test_review_state_status_prefers_wait_for_running_round(monkeypatch, tmp_path: Path) -> None:
+    emitted: list[dict[str, object]] = []
+    state_dir = tmp_path / "state"
+
+    monkeypatch.setattr(review_state, "resolve_repo_root", lambda cd: tmp_path)
+    monkeypatch.setattr(review_state, "resolve_caller_id", lambda explicit: ("caller-1", "env"))
+    monkeypatch.setattr(
+        review_state,
+        "inspect_workflow_status",
+        lambda **kwargs: {
+            "status": "ok",
+            "recommendation": "review-followup",
+            "last_reviewed_head": "abc123",
+        },
+    )
+    monkeypatch.setattr(
+        review_state,
+        "find_blocking_rounds_for_caller",
+        lambda **kwargs: [
+            {
+                "round_id": "round-456",
+                "task_class": "phase_review",
+                "status": "running",
+                "runs": [],
+            }
+        ],
+    )
+    monkeypatch.setattr(review_state, "emit_toon", lambda payload: emitted.append(payload))
+    monkeypatch.setattr(sys, "argv", ["review_state.py", "status", "--base", "main", "--state-dir", str(state_dir)])
+
+    exit_code = review_state.main()
+
+    assert exit_code == 0
+    assert emitted[0]["recommendation"] == "wait-round"
+    assert emitted[0]["reason"] == "caller_round_in_progress"
+    assert emitted[0]["action"]["lane"] == "wait-round"
+    assert "dismiss-round" in str(emitted[0]["action"]["dismiss_cmd"])
+    assert "cmd" not in emitted[0]["action"]

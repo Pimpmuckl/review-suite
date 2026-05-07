@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "privacy": {
+    "arena_external_publish_enabled": false
+  },
+  "lens": {
+    "default": {
+      "model": "gpt-5.5",
+      "reasoning_effort": "medium",
+      "service_tier": null
+    },
+    "review-plan": {},
+    "review-deslop": {},
+    "review-followup": {}
+  },
+  "arena": {
+    "enabled": true
+  },
+  "gates": {
+    "phase_gate": {
+      "primary_variant_ids": ["gpt-5.4-medium"],
+      "backup_variant_ids": ["gpt-5.5-medium", "gpt-5.4-medium", "gpt-5.4-high"],
+      "default_reviewer_count": 2,
+      "initial_reviewer_count": 4,
+      "max_active_reviewers": 4
+    },
+    "pr_gate": {
+      "primary_variant_ids": ["gpt-5.5-xhigh"],
+      "backup_variant_ids": ["gpt-5.5-xhigh", "gpt-5.4-xhigh", "gpt-5.4-high"],
+      "default_reviewer_count": 2,
+      "max_active_reviewers": 2
+    }
+  }
+}

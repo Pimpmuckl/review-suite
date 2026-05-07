@@ -1,0 +1,142 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import ctypes
+import os
+import select
+import sys
+from pathlib import Path
+
+from review_suite_core import (
+    AxiArgumentParser,
+    DEFAULT_PROGRESS_INTERVAL_SECONDS,
+    DEFAULT_TIMEOUT_SECONDS,
+    emit_error,
+    emit_result,
+    format_command,
+    lens_model_config,
+    resolve_repo_root,
+    run_codex,
+    use_unsafe_windows_wsl_fallback,
+)
+
+_STD_INPUT_HANDLE = -10
+_FILE_TYPE_DISK = 0x0001
+_FILE_TYPE_PIPE = 0x0003
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = AxiArgumentParser(description="Review Plan structural review wrapper.")
+    parser.add_argument("--input-file")
+    parser.add_argument("--input-text")
+    parser.add_argument("--cd")
+    parser.add_argument("--wsl", action="store_true")
+    return parser
+
+
+def _help_command() -> str:
+    return format_command([sys.executable, str(Path(__file__).resolve()), "--help"])
+
+
+def resolve_review_root(args: argparse.Namespace) -> Path:
+    if args.cd:
+        return resolve_repo_root(args.cd)
+    if args.input_file:
+        return Path(args.input_file).resolve().parent
+    return resolve_repo_root(None)
+
+
+def _stdin_has_data() -> bool:
+    if sys.stdin.isatty():
+        return False
+    if os.name != "nt":
+        ready, _, _ = select.select([sys.stdin], [], [], 0.0)
+        return bool(ready)
+    handle = ctypes.windll.kernel32.GetStdHandle(_STD_INPUT_HANDLE)
+    if handle in (0, -1):
+        return False
+    file_type = ctypes.windll.kernel32.GetFileType(handle)
+    if file_type == _FILE_TYPE_DISK:
+        return True
+    if file_type != _FILE_TYPE_PIPE:
+        return False
+    available = ctypes.c_ulong()
+    ok = ctypes.windll.kernel32.PeekNamedPipe(handle, None, 0, None, ctypes.byref(available), None)
+    if ok == 0:
+        return False
+    return bool(available.value)
+
+
+def load_plan_input(args: argparse.Namespace) -> tuple[str, str]:
+    if args.input_file and args.input_text:
+        raise ValueError("use either --input-file or --input-text")
+    if args.input_file:
+        path = Path(args.input_file)
+        return path.read_text(encoding="utf-8"), f"file:{path.resolve()}"
+    if args.input_text:
+        return args.input_text, "inline-text"
+    default_plan_path = Path.cwd() / "task_plan.md"
+    if default_plan_path.exists():
+        return default_plan_path.read_text(encoding="utf-8"), f"default:{default_plan_path.resolve()}"
+    if _stdin_has_data():
+        text = sys.stdin.read()
+        if text.strip():
+            return text, "stdin"
+    raise ValueError("review-plan requires task_plan.md, --input-file, --input-text, or stdin content")
+
+
+def build_prompt(plan_text: str) -> str:
+    return (
+        "Review this implementation plan and scope.\n\n"
+        "Focus on:\n"
+        "- simpler implementation paths\n"
+        "- reuse opportunities\n"
+        "- duplicate or redundant logic risk across planned and adjacent paths\n"
+        "- bad boundaries or unnecessary complexity\n\n"
+        "Return only actionable items with concrete edits or concrete design changes.\n"
+        "Do not give style-only feedback.\n\n"
+        "=== BEGIN PLAN ===\n"
+        f"{plan_text.strip()}\n"
+        "=== END PLAN ==="
+    )
+
+
+def main() -> int:
+    parser = build_parser()
+    try:
+        args = parser.parse_args()
+        review_root = resolve_review_root(args)
+        if use_unsafe_windows_wsl_fallback(review_root, bool(args.wsl)):
+            print(
+                "[review-plan] WARNING: using Windows Codex fallback for a WSL UNC repo. This bypasses the Codex sandbox and is not the happy path.",
+                file=sys.stderr,
+                flush=True,
+            )
+        plan_text, _input_source = load_plan_input(args)
+        model_config = lens_model_config("review-plan")
+        result = run_codex(
+            tool_name="review-plan",
+            prompt=build_prompt(plan_text),
+            model=model_config.model,
+            reasoning_effort=model_config.reasoning_effort,
+            service_tier=model_config.service_tier,
+            review_root=review_root,
+            progress_interval_seconds=DEFAULT_PROGRESS_INTERVAL_SECONDS,
+            timeout_seconds=DEFAULT_TIMEOUT_SECONDS,
+            allow_unsafe_windows_wsl_fallback=bool(args.wsl),
+        )
+        return emit_result(
+            tool_name="review-plan",
+            result=result,
+        )
+    except ValueError as exc:
+        return emit_error(
+            str(exc),
+            status="usage_error",
+            help_items=[_help_command()],
+        )
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

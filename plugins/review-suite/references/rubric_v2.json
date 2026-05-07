@@ -1,0 +1,14 @@
+{
+  "version": "winner_basis_v1",
+  "basis": [
+    "valid_findings_vs_none",
+    "more_valid_findings",
+    "better_finding_validity",
+    "better_bug_coverage",
+    "false_positive_loss",
+    "hallucinated_finding_loss",
+    "fringe_finding_loss",
+    "tie_clean",
+    "tie_both_useful"
+  ]
+}
