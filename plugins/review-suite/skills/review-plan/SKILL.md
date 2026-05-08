@@ -1,11 +1,11 @@
 ---
 name: review-plan
-description: "Review a written task plan before implementation."
+description: "Review a written task plan before implementation / user-facing proposal."
 ---
 
 # Review Plan
 
-Use this before implementation to stress-test a written plan.
+Use this before implementation to stress-test a written plan or before proposing a plan to the user when the user has put you in plan-mode.
 
 ```powershell
 <python> <review-suite-plugin-root>/scripts/review_plan.py --input-file <plan-path>
