@@ -16,6 +16,7 @@
 ## Core Rules
 
 - Findings are symptoms, not patch instructions.
+- Before coding from reviewer output, classify each item as: valid finding, non-finding suggestion/product preference, or unclear product decision. Code only valid findings. If reviewer advice conflicts with explicit user/product direction, pause and escalate the tradeoff to the user or parent agent instead of implementing it.
 - After a valid substantive finding, write a compact root-cause note with:
   - `invariant`
   - `owner/source_of_truth`
@@ -35,7 +36,7 @@
 - Some deep local reviews can take up to 20 minutes; wait for wrapper output instead of inspecting state files or rerunning.
 - If a shell closes after a local round finishes, use `review_suite_arena.py show-last --cd <repo> --state-dir <state-dir>` or `review_suite_arena.py show-round --round-id <id> --state-dir <state-dir>` to recover stored findings. For T2/T4, then use `review_suite_arena.py close-gate --round-id <id> --verdict clean|findings --state-dir <state-dir>`. Do not rerun just to see output.
 - Only `review-t1` and `review-t3` are graded.
-- Manual review mode keeps the findings-only contract but mirrors current Codex review pressure where relevant: return every supported finding, include line numbers when available, and flag change-size, integration-surface, coverage, or agent-context risks only when they affect correctness.
+- Manual review mode keeps the findings-only contract but mirrors current Codex review pressure where relevant: return every supported finding, include line numbers when available, and flag change-size, integration-surface, coverage, or agent-context risks only when they affect correctness. UX preferences, product-scope speculation, backwards-compat speculation, and alternative product direction are non-findings unless they expose a concrete risk against stated requirements, docs, code invariants, or explicit contracts.
 
 ## Default Flow
 

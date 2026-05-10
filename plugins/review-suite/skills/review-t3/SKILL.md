@@ -31,7 +31,8 @@ Rules:
 - Pick a winner when one review is materially better on finding validity or bug coverage.
 - Use tie only when the reviews are materially indistinguishable.
 - If one reviewer has verified findings and the other has none, the reviewer with findings wins by default.
-- Do not grade product-scope or backwards-compatibility assumptions as valid findings unless the requirement is explicit. Use `false_positive_loss` or `fringe_finding_loss` when a reviewer wins only by inventing unsupported scope.
+- Before coding from reviewer output, classify each item as: valid finding, non-finding suggestion/product preference, or unclear product decision. Code only valid findings. If reviewer advice conflicts with explicit user/product direction, pause and escalate the tradeoff to the user or parent agent instead of implementing it.
+- Do not grade UX preference, product-scope speculation, backwards-compatibility speculation, or alternative product direction as valid findings unless the requirement is explicit. Use `false_positive_loss` or `fringe_finding_loss` when a reviewer wins only by inventing unsupported scope.
 - Custom instructions are append-only steering. They do not replace the standard findings-only contract.
 - On this base-review lane, adding custom instructions switches the wrapper to manual merge-base diff review and uses more tokens than native `--base`.
 - Shared dirty files outside the committed branch diff do not require `--allow-dirty`; base review ignores them and reviews the committed diff only.

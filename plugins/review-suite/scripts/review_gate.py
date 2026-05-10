@@ -77,12 +77,13 @@ PUBLIC_TASK_BY_GATE = {
     "pr_gate": "review_t4",
 }
 GATE_SIGNOFF_SCOPE_CHECK = (
-    "Triage before code: valid bug -> structural fix; clear scope/backcompat assumption -> docs/instructions, no guard; "
-    "unclear scope -> escalate to user/parent."
+    "Before coding from reviewer output, classify each item: valid finding, non-finding suggestion/product preference, "
+    "or unclear product decision. Code only valid findings; if advice conflicts with explicit user/product direction, "
+    "pause and escalate the tradeoff to the user or parent agent."
 )
 GATE_FINDINGS_SCOPE_CHECK = (
-    "Findings recorded; no workflow anchor. Classify each item before fixing: valid bug, scope assumption, or unclear product decision. "
-    "Code only valid bugs."
+    "Findings recorded; no workflow anchor. Classify each item before fixing: valid finding, "
+    "non-finding suggestion/product preference, or unclear product decision. Code only valid findings."
 )
 INLINE_GATE_FALLBACK_MAX_ATTEMPTS_PER_SLOT = 1
 

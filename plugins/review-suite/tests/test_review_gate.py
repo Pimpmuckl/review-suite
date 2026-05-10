@@ -835,7 +835,8 @@ def test_summarize_gate_round_reports_signoff_pending_and_public_task_name() -> 
     assert payload["status"] == "signoff_pending"
     assert payload["blocked"] is False
     assert payload["signoff_required"] is True
-    assert "scope/backcompat assumption" in payload["scope_check"]
+    assert "non-finding suggestion/product preference" in payload["scope_check"]
+    assert "pause and escalate the tradeoff" in payload["scope_check"]
     assert "mode" not in payload
     assert "target" not in payload
     assert "champions" not in payload

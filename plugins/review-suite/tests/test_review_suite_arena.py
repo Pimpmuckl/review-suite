@@ -306,7 +306,7 @@ def test_cmd_close_gate_findings_does_not_record_workflow_anchor(monkeypatch, tm
     assert decisions[0]["workflow_anchor_recorded"] is False
     assert "status: findings" in captured.out
     assert "signoff: findings" in captured.out
-    assert "Code only valid bugs" in captured.out
+    assert "Code only valid findings" in captured.out
 
 
 def test_cmd_costs_writes_markdown_report(monkeypatch, tmp_path: Path, capsys) -> None:

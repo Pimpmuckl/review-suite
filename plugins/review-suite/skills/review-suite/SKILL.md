@@ -51,7 +51,7 @@ Rules:
 - If a shell closes after a local round finishes, do not rerun blindly; use `review_suite_arena.py show-last --cd <repo> --state-dir <state-dir>` or `review_suite_arena.py show-round --round-id <id> --state-dir <state-dir>` to recover stored findings. For T2/T4, then run `close-gate --verdict clean` or `close-gate --verdict findings`.
 - Only `review-t1` and `review-t3` are graded.
 - Cost reporting currently covers local T1-T4 reviewer sessions. Treat GitHub review and nonlocal model usage as out of scope unless a later command records that telemetry explicitly.
-- Before changing code for reviewer output, classify each item: valid correctness/regression finding, clear product-scope/backcompat assumption, or unclear product decision. Code only valid findings. For clear scope/backcompat assumptions, tighten product docs or reviewer instructions instead of adding guards. For unclear product decisions, escalate to the user or parent agent.
+- Before coding from reviewer output, classify each item as: valid finding, non-finding suggestion/product preference, or unclear product decision. Code only valid findings. If reviewer advice conflicts with explicit user/product direction, pause and escalate the tradeoff to the user or parent agent instead of implementing it.
 - Treat valid findings as symptoms and prefer structural fixes.
 - Some deep local reviews can take up to 20 minutes; wait for wrapper output and do not inspect review-suite state JSON.
 - `review-t1` through `review-t4` support append-only steering via `--instructions` or `--instructions-file`.

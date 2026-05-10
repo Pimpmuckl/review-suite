@@ -19,7 +19,7 @@ Rules:
 - This lane is signoff only. Do not grade or benchmark it.
 - This is the PR-stage signoff lane. After GitHub-review fixes or post-T4 findings, rerun T4 when `review-state` routes the current stage here; do not step down to T3.
 - Reviewer completion leaves the gate in `signoff_pending`; inspect the outputs and run the emitted `close-gate --verdict clean` or `close-gate --verdict findings` command.
-- When closing signoff, treat verified product-scope/backcompat false positives as effectively green; do not add code guards. If product scope is genuinely unclear, close as findings with a note and escalate before coding.
+- When closing signoff, classify reviewer output as: valid finding, non-finding suggestion/product preference, or unclear product decision. Treat non-finding product/backcompat preferences as effectively green; do not add code guards. If the product decision is genuinely unclear or conflicts with explicit user/product direction, close as findings with a note and escalate before coding.
 - Only a `clean` close records the workflow anchor. A `findings` close records the signoff decision but leaves the prior review anchor intact.
 - A clean-closed `review-t4` makes local review green for that exact head/base; proceed to `review-github`/CI/merge readiness.
 - The wrapper will refuse if `review-state` routes the current branch to `review-followup` or a different full-diff lane.

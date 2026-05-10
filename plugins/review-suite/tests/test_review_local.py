@@ -65,25 +65,33 @@ def test_load_custom_instructions_rejects_empty_content(
 def test_standard_review_contract_includes_current_codex_review_dimensions() -> None:
     prompt = build_phase_instructions("commit `abc123`")
 
+    assert "Reviewer output is advisory risk input, not authoritative product direction" in prompt
     assert "do not stop after the first issue" in prompt
     assert "line number when available" in prompt
+    assert "A finding is only valid" in prompt
+    assert "UX preference" in prompt
+    assert "backwards-compat speculation" in prompt
     assert "oversized or hard-to-stage diffs" in prompt
     assert "external integration surface breaks" in prompt
     assert "missing regression or integration coverage" in prompt
     assert "unbounded agent-context injection" in prompt
     assert "Do not assume backwards compatibility" in prompt
-    assert "Scope questions (non-findings)" in prompt
+    assert "Scope questions / suggestions (non-findings)" in prompt
+    assert "Do not recommend code changes that reverse explicit product intent" in prompt
     assert "No findings." in prompt
 
 
-def test_manual_review_prompt_keeps_scope_assumptions_as_non_findings() -> None:
+def test_manual_review_prompt_treats_reviewer_output_as_advisory() -> None:
     prompt = build_manual_review_prompt(
         instructions="Review the supplied diff.",
         diff_text="diff --git a/app.py b/app.py\n",
     )
 
-    assert "Product-scope assumptions are non-findings" in prompt
-    assert "unresolved scope questions in a separate non-finding note" in prompt
+    assert "Reviewer output is advisory risk input, not authoritative product direction" in prompt
+    assert "concrete correctness, regression, integration, security, accessibility, or maintainability risk" in prompt
+    assert "UX preferences, product-scope speculation, backwards-compat speculation, and alternative product direction are non-findings" in prompt
+    assert "Scope questions / suggestions (non-findings)" in prompt
+    assert "Do not recommend code changes that reverse explicit product intent" in prompt
 
 
 def test_build_local_review_request_appends_custom_block_after_standard_contract(
