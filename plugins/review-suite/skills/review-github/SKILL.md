@@ -18,3 +18,4 @@ Rules:
 - GitHub review can take up to 30 minutes; wait for wrapper output instead of posting another request.
 - Treat returned findings like any other reviewer output: validate locally and fix structurally.
 - After a valid substantive finding, write the compact root-cause note, run `review-state status`, and use `review-followup` or coherence/reset locally before another GitHub cycle.
+- Do not call the PR final/merge-ready until full-suite/CI validation is recorded as passed or intentionally waived/classified; pending or failed full-suite/CI must stay explicit in the review output.

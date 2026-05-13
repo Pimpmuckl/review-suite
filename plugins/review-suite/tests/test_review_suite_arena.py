@@ -307,6 +307,7 @@ def test_cmd_close_gate_findings_does_not_record_workflow_anchor(monkeypatch, tm
     assert "status: findings" in captured.out
     assert "signoff: findings" in captured.out
     assert "Code only valid findings" in captured.out
+    assert "full-suite/CI continues as a merge-readiness check" in captured.out
 
 
 def test_cmd_costs_writes_markdown_report(monkeypatch, tmp_path: Path, capsys) -> None:

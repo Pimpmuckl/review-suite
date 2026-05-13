@@ -28,6 +28,7 @@ Rules:
 - For valid substantive findings, write a compact root-cause note and prefer one structurally sound fix over patch-stack guards.
 - If the lane surfaces valid findings, close as findings, fix them, route the fix through `review-state`/`review-followup`, then rerun T4 only when `review-state` routes back here.
 - Add regression tests for any bugs found.
+- Launch this lane after focused, review-relevant validation is green; a completed full-suite/CI run is not required to start review. Record full-suite/CI as pending, passed, failed, or intentionally waived/classified, and do not call a PR final/merge-ready while that state is unknown.
 - Only move on once both reviewers are effectively green on the same head and the gate has been closed as `clean`.
 - If the shell closes after reviewer completion, recover outputs with `review_suite_arena.py show-last` or `show-round`, then close the gate explicitly.
 - Custom instructions are append-only steering. They do not replace the standard findings-only contract.

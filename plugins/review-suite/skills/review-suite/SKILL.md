@@ -48,6 +48,7 @@ Rules:
 - Do not invent a "T1 and T2 green on the final head" requirement after T2 has already run. The requirement is current-stage green: follow `review-state`, and rerun T2/T3/T4 as routed.
 - After clean-closed `review-t4`, do not run `review-t3` again. Use `review-state` only if the branch/base changes or an external signal reopens the PR, and run its emitted action.
 - If a graded local round just finished and you are unsure whether to rerun or grade it, use `review-state` before starting another arena lane.
+- Review launch requires focused, review-relevant validation to be green, not a completed full-suite/CI run. Treat full-suite/CI as merge-readiness validation and record it as pending, passed, failed, or intentionally waived/classified before calling a PR final/merge-ready.
 - If a shell closes after a local round finishes, do not rerun blindly; use `review_suite_arena.py show-last --cd <repo> --state-dir <state-dir>` or `review_suite_arena.py show-round --round-id <id> --state-dir <state-dir>` to recover stored findings. For T2/T4, then run `close-gate --verdict clean` or `close-gate --verdict findings`.
 - Only `review-t1` and `review-t3` are graded.
 - Cost reporting currently covers local T1-T4 reviewer sessions. Treat GitHub review and nonlocal model usage as out of scope unless a later command records that telemetry explicitly.

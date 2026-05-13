@@ -27,5 +27,6 @@ Rules:
 - The wrapper enforces a small-delta guard. If the delta has grown too large, stop and use `review-state status`.
 - Even if the latest delta is small, the wrapper may still reject another narrow follow-up when the branch has already accumulated too much review churn.
 - More than two follow-up rounds since the last graded/full checkpoint should usually be treated as "split or reset", not another normal follow-up.
+- Launch follow-up after focused, review-relevant validation for the fix is green; full-suite/CI can continue as merge-readiness validation.
 - Use `--force` only when you intentionally want to bypass that guard.
 - Relative `--note-file` paths resolve against `--cd <repo-root>`, not the launcher cwd.

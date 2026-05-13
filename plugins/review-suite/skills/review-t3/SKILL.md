@@ -26,6 +26,7 @@ Rules:
 - For valid substantive findings, write a compact root-cause note with `invariant`, `owner/source_of_truth`, `sibling_paths_checked`, `structural_fix`, and `regression_coverage`.
 - Fix structurally, then use `review-followup` before another PR-wide rerun unless `review-state status` escalates.
 - Add regression tests for any bugs found.
+- Launch this lane after focused, review-relevant validation is green; a completed full-suite/CI run is not required to start review. Record full-suite/CI as pending, passed, failed, or intentionally waived/classified, and do not call a PR final/merge-ready while that state is unknown.
 - Only move on once both reviewers are effectively green on the same head.
 - If the round completed and you are deciding between grading and another rerun, use `review-state status` first.
 - Pick a winner when one review is materially better on finding validity or bug coverage.

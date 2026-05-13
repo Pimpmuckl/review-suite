@@ -17,6 +17,8 @@
 
 - Findings are symptoms, not patch instructions.
 - Before coding from reviewer output, classify each item as: valid finding, non-finding suggestion/product preference, or unclear product decision. Code only valid findings. If reviewer advice conflicts with explicit user/product direction, pause and escalate the tradeoff to the user or parent agent instead of implementing it.
+- Use focused, review-relevant validation before launching local review. A full-suite/CI pass is a merge-readiness requirement, not a review-launch requirement; if the focused seam is green, launch the next review round and let full-suite/CI continue in the background when useful.
+- When summarizing review output or closure state, record full-suite/CI validation as pending, passed, failed, or intentionally waived/classified. Do not call a PR final or merge-ready while that state is unknown.
 - After a valid substantive finding, write a compact root-cause note with:
   - `invariant`
   - `owner/source_of_truth`

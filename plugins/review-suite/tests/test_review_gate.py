@@ -837,6 +837,10 @@ def test_summarize_gate_round_reports_signoff_pending_and_public_task_name() -> 
     assert payload["signoff_required"] is True
     assert "non-finding suggestion/product preference" in payload["scope_check"]
     assert "pause and escalate the tradeoff" in payload["scope_check"]
+    assert "Focused seam validation can be sufficient to launch the next review round" in payload["scope_check"]
+    assert "full-suite/CI is merge-readiness, not review-launch" in payload["scope_check"]
+    assert "pending, passed, failed, or intentionally waived/classified" in payload["scope_check"]
+    assert "do not call a PR final/merge-ready while that is unknown" in payload["scope_check"]
     assert "mode" not in payload
     assert "target" not in payload
     assert "champions" not in payload

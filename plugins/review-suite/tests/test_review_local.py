@@ -78,6 +78,10 @@ def test_standard_review_contract_includes_current_codex_review_dimensions() -> 
     assert "Do not assume backwards compatibility" in prompt
     assert "Scope questions / suggestions (non-findings)" in prompt
     assert "Do not recommend code changes that reverse explicit product intent" in prompt
+    assert "focused review-relevant checks can be enough to launch the next review round" in prompt
+    assert "full-suite/CI remains a merge-readiness requirement" in prompt
+    assert "pending, passed, failed, or intentionally waived/classified" in prompt
+    assert "do not call a PR final or merge-ready while that status is unknown" in prompt
     assert "No findings." in prompt
 
 
@@ -92,6 +96,10 @@ def test_manual_review_prompt_treats_reviewer_output_as_advisory() -> None:
     assert "UX preferences, product-scope speculation, backwards-compat speculation, and alternative product direction are non-findings" in prompt
     assert "Scope questions / suggestions (non-findings)" in prompt
     assert "Do not recommend code changes that reverse explicit product intent" in prompt
+    assert "Focused review-relevant checks can be enough to launch the next review round" in prompt
+    assert "full-suite/CI remains a merge-readiness requirement" in prompt
+    assert "pending, passed, failed, or intentionally waived/classified" in prompt
+    assert "do not call a PR final or merge-ready while that status is unknown" in prompt
 
 
 def test_build_local_review_request_appends_custom_block_after_standard_contract(
