@@ -568,7 +568,7 @@ def test_arena_wrapper_help_mentions_blocking_round_recovery() -> None:
     ):
         assert "blocks this wrapper" in help_text
         assert "round id" in help_text
-        assert "grade or dismiss action" in help_text
+        assert "compact Action" in help_text
         assert "review_state.py status" in help_text
 
 

@@ -5,7 +5,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from review_suite_arena import run_benchmarked_round
+from review_suite_arena import BlockingRoundError, run_benchmarked_round
 from review_suite_local import (
     build_local_review_request,
     build_phase_instructions,
@@ -23,7 +23,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="Tier 1 local arena review wrapper.",
         epilog=(
             "If another arena round blocks this wrapper, the error names the exact "
-            "round id and prints the grade or dismiss action. Use review_state.py "
+            "round id and prints the compact Action. Use review_state.py "
             "status to inspect the current branch before starting another round. "
             "Reviewer sampling is controlled by roster selection_mode: true_scramble, "
             "slight_bias, or legacy."
@@ -97,6 +97,13 @@ def main() -> int:
             bravo_note=args.bravo_note,
             public_task_name="review_t1",
             allow_stage_step_down=bool(args.allow_stage_step_down),
+        )
+    except BlockingRoundError as exc:
+        return emit_error(
+            str(exc),
+            status="usage_error",
+            extra={"Action": exc.action_payload},
+            help_items=[_help_command()],
         )
     except ValueError as exc:
         return emit_error(

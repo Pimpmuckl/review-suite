@@ -137,11 +137,12 @@ def test_review_state_status_stays_on_existing_gate_stage_without_anchor(
     assert exit_code == 0
     assert emitted[0]["recommendation"] == "fix-gate-findings"
     assert emitted[0]["reason"] == "gate_findings_current_head"
-    assert emitted[0]["current_stage_lane"] == "review_t2"
-    assert emitted[0]["last_gate_findings_round_id"] == "t2-findings"
-    assert emitted[0]["action"]["lane"] == "gate-findings"
-    assert "show-round" in str(emitted[0]["action"]["show_cmd"])
-    assert emitted[0]["action"]["cwd"] == str(repo)
+    assert "current_stage_lane" not in emitted[0]
+    assert "last_gate_findings_round_id" not in emitted[0]
+    assert "lane" not in emitted[0]["Action"]
+    assert "round_id" not in emitted[0]["Action"]
+    assert "show-round" in str(emitted[0]["Action"]["show_cmd"])
+    assert emitted[0]["Action"]["cwd"] == str(repo)
 
 
 def test_review_state_status_ignores_blocked_gate_for_monotonic_stage_without_anchor(
@@ -193,8 +194,41 @@ def test_review_state_status_ignores_blocked_gate_for_monotonic_stage_without_an
     assert emitted[0]["reason"] == "no_review_anchor"
     assert "current_stage_lane" not in emitted[0]
     assert "recommended_lane" not in emitted[0]
-    assert emitted[0]["action"]["lane"] == "full-review"
-    assert emitted[0]["action"]["cwd"] == str(repo)
+    assert "lane" not in emitted[0]["Action"]
+    assert emitted[0]["Action"]["cwd"] == str(repo)
+
+
+def test_review_state_status_verbose_keeps_router_details(monkeypatch, tmp_path: Path) -> None:
+    emitted: list[dict[str, object]] = []
+
+    monkeypatch.setattr(review_state, "resolve_repo_root", lambda cd: tmp_path)
+    monkeypatch.setattr(review_state, "resolve_caller_id", lambda explicit: (None, None))
+    monkeypatch.setattr(review_state, "pending_gate_signoff_records", lambda **kwargs: [])
+    monkeypatch.setattr(
+        review_state,
+        "inspect_workflow_status",
+        lambda **kwargs: {
+            "status": "ok",
+            "recommendation": "fix-gate-findings",
+            "reason": "gate_findings_current_head",
+            "current_stage_lane": "review_t2",
+            "last_gate_findings_round_id": "gate-findings-1",
+        },
+    )
+    monkeypatch.setattr(review_state, "emit_toon", lambda payload: emitted.append(payload))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["review_state.py", "status", "--base", "main", "--state-dir", str(tmp_path / "state"), "--verbose"],
+    )
+
+    exit_code = review_state.main()
+
+    assert exit_code == 0
+    assert emitted[0]["current_stage_lane"] == "review_t2"
+    assert emitted[0]["last_gate_findings_round_id"] == "gate-findings-1"
+    assert emitted[0]["Action"]["lane"] == "gate-findings"
+    assert emitted[0]["Action"]["round_id"] == "gate-findings-1"
 
 
 def test_inspect_workflow_status_recommends_followup_after_t4_findings_amended_head(tmp_path: Path) -> None:
@@ -1454,9 +1488,9 @@ def test_review_state_status_does_not_route_coherence_to_review_deslop(monkeypat
     exit_code = review_state.main()
 
     assert exit_code == 0
-    assert emitted[0]["action"]["lane"] == "coherence-review"
-    assert "cmd" not in emitted[0]["action"]
-    assert "review-deslop" in emitted[0]["action"]["note"]
+    assert "lane" not in emitted[0]["Action"]
+    assert "cmd" not in emitted[0]["Action"]
+    assert "review-deslop" in emitted[0]["Action"]["note"]
 
 
 def test_review_state_status_routes_stage_full_review_lane(monkeypatch, tmp_path: Path) -> None:
@@ -1479,9 +1513,9 @@ def test_review_state_status_routes_stage_full_review_lane(monkeypatch, tmp_path
     exit_code = review_state.main()
 
     assert exit_code == 0
-    assert emitted[0]["action"]["lane"] == "review_t4"
-    assert "review_t4.py" in str(emitted[0]["action"]["cmd"])
-    assert "review-deslop" not in str(emitted[0]["action"])
+    assert "lane" not in emitted[0]["Action"]
+    assert "review_t4.py" in str(emitted[0]["Action"]["cmd"])
+    assert "review-deslop" not in str(emitted[0]["Action"])
 
 
 def test_review_state_status_adds_followup_action(monkeypatch, tmp_path: Path) -> None:
@@ -1504,8 +1538,8 @@ def test_review_state_status_adds_followup_action(monkeypatch, tmp_path: Path) -
     exit_code = review_state.main()
 
     assert exit_code == 0
-    assert emitted[0]["action"]["lane"] == "review-followup"
-    cmd = str(emitted[0]["action"]["cmd"])
+    assert "lane" not in emitted[0]["Action"]
+    cmd = str(emitted[0]["Action"]["cmd"])
     assert "review_followup.py" in cmd
     assert "--base main" in cmd
     assert "--since abc123" in cmd
@@ -1535,8 +1569,8 @@ def test_review_state_status_adds_allow_dirty_for_dirty_followup(monkeypatch, tm
     exit_code = review_state.main()
 
     assert exit_code == 0
-    assert emitted[0]["action"]["lane"] == "review-followup"
-    assert "--allow-dirty" in str(emitted[0]["action"]["cmd"])
+    assert "lane" not in emitted[0]["Action"]
+    assert "--allow-dirty" in str(emitted[0]["Action"]["cmd"])
 
 
 def test_review_state_status_routes_pending_gate_signoff_decision(monkeypatch, tmp_path: Path) -> None:
@@ -1597,11 +1631,12 @@ def test_review_state_status_routes_pending_gate_signoff_decision(monkeypatch, t
     assert exit_code == 0
     assert emitted[0]["recommendation"] == "signoff-decision"
     assert emitted[0]["reason"] == "pending_gate_signoff_decision"
-    assert emitted[0]["pending_round_task"] == "review_t4"
-    assert "show-round" in str(emitted[0]["action"]["show_cmd"])
-    assert "close-gate" in str(emitted[0]["action"]["cmd"])
-    assert "--verdict VERDICT" in str(emitted[0]["action"]["cmd"])
-    assert emitted[0]["action"]["verdict"] == ["clean", "findings"]
+    assert "pending_round_task" not in emitted[0]
+    assert "round_id" not in emitted[0]["Action"]
+    assert "show-round" in str(emitted[0]["Action"]["show_cmd"])
+    assert "close-gate" in str(emitted[0]["Action"]["cmd"])
+    assert "--verdict VERDICT" in str(emitted[0]["Action"]["cmd"])
+    assert emitted[0]["Action"]["verdict"] == ["clean", "findings"]
 
 
 def test_review_state_status_keeps_pending_gate_signoff_visible_after_amend(monkeypatch, tmp_path: Path) -> None:
@@ -1651,10 +1686,10 @@ def test_review_state_status_keeps_pending_gate_signoff_visible_after_amend(monk
 
     assert exit_code == 0
     assert emitted[0]["recommendation"] == "signoff-decision"
-    assert emitted[0]["pending_round_id"] == "gate-round-old-head"
-    assert emitted[0]["pending_round_reviewed_head"] == "old-head"
-    assert emitted[0]["pending_round_current_head"] == "new-head"
-    assert emitted[0]["pending_round_head_matches_current"] is False
+    assert emitted[0]["reviewed_head"] == "old-head"
+    assert emitted[0]["current_head"] == "new-head"
+    assert "pending_round_id" not in emitted[0]
+    assert "pending_round_head_matches_current" not in emitted[0]
     assert "Reviewed head moved" in str(emitted[0]["note"])
 
 
@@ -1682,9 +1717,9 @@ def test_review_state_status_adds_fix_gate_findings_action(monkeypatch, tmp_path
     exit_code = review_state.main()
 
     assert exit_code == 0
-    assert emitted[0]["action"]["lane"] == "gate-findings"
-    assert emitted[0]["action"]["round_id"] == "gate-findings-1"
-    assert "show-round" in str(emitted[0]["action"]["show_cmd"])
+    assert "lane" not in emitted[0]["Action"]
+    assert "round_id" not in emitted[0]["Action"]
+    assert "show-round" in str(emitted[0]["Action"]["show_cmd"])
 
 
 def test_review_state_status_routes_t4_findings_followup_back_to_t4(monkeypatch, tmp_path: Path) -> None:
@@ -1747,9 +1782,9 @@ def test_review_state_status_routes_t4_findings_followup_back_to_t4(monkeypatch,
     assert exit_code == 0
     assert emitted[0]["recommendation"] == "full-review"
     assert emitted[0]["reason"] == "t4_findings_followup_needs_signoff"
-    assert emitted[0]["recommended_lane"] == "review_t4"
-    assert emitted[0]["action"]["lane"] == "review_t4"
-    assert "review_t4.py" in str(emitted[0]["action"]["cmd"])
+    assert "recommended_lane" not in emitted[0]
+    assert "lane" not in emitted[0]["Action"]
+    assert "review_t4.py" in str(emitted[0]["Action"]["cmd"])
 
 
 def test_review_state_status_routes_t2_findings_followup_back_to_t2(monkeypatch, tmp_path: Path) -> None:
@@ -1812,9 +1847,9 @@ def test_review_state_status_routes_t2_findings_followup_back_to_t2(monkeypatch,
     assert exit_code == 0
     assert emitted[0]["recommendation"] == "full-review"
     assert emitted[0]["reason"] == "t2_findings_followup_needs_signoff"
-    assert emitted[0]["recommended_lane"] == "review_t2"
-    assert emitted[0]["action"]["lane"] == "review_t2"
-    assert "review_t2.py" in str(emitted[0]["action"]["cmd"])
+    assert "recommended_lane" not in emitted[0]
+    assert "lane" not in emitted[0]["Action"]
+    assert "review_t2.py" in str(emitted[0]["Action"]["cmd"])
 
 
 def test_review_state_status_prefers_pending_grade_for_caller(monkeypatch, tmp_path: Path) -> None:
@@ -1859,14 +1894,14 @@ def test_review_state_status_prefers_pending_grade_for_caller(monkeypatch, tmp_p
     assert exit_code == 0
     assert emitted[0]["recommendation"] == "needs-grade"
     assert emitted[0]["reason"] == "pending_caller_grade"
-    assert emitted[0]["action"]["lane"] == "arena-grade"
-    assert emitted[0]["action"]["round_id"] == "round-123"
-    assert emitted[0]["action"]["cwd"] == str(tmp_path)
-    assert "review_suite_arena.py" in str(emitted[0]["action"]["cmd"])
-    assert "grade" in str(emitted[0]["action"]["cmd"])
-    assert "--round-id" not in str(emitted[0]["action"]["cmd"])
-    assert "--refresh-report" not in str(emitted[0]["action"]["cmd"])
-    assert "dismiss-round" in str(emitted[0]["action"]["dismiss_cmd"])
+    assert "lane" not in emitted[0]["Action"]
+    assert "round_id" not in emitted[0]["Action"]
+    assert emitted[0]["Action"]["cwd"] == str(tmp_path)
+    assert "review_suite_arena.py" in str(emitted[0]["Action"]["cmd"])
+    assert "grade" in str(emitted[0]["Action"]["cmd"])
+    assert "--round-id" not in str(emitted[0]["Action"]["cmd"])
+    assert "--refresh-report" not in str(emitted[0]["Action"]["cmd"])
+    assert "dismiss-round" in str(emitted[0]["Action"]["dismiss_cmd"])
 
 
 def test_review_state_status_prefers_wait_for_running_round(monkeypatch, tmp_path: Path) -> None:
@@ -1904,6 +1939,6 @@ def test_review_state_status_prefers_wait_for_running_round(monkeypatch, tmp_pat
     assert exit_code == 0
     assert emitted[0]["recommendation"] == "wait-round"
     assert emitted[0]["reason"] == "caller_round_in_progress"
-    assert emitted[0]["action"]["lane"] == "wait-round"
-    assert "dismiss-round" in str(emitted[0]["action"]["dismiss_cmd"])
-    assert "cmd" not in emitted[0]["action"]
+    assert "lane" not in emitted[0]["Action"]
+    assert "dismiss-round" in str(emitted[0]["Action"]["dismiss_cmd"])
+    assert "cmd" not in emitted[0]["Action"]

@@ -14,6 +14,7 @@ if str(SCRIPT_DIR) not in sys.path:
 from argparse import Namespace
 
 from review_suite_arena import (
+    _blocking_round_error,
     _completed_round_payload,
     _has_direct_grade_inputs,
     _normalize_arena_task_class,
@@ -92,6 +93,40 @@ def test_public_round_result_does_not_repeat_streamed_output() -> None:
 
     assert result["runs"][0]["slot"] == "alpha"
     assert "output" not in result["runs"][0]
+
+
+def test_blocking_round_error_uses_compact_action_for_completed_round() -> None:
+    error = _blocking_round_error(
+        payload={
+            "round_id": "round-123",
+            "status": "completed",
+            "runs": [{"review_status": "completed", "grade_blocked": False}],
+        },
+        action="review_t1",
+    )
+
+    assert str(error) == "pending round blocks review_t1: round-123"
+    assert "grade_command" not in str(error)
+    assert "dismiss_command" not in str(error)
+    assert "grade --winner WINNER" in str(error.action_payload["cmd"])
+    assert "dismiss-round" in str(error.action_payload["dismiss_cmd"])
+    assert error.action_payload["note"] == "grade before starting another arena lane"
+
+
+def test_blocking_round_error_uses_compact_action_for_running_round() -> None:
+    error = _blocking_round_error(
+        payload={
+            "round_id": "round-456",
+            "status": "running",
+            "runs": [{"review_status": "running"}],
+        },
+        action="review_t3",
+    )
+
+    assert str(error) == "pending round blocks review_t3: round-456 (running)"
+    assert "cmd" not in error.action_payload
+    assert "dismiss-round" in str(error.action_payload["dismiss_cmd"])
+    assert error.action_payload["note"] == "wait for completion before starting another arena lane"
 
 
 def test_print_findings_uses_recovered_full_body(capsys) -> None:

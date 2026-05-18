@@ -102,27 +102,33 @@ PUBLIC_ARENA_TASK_CLASS_ALIASES = {
 }
 
 
-def _blocking_round_message(
+class BlockingRoundError(ValueError):
+    def __init__(self, message: str, *, action_payload: dict[str, object]) -> None:
+        super().__init__(message)
+        self.action_payload = action_payload
+
+
+def _blocking_round_error(
     *,
     payload: dict[str, object],
     action: str,
-) -> str:
+) -> BlockingRoundError:
     round_id = str(payload.get("round_id") or "")
     status = str(payload.get("status") or "unknown")
     if round_needs_caller_grade(payload):
-        lines = [
-            f"grade the completed round before {action}: {round_id}",
-            f"grade_command: {_grade_command()}",
-        ]
+        message = f"pending round blocks {action}: {round_id}"
+        action_payload: dict[str, object] = {
+            "cmd": _grade_command(),
+            "dismiss_cmd": _dismiss_round_command(round_id=round_id),
+            "note": "grade before starting another arena lane",
+        }
     else:
-        lines = [
-            f"wait for the existing round before {action}: {round_id} ({status})",
-        ]
-    lines.append(
-        f"dismiss_command: {_dismiss_round_command(round_id=round_id)}"
-    )
-    lines.append("Pass --ignore-pending-grades only if you intentionally want to bypass this safeguard.")
-    return "\n".join(lines)
+        message = f"pending round blocks {action}: {round_id} ({status})"
+        action_payload = {
+            "dismiss_cmd": _dismiss_round_command(round_id=round_id),
+            "note": "wait for completion before starting another arena lane",
+        }
+    return BlockingRoundError(message, action_payload=action_payload)
 
 
 def _raise_if_blocking_round_exists(
@@ -141,11 +147,9 @@ def _raise_if_blocking_round_exists(
     if not blocking:
         return
     latest = blocking[-1]
-    raise ValueError(
-        _blocking_round_message(
-            payload=latest,
-            action=action,
-        )
+    raise _blocking_round_error(
+        payload=latest,
+        action=action,
     )
 
 
@@ -1892,6 +1896,13 @@ def main() -> int:
             return cmd_promote(args)
         if args.command == "compact-runs":
             return cmd_compact_runs(args)
+    except BlockingRoundError as exc:
+        return emit_error(
+            str(exc),
+            status="usage_error",
+            extra={"Action": exc.action_payload},
+            help_items=[f"{_script_command()} --help"],
+        )
     except ValueError as exc:
         return emit_error(
             str(exc),

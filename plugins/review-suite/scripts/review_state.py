@@ -38,6 +38,7 @@ def build_parser() -> argparse.ArgumentParser:
     status.add_argument("--wsl", action="store_true", help=argparse.SUPPRESS)
     status.add_argument("--state-dir", default=str(default_state_dir()), help=argparse.SUPPRESS)
     status.add_argument("--caller-id", help=argparse.SUPPRESS)
+    status.add_argument("--verbose", action="store_true", help="Print the full routing snapshot.")
     return parser
 
 
@@ -174,10 +175,10 @@ def _gate_signoff_override(
     reviewed_head = str(scope.get("reviewed_head") or scope.get("commit_end") or scope.get("commit") or "").strip()
     current_head = str(current_payload.get("head") or "").strip()
     head_matches_current = bool(reviewed_head and current_head and reviewed_head == current_head)
-    note = "Run action.show_cmd, then close the gate as clean or findings."
+    note = "Run Action.show_cmd, then close the gate as clean or findings."
     if reviewed_head and current_head and reviewed_head != current_head:
         note = (
-            "Reviewed head moved since this gate ran. Run action.show_cmd, close the gate for that head, then rerun review-state."
+            "Reviewed head moved since this gate ran. Run Action.show_cmd, close the gate for that head, then rerun review-state."
         )
     return {
         "recommendation": "signoff-decision",
@@ -269,6 +270,38 @@ def _with_action_context(action: dict[str, object], *, review_cwd: Path, round_i
     if round_id:
         action["round_id"] = round_id
     return action
+
+
+def _public_status_action(action: dict[str, object]) -> dict[str, object]:
+    hidden = {"lane", "round_id", "source_gate_round_id"}
+    return {key: value for key, value in action.items() if key not in hidden and value not in (None, "", [], {})}
+
+
+def _public_status_payload(payload: dict[str, object]) -> dict[str, object]:
+    public: dict[str, object] = {}
+    for key in ("recommendation", "reason"):
+        value = payload.get(key)
+        if value not in (None, "", [], {}):
+            public[key] = value
+
+    if payload.get("pending_round_head_matches_current") is False:
+        reviewed_head = str(payload.get("pending_round_reviewed_head") or "").strip()
+        current_head = str(payload.get("pending_round_current_head") or "").strip()
+        if reviewed_head:
+            public["reviewed_head"] = reviewed_head
+        if current_head:
+            public["current_head"] = current_head
+        note = str(payload.get("note") or "").strip()
+        if note:
+            public["note"] = note
+
+    action = payload.get("Action")
+    if isinstance(action, dict) and action:
+        public["Action"] = _public_status_action(action)
+    elif str(payload.get("note") or "").strip():
+        public["note"] = str(payload.get("note") or "").strip()
+
+    return public or payload
 
 
 def _status_action(payload: dict[str, object], *, review_cwd: Path, base: str, state_dir: Path) -> dict[str, object] | None:
@@ -425,8 +458,8 @@ def cmd_status(args: argparse.Namespace) -> int:
                 payload.update(gate_findings_override)
     action = _status_action(payload, review_cwd=review_cwd, base=str(args.base), state_dir=state_dir)
     if action is not None:
-        payload["action"] = action
-    emit_toon(payload)
+        payload["Action"] = action
+    emit_toon(payload if bool(args.verbose) else _public_status_payload(payload))
     return 0
 
 
