@@ -24,9 +24,9 @@ from review_suite_core import (
 )
 from review_suite_local import (
     OPERATIONAL_STATE_FILENAME,
+    GRADE_BASIS_VALUES,
     RUN_LOG_FILENAME,
     TASK_CLASSES,
-    _finalized_run_summary,
     _run_is_finalized,
     aggregate_records,
     append_record_if_new,
@@ -68,7 +68,7 @@ from review_suite_local import (
     public_task_name,
     round_has_live_reviewer_process,
     output_isatty,
-    reviewer_completion_status,
+    print_reviewer_output_section,
     reviewer_output_heading,
     usable_output_slots,
     write_json,
@@ -405,18 +405,8 @@ def _prompt_basis(rubric: dict[str, object]) -> str:
                 print(f"[review-suite] basis values: {', '.join(basis_values)}", file=sys.stderr, flush=True)
 
 
-def _print_findings(result: dict[str, object]) -> None:
-    streamed_statuses = {str(key): str(value) for key, value in dict(result.get("live_completion_statuses", {})).items()}
-    printed = False
-    for raw_run in result.get("runs", []):
-        run = _finalized_run_summary(raw_run) if isinstance(raw_run, dict) else {}
-        slot = str(run.get("slot") or "reviewer")
-        status = reviewer_completion_status(run)
-        if streamed_statuses.get(str(slot)) == status:
-            continue
-        print(f"{reviewer_output_heading(run)} {status}", file=sys.stderr, flush=True)
-        printed = True
-    return printed
+def _print_findings(result: dict[str, object]) -> bool:
+    return print_reviewer_output_section([run for run in list(result.get("runs") or []) if isinstance(run, dict)])
 
 
 def _ensure_no_pending_grades(
@@ -636,11 +626,6 @@ def _completed_round_payload(
     manual: bool | None = None,
 ) -> dict[str, object]:
     actions: list[dict[str, object]] = []
-    show_command = None
-    round_id = str(round_result.get("round_id") or "").strip()
-    if round_id:
-        show_command = _show_round_command(round_id=round_id)
-        actions.append({"kind": "inspect", "cmd": show_command})
     if grade_command:
         actions.append({"kind": "grade", "cmd": grade_command})
     if reroll_rows:
@@ -653,11 +638,17 @@ def _completed_round_payload(
         and grade is None
         and not manual
     ):
-        todo: dict[str, str] = {}
-        if show_command:
-            todo["inspect"] = show_command
-        todo["grade"] = grade_command
-        return {"To-Do": todo}
+        return {
+            "Action": {
+                "cmd": grade_command,
+                "winner": ["alpha", "bravo", "tie"],
+                "basis": list(GRADE_BASIS_VALUES),
+                "note": "grade before starting another local review lane",
+            }
+        }
+    if manual and not grade_command and not reroll_rows and grade is None:
+        note = "manual review blocked; read Output" if round_result.get("blocked") else "manual review complete"
+        return {"Action": {"note": note}}
     payload: dict[str, object] = {
         "status": status,
         "blocked": bool(round_result.get("blocked")),
@@ -1162,6 +1153,7 @@ def cmd_run_round(args: argparse.Namespace) -> int:
             show_all_when_gradeable=False,
         ),
     )
+    _print_findings(completed)
     if not bool(result.get("blocked")):
         try:
             record_review_anchor(
@@ -1177,7 +1169,12 @@ def cmd_run_round(args: argparse.Namespace) -> int:
         except Exception as exc:  # pragma: no cover - warning path only
             _record_anchor_warning(exc)
     if not _output_isatty():
-        emit_toon(result)
+        emit_toon(
+            _completed_round_payload(
+                round_result=result,
+                grade_command=None if result.get("blocked") else _grade_command(),
+            )
+        )
     return 0
 
 
@@ -1258,7 +1255,12 @@ def cmd_reroll_slot(args: argparse.Namespace) -> int:
     write_round(state_dir, completed)
     refresh_review_cost_report_best_effort(state_dir=state_dir, review_cwd=review_cwd)
     if not _output_isatty():
-        emit_toon(result)
+        emit_toon(
+            _completed_round_payload(
+                round_result=result,
+                grade_command=None if result.get("blocked") else _grade_command(),
+            )
+        )
     return 0
 
 
@@ -1273,7 +1275,14 @@ def cmd_resume_round(args: argparse.Namespace) -> int:
     state_dir = Path(args.state_dir)
     payload = load_round(state_dir, args.round_id)
     if payload.get("status") == "completed":
-        emit_toon(public_round_result(payload))
+        _print_findings(payload)
+        result = public_round_result(payload)
+        emit_toon(
+            _completed_round_payload(
+                round_result=result,
+                grade_command=_grade_command() if round_needs_caller_grade(payload) and not result.get("blocked") else None,
+            )
+        )
         return 0
     if payload.get("status") != "running":
         raise ValueError(f"round {args.round_id} is {payload.get('status')}, not running")
@@ -1295,6 +1304,7 @@ def cmd_resume_round(args: argparse.Namespace) -> int:
             show_all_when_gradeable=True,
         ),
     )
+    _print_findings(completed)
     completed["task_id_hint"] = _current_branch_name(review_cwd) or str(payload["round_id"])
     if not bool(result.get("blocked")):
         try:
@@ -1312,7 +1322,12 @@ def cmd_resume_round(args: argparse.Namespace) -> int:
         except Exception as exc:  # pragma: no cover - warning path only
             _record_anchor_warning(exc)
     if not _output_isatty():
-        emit_toon(result)
+        emit_toon(
+            _completed_round_payload(
+                round_result=result,
+                grade_command=None if result.get("blocked") else _grade_command(),
+            )
+        )
     return 0
 
 
@@ -1658,6 +1673,7 @@ def cmd_run_manual_round(args: argparse.Namespace) -> int:
             show_all_when_gradeable=False,
         ),
     )
+    _print_findings(completed)
     emit_toon(
         _completed_round_payload(
             round_result=result,

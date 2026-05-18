@@ -18,8 +18,8 @@ Use `python` on Windows and usually `python3` on WSL/Linux. Add `--cd <repo-root
 Rules:
 - Signoff lane. Do not grade.
 - Completion leaves the gate in `signoff_pending`.
-- Use the emitted `show-round` command for reviewer text.
-- Close with the emitted `close-gate --verdict clean|findings` command.
+- Read the final `Output:` block for reviewer text.
+- Close with emitted `Action.cmd`; replace `VERDICT` with `clean` or `findings`.
 - Do not inspect raw state JSON or rollout logs.
 - Do not rerun T1 after T2 has run; use `review-state`.
 - Code only valid findings. Verify locally and check adjacent code.

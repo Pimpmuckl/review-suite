@@ -5,7 +5,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from review_gate import run_gate_round
+from review_gate import public_gate_completion_payload, run_gate_round
 from review_suite_local import (
     build_local_review_request,
     build_pr_instructions,
@@ -102,7 +102,7 @@ def main() -> int:
         if str(payload.get("status") or "") == "signoff_pending" or (
             not output_isatty() and str(payload.get("status") or "") != "completed"
         ):
-            emit_toon(payload)
+            emit_toon(public_gate_completion_payload(payload))
         return exit_code
     except ValueError as exc:
         return emit_error(

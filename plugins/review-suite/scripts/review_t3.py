@@ -23,7 +23,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="Tier 3 local arena review wrapper.",
         epilog=(
             "If another arena round blocks this wrapper, the error names the exact "
-            "round id and prints grade_command or dismiss_command. Use review_state.py "
+            "round id and prints the grade or dismiss action. Use review_state.py "
             "status to inspect the current branch before starting another round. "
             "Reviewer sampling is controlled by roster selection_mode: true_scramble, "
             "slight_bias, or legacy."

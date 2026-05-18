@@ -568,8 +568,7 @@ def test_arena_wrapper_help_mentions_blocking_round_recovery() -> None:
     ):
         assert "blocks this wrapper" in help_text
         assert "round id" in help_text
-        assert "grade_command" in help_text
-        assert "dismiss_command" in help_text
+        assert "grade or dismiss action" in help_text
         assert "review_state.py status" in help_text
 
 
@@ -804,7 +803,7 @@ def test_gate_wrappers_emit_signoff_pending_toon_even_in_live_tty_mode(
         module,
         "run_gate_round",
         lambda **kwargs: (
-            {"status": "signoff_pending", "blocked": False, "action": {"lane": "gate-signoff"}},
+            {"status": "signoff_pending", "blocked": False, "action": {"cmd": "close --verdict VERDICT"}},
             0,
         ),
     )
@@ -816,7 +815,7 @@ def test_gate_wrappers_emit_signoff_pending_toon_even_in_live_tty_mode(
     exit_code = module.main()
 
     assert exit_code == 0
-    assert emitted == [{"status": "signoff_pending", "blocked": False, "action": {"lane": "gate-signoff"}}]
+    assert emitted == [{"Action": {"cmd": "close --verdict VERDICT"}}]
 
 
 @pytest.mark.parametrize("module", [review_t2, review_t4])
@@ -880,4 +879,4 @@ def test_gate_wrappers_keep_final_toon_for_blocked_noninteractive_runs(
     exit_code = module.main()
 
     assert exit_code == 1
-    assert emitted == [{"status": "blocked", "blocked": True, "runs": []}]
+    assert emitted == [{"Action": {"note": "review blocked; read Output, resolve blocker, then rerun the gate"}}]

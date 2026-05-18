@@ -849,8 +849,8 @@ def test_summarize_gate_round_reports_signoff_pending_and_public_task_name() -> 
     assert payload["status"] == "signoff_pending"
     assert payload["blocked"] is False
     assert payload["signoff_required"] is True
-    assert payload["note"] == "Inspect stored reviewer outputs, then close the gate as clean or findings."
-    assert payload["policy"] == "Classify reviewer items before coding; code only valid findings."
+    assert "note" not in payload
+    assert "policy" not in payload
     assert "scope_check" not in payload
     assert "mode" not in payload
     assert "target" not in payload
@@ -1132,7 +1132,10 @@ def test_run_gate_round_retries_operational_block_once(monkeypatch, tmp_path: Pa
     assert launches == [("alpha", 0), ("alpha", 1), ("bravo", 0)]
     assert exit_code == 0
     assert payload["status"] == "signoff_pending"
-    assert payload["action"]["lane"] == "gate-signoff"
+    assert "close-gate" in payload["action"]["cmd"]
+    assert "--verdict VERDICT" in payload["action"]["cmd"]
+    assert payload["action"]["verdict"] == ["clean", "findings"]
+    assert "show_cmd" not in payload["action"]
     assert "scope_check" not in payload["action"]
     stored = [json.loads(line) for line in (state_dir / "gate_runs.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
     assert len(stored) == 1
@@ -1140,11 +1143,13 @@ def test_run_gate_round_retries_operational_block_once(monkeypatch, tmp_path: Pa
     assert len(stored[0]["retry_runs"]) == 1
     assert stored[0]["retry_runs"][0]["grade_block_reason"] == "review_interrupted"
     assert cost_refreshes == [{"state_dir": state_dir, "review_cwd": review_cwd}]
-    err = capsys.readouterr().err
-    assert "reviews can take up to 20m" in err
-    assert "alpha-model" not in err
-    assert "bravo-model" not in err
-    assert "xhigh" not in err
+    captured = capsys.readouterr()
+    assert "Output:" in captured.out
+    assert "I did not find any actionable bugs in this diff." in captured.out
+    assert "reviews can take up to 20m" in captured.err
+    assert "alpha-model" not in captured.err
+    assert "bravo-model" not in captured.err
+    assert "xhigh" not in captured.err
 
 
 def test_run_gate_round_replaces_exhausted_gate_reviewer_with_inline_fallback(monkeypatch, tmp_path: Path) -> None:

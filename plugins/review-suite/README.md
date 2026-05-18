@@ -21,7 +21,8 @@ Local and GitHub review lanes for Codex work.
 - Code only valid findings.
 - Track full-suite/CI as `pending`, `passed`, `failed`, or `waived/classified`.
 - Completion lines are status-only.
-- Use `show-round` / `show-last` for reviewer text.
+- Current runs print reviewer text in the final `Output:` block.
+- Use `show-round` / `show-last` only to revisit stored output.
 - Do not inspect raw state JSON or rollout logs.
 - T2/T4 gates must be closed as `clean` or `findings`.
 
@@ -40,7 +41,9 @@ Local and GitHub review lanes for Codex work.
 
 - Long runs emit `OK <minutes>m: ...` about every 60s.
 - T1-T4 reviewer completion lines show wrapper status only.
-- Full reviewer text is available through:
+- Reviewer text prints once in the final `Output:` block.
+- Follow the final `Action.cmd`; replace placeholders such as `VERDICT`, `WINNER`, and `BASIS`.
+- Stored reviewer text is available through:
 
 ```powershell
 <python> <review-suite-plugin-root>/scripts/review_suite_arena.py show-round --round-id <id>

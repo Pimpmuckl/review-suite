@@ -50,7 +50,7 @@ The plugin stores local routing state under:
 ~/.codex/state/review-suite/
 ```
 
-Default review command output is compact for agent callers. Long-running reviews emit a sparse `OK <minutes>m: ...` heartbeat about every 60s. Reviewer completion lines are status-only. Full stored reviewer bodies are available on demand through `review_suite_arena.py show-round` or `show-last`.
+Default review command output is compact for agent callers. Long-running reviews emit a sparse `OK <minutes>m: ...` heartbeat about every 60s. Reviewer completion lines are status-only. Current runs print reviewer bodies once in the final `Output:` block, followed by one compact `Action.cmd`. Stored reviewer bodies are available through `review_suite_arena.py show-round` or `show-last`.
 
 ## Configuration
 

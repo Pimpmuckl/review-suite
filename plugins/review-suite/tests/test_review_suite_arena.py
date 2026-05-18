@@ -38,7 +38,7 @@ def _stub_clean_git_worktree(monkeypatch) -> None:
     monkeypatch.setattr("review_suite_arena.ensure_clean_git_worktree", lambda *args, **kwargs: None)
 
 
-def test_print_findings_keeps_only_unstreamed_recap_content(capsys) -> None:
+def test_print_findings_prints_final_reviewer_output(capsys) -> None:
     _print_findings(
         {
             "round_id": "round-123",
@@ -63,12 +63,12 @@ def test_print_findings_keeps_only_unstreamed_recap_content(capsys) -> None:
     )
 
     captured = capsys.readouterr()
-    assert "ALPHA" not in captured.err
-    assert "full body" not in captured.err
-    assert "Bravo:" in captured.err
-    assert "completed" in captured.err
-    assert "No findings." not in captured.err
-    assert "Bravo body" not in captured.err
+    assert captured.err == ""
+    assert "Output:" in captured.out
+    assert "Alpha:" in captured.out
+    assert "full body" in captured.out
+    assert "Bravo:" in captured.out
+    assert "Bravo body" in captured.out
 
 
 def test_public_round_result_does_not_repeat_streamed_output() -> None:
@@ -94,7 +94,7 @@ def test_public_round_result_does_not_repeat_streamed_output() -> None:
     assert "output" not in result["runs"][0]
 
 
-def test_print_findings_keeps_compact_summary_when_live_and_final_text_differ(capsys) -> None:
+def test_print_findings_uses_recovered_full_body(capsys) -> None:
     _print_findings(
         {
             "round_id": "round-456",
@@ -112,13 +112,13 @@ def test_print_findings_keeps_compact_summary_when_live_and_final_text_differ(ca
     )
 
     captured = capsys.readouterr()
-    assert "Alpha:" in captured.err
-    assert "completed" in captured.err
-    assert "placeholder" not in captured.err
-    assert "Recovered full body" not in captured.err
+    assert captured.err == ""
+    assert "Alpha:" in captured.out
+    assert "placeholder" not in captured.out
+    assert "Recovered full body" in captured.out
 
 
-def test_print_findings_keeps_unstreamed_blocked_runs(capsys) -> None:
+def test_print_findings_prints_blocked_runs(capsys) -> None:
     _print_findings(
         {
             "runs": [
@@ -134,8 +134,9 @@ def test_print_findings_keeps_unstreamed_blocked_runs(capsys) -> None:
     )
 
     captured = capsys.readouterr()
-    assert "Alpha [interrupted_capacity]:" in captured.err
-    assert "capacity" in captured.err
+    assert captured.err == ""
+    assert "Alpha [interrupted_capacity]:" in captured.out
+    assert "capacity" in captured.out
 
 
 def test_cmd_show_round_prints_stored_reviewer_outputs(tmp_path: Path, capsys) -> None:
@@ -434,7 +435,7 @@ def test_cmd_show_last_prints_latest_outputs_per_local_lane(tmp_path: Path, caps
     assert "Latest T2" in captured.out
 
 
-def test_print_findings_skips_blocked_runs_when_body_already_streamed(capsys) -> None:
+def test_print_findings_prints_blocked_body_after_completion_status(capsys) -> None:
     _print_findings(
         {
             "live_completion_statuses": {"Alpha": "selected_model_at_capacity"},
@@ -452,8 +453,9 @@ def test_print_findings_skips_blocked_runs_when_body_already_streamed(capsys) ->
     )
 
     captured = capsys.readouterr()
-    assert "Alpha [interrupted_capacity]:" not in captured.err
-    assert "Recovered full body" not in captured.err
+    assert captured.err == ""
+    assert "Alpha [interrupted_capacity]:" in captured.out
+    assert "Recovered full body" in captured.out
 
 
 def test_completed_round_payload_uses_reroll_command_key() -> None:
@@ -466,7 +468,7 @@ def test_completed_round_payload_uses_reroll_command_key() -> None:
     assert payload["blocked"] is True
 
 
-def test_completed_round_payload_success_only_emits_grade_todo() -> None:
+def test_completed_round_payload_success_only_emits_grade_action() -> None:
     payload = _completed_round_payload(
         round_result={
             "blocked": False,
@@ -482,10 +484,13 @@ def test_completed_round_payload_success_only_emits_grade_todo() -> None:
         grade_command="grade-cmd",
     )
 
-    assert payload == {"To-Do": {"grade": "grade-cmd"}}
+    assert payload["Action"]["cmd"] == "grade-cmd"
+    assert payload["Action"]["winner"] == ["alpha", "bravo", "tie"]
+    assert "valid_findings_vs_none" in payload["Action"]["basis"]
+    assert "runs" not in payload
 
 
-def test_completed_round_payload_includes_inspect_todo_when_round_id_is_known() -> None:
+def test_completed_round_payload_omits_inspect_when_round_id_is_known() -> None:
     payload = _completed_round_payload(
         round_result={
             "round_id": "round-123",
@@ -495,8 +500,17 @@ def test_completed_round_payload_includes_inspect_todo_when_round_id_is_known() 
         grade_command="grade-cmd",
     )
 
-    assert payload["To-Do"]["grade"] == "grade-cmd"
-    assert "show-round --round-id round-123" in payload["To-Do"]["inspect"]
+    assert payload["Action"]["cmd"] == "grade-cmd"
+    assert "inspect" not in payload["Action"]
+
+
+def test_completed_round_payload_manual_omits_run_rows_after_output() -> None:
+    payload = _completed_round_payload(
+        round_result={"round_id": "round-123", "blocked": False, "runs": [{"slot": "alpha"}]},
+        manual=True,
+    )
+
+    assert payload == {"Action": {"note": "manual review complete"}}
 
 
 def test_has_direct_grade_inputs_requires_complete_tuple() -> None:
@@ -608,7 +622,7 @@ def test_run_benchmarked_round_emits_round_banner_and_compact_payload(monkeypatc
     )
 
     assert result == 0
-    assert emitted[-1]["To-Do"]["grade"]
+    assert emitted[-1]["Action"]["cmd"]
     assert "task" not in emitted[-1]
     assert "round_id" not in emitted[-1]
     assert "runs" not in emitted[-1]
@@ -665,12 +679,14 @@ def test_run_benchmarked_round_noninteractive_uses_toon_actions_without_stderr_n
     )
 
     assert result == 0
-    assert emitted[-1] == {"To-Do": {"grade": emitted[-1]["To-Do"]["grade"]}}
-    assert "grade --winner WINNER" in emitted[-1]["To-Do"]["grade"]
-    assert "--round-id" not in emitted[-1]["To-Do"]["grade"]
-    assert "--task-id" not in emitted[-1]["To-Do"]["grade"]
-    assert "--basis BASIS" in emitted[-1]["To-Do"]["grade"]
-    assert "--refresh-report" not in emitted[-1]["To-Do"]["grade"]
+    assert set(emitted[-1]) == {"Action"}
+    assert "grade --winner WINNER" in emitted[-1]["Action"]["cmd"]
+    assert "--round-id" not in emitted[-1]["Action"]["cmd"]
+    assert "--task-id" not in emitted[-1]["Action"]["cmd"]
+    assert "--basis BASIS" in emitted[-1]["Action"]["cmd"]
+    assert "--refresh-report" not in emitted[-1]["Action"]["cmd"]
+    assert emitted[-1]["Action"]["winner"] == ["alpha", "bravo", "tie"]
+    assert "tie_clean" in emitted[-1]["Action"]["basis"]
 
 
 def test_run_benchmarked_round_warns_for_deep_review_without_model_names(monkeypatch, tmp_path, capsys) -> None:
@@ -1114,7 +1130,7 @@ def test_run_benchmarked_round_direct_grade_without_caller_rejects_ambiguous_rep
         )
 
 
-def test_cmd_run_manual_round_emits_manual_payload(monkeypatch, tmp_path) -> None:
+def test_cmd_run_manual_round_emits_manual_payload(monkeypatch, tmp_path, capsys) -> None:
     diff_path = tmp_path / "diff.txt"
     diff_path.write_text("diff --git a/x b/x\n", encoding="utf-8")
     captured: dict[str, object] = {}
@@ -1127,7 +1143,14 @@ def test_cmd_run_manual_round_emits_manual_payload(monkeypatch, tmp_path) -> Non
     )
     monkeypatch.setattr("review_suite_arena._load_manual_instructions", lambda args: "Review this.")
     monkeypatch.setattr("review_suite_arena.build_manual_review_prompt", lambda **kwargs: "prompt")
-    monkeypatch.setattr("review_suite_arena.run_round", lambda **kwargs: {"round_id": "round-1", "task_class": "phase_review", "runs": []})
+    monkeypatch.setattr(
+        "review_suite_arena.run_round",
+        lambda **kwargs: {
+            "round_id": "round-1",
+            "task_class": "phase_review",
+            "runs": [{"slot": "alpha", "review_status": "completed", "reviewer_output": "Manual body"}],
+        },
+    )
     monkeypatch.setattr("review_suite_arena._visible_completed_output_slots", lambda **kwargs: set())
     monkeypatch.setattr("review_suite_arena.public_round_result", lambda *args, **kwargs: {"blocked": False, "runs": []})
     monkeypatch.setattr("review_suite_arena._completed_round_payload", lambda **kwargs: captured.update(kwargs) or {"status": "ok"})
@@ -1152,6 +1175,7 @@ def test_cmd_run_manual_round_emits_manual_payload(monkeypatch, tmp_path) -> Non
     assert captured["manual"] is True
     assert "task_name" not in captured
     assert "round_id" not in captured
+    assert "Manual body" in capsys.readouterr().out
 
 
 def test_cmd_reroll_slot_records_workflow_anchor_when_completed(monkeypatch, tmp_path) -> None:
@@ -1201,12 +1225,13 @@ def test_cmd_reroll_slot_records_workflow_anchor_when_completed(monkeypatch, tmp
     )
 
     assert result == 0
-    assert emitted == [{"blocked": False, "runs": []}]
+    assert emitted[0]["Action"]["cmd"]
+    assert "runs" not in emitted[0]
     assert anchor_calls[0]["lane"] == "review_t3"
     assert anchor_calls[0]["task_id"] == "branch-1"
 
 
-def test_cmd_run_round_records_workflow_anchor_when_completed(monkeypatch, tmp_path) -> None:
+def test_cmd_run_round_records_workflow_anchor_when_completed(monkeypatch, tmp_path, capsys) -> None:
     anchor_calls: list[dict[str, object]] = []
     emitted: list[dict[str, object]] = []
 
@@ -1227,7 +1252,7 @@ def test_cmd_run_round_records_workflow_anchor_when_completed(monkeypatch, tmp_p
             "round_id": "round-1",
             "task_class": "pr_review",
             "review_scope": {"base": "main"},
-            "runs": [],
+            "runs": [{"slot": "alpha", "review_status": "completed", "reviewer_output": "Run-round body"}],
         },
     )
     monkeypatch.setattr("review_suite_arena.write_round", lambda *args, **kwargs: None)
@@ -1253,12 +1278,14 @@ def test_cmd_run_round_records_workflow_anchor_when_completed(monkeypatch, tmp_p
     )
 
     assert result == 0
-    assert emitted == [{"blocked": False, "runs": []}]
+    assert emitted[0]["Action"]["cmd"]
+    assert "runs" not in emitted[0]
     assert anchor_calls[0]["lane"] == "review_t3"
     assert anchor_calls[0]["task_id"] == "branch-1"
+    assert "Run-round body" in capsys.readouterr().out
 
 
-def test_cmd_resume_round_records_workflow_anchor_when_completed(monkeypatch, tmp_path) -> None:
+def test_cmd_resume_round_records_workflow_anchor_when_completed(monkeypatch, tmp_path, capsys) -> None:
     anchor_calls: list[dict[str, object]] = []
     emitted: list[dict[str, object]] = []
 
@@ -1279,7 +1306,7 @@ def test_cmd_resume_round_records_workflow_anchor_when_completed(monkeypatch, tm
             "round_id": "round-1",
             "task_class": "pr_review",
             "review_scope": {"base": "main"},
-            "runs": [],
+            "runs": [{"slot": "alpha", "review_status": "completed", "reviewer_output": "Resume body"}],
         },
     )
     monkeypatch.setattr("review_suite_arena.public_round_result", lambda *args, **kwargs: {"blocked": False, "runs": []})
@@ -1300,9 +1327,11 @@ def test_cmd_resume_round_records_workflow_anchor_when_completed(monkeypatch, tm
     )
 
     assert result == 0
-    assert emitted == [{"blocked": False, "runs": []}]
+    assert emitted[0]["Action"]["cmd"]
+    assert "runs" not in emitted[0]
     assert anchor_calls[0]["lane"] == "review_t3"
     assert anchor_calls[0]["task_id"] == "branch-1"
+    assert "Resume body" in capsys.readouterr().out
 
 
 def test_public_local_task_name_maps_gate_aliases() -> None:

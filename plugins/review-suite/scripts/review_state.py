@@ -174,11 +174,10 @@ def _gate_signoff_override(
     reviewed_head = str(scope.get("reviewed_head") or scope.get("commit_end") or scope.get("commit") or "").strip()
     current_head = str(current_payload.get("head") or "").strip()
     head_matches_current = bool(reviewed_head and current_head and reviewed_head == current_head)
-    note = "A completed T2/T4 gate needs the calling agent to inspect stored outputs and close it as clean or findings."
+    note = "Run action.show_cmd, then close the gate as clean or findings."
     if reviewed_head and current_head and reviewed_head != current_head:
         note = (
-            "A completed T2/T4 gate still needs signoff for its reviewed head, but the branch has moved since it ran. "
-            "Close the gate based on the stored reviewer output for that reviewed head; review-state will route the current head afterward."
+            "Reviewed head moved since this gate ran. Run action.show_cmd, close the gate for that head, then rerun review-state."
         )
     return {
         "recommendation": "signoff-decision",
@@ -265,14 +264,14 @@ def _gate_findings_rerun_override(
     }
 
 
-def _with_action_context(action: dict[str, str], *, review_cwd: Path, round_id: str | None = None) -> dict[str, str]:
+def _with_action_context(action: dict[str, object], *, review_cwd: Path, round_id: str | None = None) -> dict[str, object]:
     action["cwd"] = str(review_cwd)
     if round_id:
         action["round_id"] = round_id
     return action
 
 
-def _status_action(payload: dict[str, object], *, review_cwd: Path, base: str, state_dir: Path) -> dict[str, str] | None:
+def _status_action(payload: dict[str, object], *, review_cwd: Path, base: str, state_dir: Path) -> dict[str, object] | None:
     recommendation = str(payload.get("recommendation") or "")
     if recommendation == "signoff-decision":
         round_id = str(payload.get("pending_round_id") or "").strip()
@@ -287,7 +286,7 @@ def _status_action(payload: dict[str, object], *, review_cwd: Path, base: str, s
             {
                 "lane": "gate-findings",
                 "show_cmd": _arena_show_round_command(round_id=round_id),
-                "note": "Inspect the stored gate findings, fix valid bugs, then run review-state again for the follow-up command.",
+                "note": "Run show_cmd, fix valid bugs, then rerun review-state.",
             },
             review_cwd=review_cwd,
             round_id=round_id,

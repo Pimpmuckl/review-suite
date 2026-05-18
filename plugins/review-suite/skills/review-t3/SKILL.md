@@ -14,8 +14,8 @@ Use when the branch is PR-ready and T2 is green.
 Use `python` on Windows and usually `python3` on WSL/Linux. Add `--cd <repo-root>` when launching outside the target repo.
 
 Rules:
-- Graded lane. Grade with the emitted command.
-- Completion lines are status-only. Use the emitted `inspect` / `show-round` command for reviewer text.
+- Graded lane. Grade with emitted `Action.cmd`.
+- Completion lines are status-only. Read the final `Output:` block for reviewer text.
 - Do not inspect raw state JSON or rollout logs.
 - Do not use after the branch reaches T4. Run `review-state` and follow its action.
 - Code only valid findings. Verify locally and check adjacent code.

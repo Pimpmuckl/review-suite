@@ -1598,11 +1598,10 @@ def test_review_state_status_routes_pending_gate_signoff_decision(monkeypatch, t
     assert emitted[0]["recommendation"] == "signoff-decision"
     assert emitted[0]["reason"] == "pending_gate_signoff_decision"
     assert emitted[0]["pending_round_task"] == "review_t4"
-    assert emitted[0]["action"]["lane"] == "gate-signoff"
     assert "show-round" in str(emitted[0]["action"]["show_cmd"])
-    assert "close-gate" in str(emitted[0]["action"]["clean_cmd"])
-    assert "--verdict clean" in str(emitted[0]["action"]["clean_cmd"])
-    assert "--verdict findings" in str(emitted[0]["action"]["findings_cmd"])
+    assert "close-gate" in str(emitted[0]["action"]["cmd"])
+    assert "--verdict VERDICT" in str(emitted[0]["action"]["cmd"])
+    assert emitted[0]["action"]["verdict"] == ["clean", "findings"]
 
 
 def test_review_state_status_keeps_pending_gate_signoff_visible_after_amend(monkeypatch, tmp_path: Path) -> None:
@@ -1656,7 +1655,7 @@ def test_review_state_status_keeps_pending_gate_signoff_visible_after_amend(monk
     assert emitted[0]["pending_round_reviewed_head"] == "old-head"
     assert emitted[0]["pending_round_current_head"] == "new-head"
     assert emitted[0]["pending_round_head_matches_current"] is False
-    assert "branch has moved" in str(emitted[0]["note"])
+    assert "Reviewed head moved" in str(emitted[0]["note"])
 
 
 def test_review_state_status_adds_fix_gate_findings_action(monkeypatch, tmp_path: Path) -> None:

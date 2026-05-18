@@ -18,4 +18,4 @@ Rules:
 - Use after head changes once a branch has reached T2/T3/T4.
 - Do not step down lanes unless this command routes there.
 - If it emits `needs-grade`, grade before starting another local review lane.
-- If it emits `fix-gate-findings`, inspect the stored gate output, fix valid findings, then rerun this command.
+- If it emits `fix-gate-findings`, run `action.show_cmd`, fix valid findings, then rerun this command.

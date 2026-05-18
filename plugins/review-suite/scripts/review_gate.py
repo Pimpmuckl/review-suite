@@ -45,6 +45,7 @@ from review_suite_local import (
     normalize_record_review_cwd_value,
     normalize_review_cwd_value,
     pending_launch_ready,
+    print_reviewer_output_section,
     public_reviewer_label,
     print_deep_review_wait_note,
     read_jsonl,
@@ -82,8 +83,7 @@ GATE_SIGNOFF_SCOPE_CHECK = (
     "the next review round; full-suite/CI is merge-readiness, not review-launch. Record full-suite/CI as pending, "
     "passed, failed, or intentionally waived/classified, and do not call a PR final/merge-ready while that is unknown."
 )
-GATE_SIGNOFF_NOTE = "Inspect stored reviewer outputs, then close the gate as clean or findings."
-GATE_SIGNOFF_POLICY = "Classify reviewer items before coding; code only valid findings."
+GATE_SIGNOFF_NOTE = "clean only if all reviewer output is effectively green"
 GATE_FINDINGS_SCOPE_CHECK = (
     "Findings recorded; no workflow anchor. Classify each item before fixing: valid finding, "
     "non-finding suggestion/product preference, or unclear product decision. Code only valid findings. Focused seam "
@@ -336,40 +336,41 @@ def gate_record_status(record: dict[str, Any], decision: dict[str, Any] | None =
     return "completed"
 
 
-def gate_signoff_action_payload(*, round_id: str, state_dir: Path) -> dict[str, str]:
+def gate_signoff_action_payload(
+    *, round_id: str, state_dir: Path, include_show_cmd: bool = True
+) -> dict[str, Any]:
     script = Path(__file__).resolve().with_name("review_suite_arena.py").as_posix()
     base_command = [sys.executable, script]
-    return {
-        "lane": "gate-signoff",
-        "show_cmd": format_command(
+    payload = {}
+    if include_show_cmd:
+        payload["show_cmd"] = format_command(
             [
                 *base_command,
                 "show-round",
                 "--round-id",
                 round_id,
             ]
-        ),
-        "clean_cmd": format_command(
-            [
-                *base_command,
-                "close-gate",
-                "--round-id",
-                round_id,
-                "--verdict",
-                "clean",
-            ]
-        ),
-        "findings_cmd": format_command(
-            [
-                *base_command,
-                "close-gate",
-                "--round-id",
-                round_id,
-                "--verdict",
-                "findings",
-            ]
-        ),
-    }
+        )
+    payload["cmd"] = format_command(
+        [
+            *base_command,
+            "close-gate",
+            "--round-id",
+            round_id,
+            "--verdict",
+            "VERDICT",
+        ]
+    )
+    payload["verdict"] = ["clean", "findings"]
+    payload["note"] = GATE_SIGNOFF_NOTE
+    return payload
+
+
+def public_gate_completion_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    action = payload.get("action")
+    if isinstance(action, dict) and action:
+        return {"Action": action}
+    return {"Action": {"note": "review blocked; read Output, resolve blocker, then rerun the gate"}}
 
 
 def record_gate_signoff_decision(
@@ -846,8 +847,6 @@ def summarize_gate_round(
     }
     if status == "signoff_pending":
         payload["signoff_required"] = True
-        payload["note"] = GATE_SIGNOFF_NOTE
-        payload["policy"] = GATE_SIGNOFF_POLICY
     return payload, 1 if status == "blocked" else 0
 
 
@@ -1124,6 +1123,7 @@ def run_gate_round(
                 payload["action"] = gate_signoff_action_payload(
                     round_id=str(final_record["round_id"]),
                     state_dir=state_dir,
+                    include_show_cmd=False,
                 )
             with state_lock(state_dir, "gate-runs"), state_lock(state_dir, "gate-reports"):
                 if not _gate_round_already_recorded(state_dir, str(final_record["round_id"])):
@@ -1132,6 +1132,9 @@ def run_gate_round(
             refresh_review_cost_report_best_effort(state_dir=state_dir, review_cwd=review_cwd)
             with state_lock(state_dir, "gate-partial"):
                 partial_path.unlink(missing_ok=True)
+            print_reviewer_output_section(
+                [run for run in list(final_record.get("runs") or []) if isinstance(run, dict)]
+            )
             return payload, exit_code
     round_started_at = str(partial.get("round_started_at") or utc_now_iso()) if partial else utc_now_iso()
     if partial:
@@ -1197,7 +1200,7 @@ def run_gate_round(
     if includes_deep_review_effort([dict(variant) for variant in selection.variants]):
         print_deep_review_wait_note()
     print(
-        f"[review-suite] waiting for {target_reviewer_count} gate reviewers; statuses will stream as each reviewer finishes.",
+        f"[review-suite] waiting for {target_reviewer_count} gate reviewers; completion status prints as each finishes.",
         file=sys.stderr,
         flush=True,
     )
@@ -1428,7 +1431,11 @@ def run_gate_round(
             for update in cooldown_updates
         ]
     if payload.get("status") == "signoff_pending":
-        payload["action"] = gate_signoff_action_payload(round_id=round_id, state_dir=state_dir)
+        payload["action"] = gate_signoff_action_payload(
+            round_id=round_id,
+            state_dir=state_dir,
+            include_show_cmd=False,
+        )
     review_completed_at = utc_now_iso()
     record = {
         "recorded_at": review_completed_at,
@@ -1462,4 +1469,5 @@ def run_gate_round(
     refresh_review_cost_report_best_effort(state_dir=state_dir, review_cwd=review_cwd)
     with state_lock(state_dir, "gate-partial"):
         partial_path.unlink(missing_ok=True)
+    print_reviewer_output_section(completed)
     return payload, exit_code

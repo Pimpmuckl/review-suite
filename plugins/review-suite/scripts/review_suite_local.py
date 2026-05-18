@@ -1560,6 +1560,19 @@ def final_display_body(run: dict[str, Any]) -> str:
     return f"({status or 'no output'})"
 
 
+def print_reviewer_output_section(runs: list[dict[str, Any]]) -> bool:
+    if not runs:
+        return False
+    write_text("Output:")
+    for index, raw_run in enumerate(runs):
+        run = _finalized_run_summary(raw_run)
+        if index:
+            write_text("")
+        write_text(reviewer_output_heading(run))
+        write_text(final_display_body(run))
+    return True
+
+
 def review_label(task_class: str) -> str:
     public = public_task_name(task_class)
     if public != task_class:
@@ -3309,7 +3322,7 @@ def collect_round_results(
     stall_warned_slots: set[str] = set()
     live_completion_statuses: dict[str, str] = {}
     print(
-        "[review-suite] waiting for both reviewers; statuses will stream as each reviewer finishes.",
+        "[review-suite] waiting for both reviewers; completion status prints as each finishes.",
         file=sys.stderr,
         flush=True,
     )

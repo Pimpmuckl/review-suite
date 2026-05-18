@@ -23,7 +23,9 @@ Rules:
 - Keep one review lane active unless the user explicitly asks otherwise.
 - Follow `review-state` after T2/T3/T4; do not step down after amended commits.
 - T2/T4 gates must be closed as `clean` or `findings`; only `clean` records the workflow anchor.
-- Completion lines are status-only. Use `show-round` / `show-last` for reviewer text.
+- Completion lines are status-only. Current runs print reviewer text in the final `Output:` block.
+- Follow the final `Action.cmd`.
+- Use `show-round` / `show-last` only to revisit stored output.
 - Do not inspect raw review-suite state JSON or rollout logs.
 - Code only valid findings. Escalate unclear product decisions or conflicts with explicit direction.
 - Launch review after focused, review-relevant validation is green. Track full-suite/CI separately as `pending`, `passed`, `failed`, or `waived/classified`.
