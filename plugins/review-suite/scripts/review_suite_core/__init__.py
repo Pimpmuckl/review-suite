@@ -15,6 +15,7 @@ from .lens_runtime import (
     DEFAULT_TIMEOUT_SECONDS,
     WRAPPER_SESSION_LOG_FILENAME,
     emit_result,
+    progress_heartbeat_line,
     record_wrapper_session,
     run_codex,
 )
@@ -75,6 +76,7 @@ __all__ = [
     "load_config",
     "merge_base",
     "normalize_cwd",
+    "progress_heartbeat_line",
     "record_review_anchor",
     "record_wrapper_session",
     "resolve_ref",

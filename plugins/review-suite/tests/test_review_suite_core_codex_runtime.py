@@ -14,7 +14,7 @@ from review_suite_core.codex_runtime import (
     use_unsafe_windows_wsl_fallback,
     validate_codex_runtime,
 )
-from review_suite_core.lens_runtime import codex_exec_command
+from review_suite_core.lens_runtime import codex_exec_command, progress_heartbeat_line
 
 
 def test_codex_exec_command_includes_service_tier_when_configured(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -34,6 +34,26 @@ def test_codex_exec_command_includes_service_tier_when_configured(monkeypatch: p
 
     assert 'service_tier="fast"' in command
     assert command.index('service_tier="fast"') < command.index("--color")
+
+
+def test_progress_heartbeat_line_is_sparse_for_agent_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Stderr:
+        def isatty(self) -> bool:
+            return False
+
+    monkeypatch.setattr("review_suite_core.lens_runtime.sys.stderr", Stderr())
+
+    assert progress_heartbeat_line("review-deslop", 120) == "OK 2m: deslop"
+
+
+def test_progress_heartbeat_line_keeps_elapsed_for_interactive_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Stderr:
+        def isatty(self) -> bool:
+            return True
+
+    monkeypatch.setattr("review_suite_core.lens_runtime.sys.stderr", Stderr())
+
+    assert progress_heartbeat_line("review-deslop", 120) == "deslop running (120s)"
 
 
 def test_unsafe_windows_wsl_fallback_requested_honors_env(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -524,7 +524,7 @@ def test_inspect_workflow_status_warns_after_six_same_tier_runs_without_counting
     assert payload["convergence"]["tier"] == "review_t3"
     assert payload["convergence"]["same_tier_true_run_count"] == 6
     assert "not review-followup" in payload["convergence"]["note"]
-    assert "unclear product decisions" in payload["convergence"]["instruction"]
+    assert "converging and patch-sized" in payload["convergence"]["instruction"]
 
 
 def test_inspect_workflow_status_high_pressure_after_ten_same_tier_runs(tmp_path: Path) -> None:
@@ -553,8 +553,7 @@ def test_inspect_workflow_status_high_pressure_after_ten_same_tier_runs(tmp_path
     assert payload["convergence"]["status"] == "high_pressure"
     assert payload["convergence"]["same_tier_true_run_count"] == 10
     assert "full diff" in payload["convergence"]["instruction"]
-    assert "core approach is still right" in payload["convergence"]["instruction"]
-    assert "user or parent agent" in payload["convergence"]["instruction"]
+    assert "pause and discuss" in payload["convergence"]["instruction"]
 
 
 def test_record_review_anchor_compacts_tool_only_state(tmp_path: Path) -> None:

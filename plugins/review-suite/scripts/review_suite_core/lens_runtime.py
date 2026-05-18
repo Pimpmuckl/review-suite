@@ -15,7 +15,7 @@ from .codex_runtime import use_unsafe_windows_wsl_fallback, validate_codex_runti
 
 DEFAULT_MODEL = "gpt-5.5"
 DEFAULT_REASONING_EFFORT = "medium"
-DEFAULT_PROGRESS_INTERVAL_SECONDS = 30
+DEFAULT_PROGRESS_INTERVAL_SECONDS = 60
 DEFAULT_TIMEOUT_SECONDS = 0
 WRAPPER_SESSION_LOG_FILENAME = "wrapper_sessions.jsonl"
 SUPPORTED_CODEX_SERVICE_TIERS = {"fast", "flex"}
@@ -34,6 +34,14 @@ def compact_tool_label(tool_name: str) -> str:
     if tool_name.startswith("review-"):
         return tool_name[len("review-") :]
     return tool_name
+
+
+def progress_heartbeat_line(tool_name: str, elapsed_seconds: int) -> str:
+    label = compact_tool_label(tool_name)
+    if bool(getattr(sys.stderr, "isatty", lambda: False)()):
+        return f"{label} running ({elapsed_seconds}s)"
+    minutes = max(1, int(elapsed_seconds) // 60)
+    return f"OK {minutes}m: {label}"
 
 
 def codex_exec_command(
@@ -209,7 +217,7 @@ def run_codex(
                     print(f"[{tool_name}] timed out after {elapsed}s", file=sys.stderr, flush=True)
                     break
                 if now - last_progress >= progress_interval_seconds:
-                    print(f"{compact_tool_label(tool_name)} running ({elapsed}s)", file=sys.stderr, flush=True)
+                    print(progress_heartbeat_line(tool_name, elapsed), file=sys.stderr, flush=True)
                     last_progress = now
                 time.sleep(1.0)
             returncode = proc.wait()

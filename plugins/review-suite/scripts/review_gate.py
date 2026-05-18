@@ -13,7 +13,7 @@ from hashlib import blake2s
 from pathlib import Path
 from typing import Any
 
-from review_suite_core import format_command, gate_config, utc_now, utc_now_iso, wrapper_launch_cwd
+from review_suite_core import format_command, gate_config, utc_now, utc_now_iso, wrapper_launch_cwd, write_text
 from review_suite_local import (
     CAPACITY_RETRY_DELAY_SECONDS,
     CAPACITY_RETRY_MAX_ATTEMPTS,
@@ -23,11 +23,10 @@ from review_suite_local import (
     _active_cooldowns,
     _apply_capacity_cooldowns,
     _parse_timestamp,
-    _print_live_completed_run,
+    _progress_status_line,
     _print_stall_warnings,
     _print_transport_events,
     _process_is_running,
-    _running_status_line,
     _transport_hung_after_output,
     _terminate_process_tree,
     _transport_stalled,
@@ -35,7 +34,6 @@ from review_suite_local import (
     build_review_command,
     collect_completed_review_capture,
     ensure_clean_git_worktree,
-    final_display_body,
     format_cooldown_until_for_display,
     format_compact_tokens,
     format_cost_cents,
@@ -46,11 +44,12 @@ from review_suite_local import (
     make_round_id,
     normalize_record_review_cwd_value,
     normalize_review_cwd_value,
-    output_isatty,
     pending_launch_ready,
     public_reviewer_label,
     print_deep_review_wait_note,
     read_jsonl,
+    reviewer_completion_status,
+    reviewer_output_heading,
     state_lock,
     total_usage_tokens,
     uses_native_base_review,
@@ -83,6 +82,8 @@ GATE_SIGNOFF_SCOPE_CHECK = (
     "the next review round; full-suite/CI is merge-readiness, not review-launch. Record full-suite/CI as pending, "
     "passed, failed, or intentionally waived/classified, and do not call a PR final/merge-ready while that is unknown."
 )
+GATE_SIGNOFF_NOTE = "Inspect stored reviewer outputs, then close the gate as clean or findings."
+GATE_SIGNOFF_POLICY = "Classify reviewer items before coding; code only valid findings."
 GATE_FINDINGS_SCOPE_CHECK = (
     "Findings recorded; no workflow anchor. Classify each item before fixing: valid finding, "
     "non-finding suggestion/product preference, or unclear product decision. Code only valid findings. Focused seam "
@@ -368,8 +369,6 @@ def gate_signoff_action_payload(*, round_id: str, state_dir: Path) -> dict[str, 
                 "findings",
             ]
         ),
-        "note": "Inspect the stored reviewer outputs; close as clean only if all reviewers are effectively green.",
-        "scope_check": GATE_SIGNOFF_SCOPE_CHECK,
     }
 
 
@@ -789,19 +788,18 @@ def _select_gate_variants(
 
 
 def _public_gate_run(run: dict[str, Any]) -> dict[str, Any]:
-    usage = dict(run.get("usage") or {})
     return {
         "slot": public_reviewer_label(str(run.get("slot") or "")),
-        "model": str(run.get("variant_id") or ""),
         "status": str(run.get("review_status") or ""),
         "summary": str(run.get("status_summary") or ""),
         "blocked": bool(run.get("grade_blocked")),
         "block": str(run.get("grade_block_reason") or "") or None,
-        "session": str(run.get("session_id") or "") or None,
-        "tokens": run.get("tokens_used") if run.get("tokens_used") is not None else total_usage_tokens(usage),
-        "cost": run.get("cost_usd"),
         "ref": str(run.get("reviewer_output_ref") or "") or None,
     }
+
+
+def _print_live_gate_completed_run(run: dict[str, Any]) -> None:
+    write_text(f"{reviewer_output_heading(run)} {reviewer_completion_status(run)}", stream=sys.stderr)
 
 
 def _record_gate_run(run: dict[str, Any]) -> dict[str, Any]:
@@ -840,14 +838,16 @@ def summarize_gate_round(
     ordered = sorted(runs, key=lambda item: (0 if str(item.get("slot")) == "alpha" else 1, str(item.get("slot"))))
     status = "blocked" if any(bool(run.get("grade_blocked")) for run in ordered) else "signoff_pending"
     payload: dict[str, Any] = {
+        "round_id": round_id,
+        "task": PUBLIC_TASK_BY_GATE[gate_task_class],
         "status": status,
         "blocked": status == "blocked",
         "runs": [_public_gate_run(run) for run in ordered],
     }
     if status == "signoff_pending":
         payload["signoff_required"] = True
-        payload["note"] = "T2/T4 signoff requires the calling agent to inspect reviewer outputs and close the gate as clean or findings."
-        payload["scope_check"] = GATE_SIGNOFF_SCOPE_CHECK
+        payload["note"] = GATE_SIGNOFF_NOTE
+        payload["policy"] = GATE_SIGNOFF_POLICY
     return payload, 1 if status == "blocked" else 0
 
 
@@ -1197,7 +1197,7 @@ def run_gate_round(
     if includes_deep_review_effort([dict(variant) for variant in selection.variants]):
         print_deep_review_wait_note()
     print(
-        f"[review-suite] waiting for {target_reviewer_count} gate reviewers; outputs will stream as each reviewer finishes.",
+        f"[review-suite] waiting for {target_reviewer_count} gate reviewers; statuses will stream as each reviewer finishes.",
         file=sys.stderr,
         flush=True,
     )
@@ -1381,7 +1381,7 @@ def run_gate_round(
                     continue
             completed.append(capture)
             persist_partial()
-            _print_live_completed_run(capture)
+            _print_live_gate_completed_run(capture)
         if len(completed) >= target_reviewer_count:
             break
         now = time.monotonic()
@@ -1394,7 +1394,7 @@ def run_gate_round(
                 review_cwd=review_cwd,
                 warned_slots=stall_warned_slots,
             )
-            print(_running_status_line(active), file=sys.stderr, flush=True)
+            print(_progress_status_line(active), file=sys.stderr, flush=True)
             last_progress = now
         time.sleep(1.0)
 

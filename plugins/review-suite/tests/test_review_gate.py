@@ -12,7 +12,19 @@ SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts"
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from review_gate import GateSelection, _gate_partial_path, _gate_reviewer_count, _launch_gate_run, _select_gate_variants, _snapshot_queue_item, aggregate_gate_records, cleanup_stale_gate_partials, run_gate_round, summarize_gate_round
+from review_gate import (
+    GateSelection,
+    _gate_partial_path,
+    _gate_reviewer_count,
+    _launch_gate_run,
+    _print_live_gate_completed_run,
+    _select_gate_variants,
+    _snapshot_queue_item,
+    aggregate_gate_records,
+    cleanup_stale_gate_partials,
+    run_gate_round,
+    summarize_gate_round,
+)
 
 
 def _write_json(path: Path, payload: dict[str, object]) -> None:
@@ -832,23 +844,26 @@ def test_summarize_gate_round_reports_signoff_pending_and_public_task_name() -> 
     )
 
     assert exit_code == 0
+    assert payload["round_id"] == "gate-1"
+    assert payload["task"] == "review_t2"
     assert payload["status"] == "signoff_pending"
     assert payload["blocked"] is False
     assert payload["signoff_required"] is True
-    assert "non-finding suggestion/product preference" in payload["scope_check"]
-    assert "pause and escalate the tradeoff" in payload["scope_check"]
-    assert "Focused seam validation can be sufficient to launch the next review round" in payload["scope_check"]
-    assert "full-suite/CI is merge-readiness, not review-launch" in payload["scope_check"]
-    assert "pending, passed, failed, or intentionally waived/classified" in payload["scope_check"]
-    assert "do not call a PR final/merge-ready while that is unknown" in payload["scope_check"]
+    assert payload["note"] == "Inspect stored reviewer outputs, then close the gate as clean or findings."
+    assert payload["policy"] == "Classify reviewer items before coding; code only valid findings."
+    assert "scope_check" not in payload
     assert "mode" not in payload
     assert "target" not in payload
     assert "champions" not in payload
     assert "output" not in payload["runs"][0]
     assert "verdict" not in payload["runs"][0]
+    assert "model" not in payload["runs"][0]
+    assert "session" not in payload["runs"][0]
+    assert "tokens" not in payload["runs"][0]
+    assert "cost" not in payload["runs"][0]
 
 
-def test_summarize_gate_round_derives_tokens_from_usage_on_replay() -> None:
+def test_summarize_gate_round_omits_telemetry_from_default_payload() -> None:
     payload, exit_code = summarize_gate_round(
         gate_task_class="phase_gate",
         round_id="gate-usage",
@@ -888,9 +903,27 @@ def test_summarize_gate_round_derives_tokens_from_usage_on_replay() -> None:
 
     assert exit_code == 0
     assert payload["status"] == "signoff_pending"
-    assert payload["runs"][0]["tokens"] == 120
-    assert payload["runs"][1]["tokens"] == 140
+    assert "tokens" not in payload["runs"][0]
+    assert "tokens" not in payload["runs"][1]
+    assert "cost" not in payload["runs"][0]
+    assert "session" not in payload["runs"][0]
     assert "output" not in payload["runs"][0]
+
+
+def test_print_live_gate_completed_run_uses_status_not_review_content(capsys) -> None:
+    _print_live_gate_completed_run(
+        {
+            "slot": "alpha",
+            "review_status": "completed",
+            "status_summary": "P2 - concise finding summary",
+            "reviewer_output": "P2 - concise finding summary\n\nLong reviewer body with details.",
+        }
+    )
+
+    captured = capsys.readouterr()
+    assert "alpha: completed" in captured.err
+    assert "P2 - concise finding summary" not in captured.err
+    assert "Long reviewer body" not in captured.err
 
 
 def test_summarize_gate_round_returns_nonzero_for_blocked_rounds() -> None:
@@ -1074,7 +1107,7 @@ def test_run_gate_round_retries_operational_block_once(monkeypatch, tmp_path: Pa
         }
 
     monkeypatch.setattr("review_gate.collect_completed_review_capture", fake_collect_completed_review_capture)
-    monkeypatch.setattr("review_gate._print_live_completed_run", lambda run: None)
+    monkeypatch.setattr("review_gate._print_live_gate_completed_run", lambda run: None)
     cost_refreshes: list[dict[str, object]] = []
     monkeypatch.setattr(
         "review_gate.refresh_review_cost_report_best_effort",
@@ -1100,6 +1133,7 @@ def test_run_gate_round_retries_operational_block_once(monkeypatch, tmp_path: Pa
     assert exit_code == 0
     assert payload["status"] == "signoff_pending"
     assert payload["action"]["lane"] == "gate-signoff"
+    assert "scope_check" not in payload["action"]
     stored = [json.loads(line) for line in (state_dir / "gate_runs.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
     assert len(stored) == 1
     assert stored[0]["signoff_status"] == "pending"
@@ -1219,7 +1253,7 @@ def test_run_gate_round_replaces_exhausted_gate_reviewer_with_inline_fallback(mo
         }
 
     monkeypatch.setattr("review_gate.collect_completed_review_capture", fake_collect_completed_review_capture)
-    monkeypatch.setattr("review_gate._print_live_completed_run", lambda run: None)
+    monkeypatch.setattr("review_gate._print_live_gate_completed_run", lambda run: None)
     monkeypatch.setattr("review_gate.refresh_review_cost_report_best_effort", lambda **kwargs: None)
 
     payload, exit_code = run_gate_round(
@@ -1354,7 +1388,7 @@ def test_run_gate_round_inline_fallback_skips_cooling_backup(monkeypatch, tmp_pa
             "elapsed_seconds": 1.0,
         },
     )
-    monkeypatch.setattr("review_gate._print_live_completed_run", lambda run: None)
+    monkeypatch.setattr("review_gate._print_live_gate_completed_run", lambda run: None)
     monkeypatch.setattr("review_gate.refresh_review_cost_report_best_effort", lambda **kwargs: None)
 
     payload, exit_code = run_gate_round(
@@ -1539,7 +1573,7 @@ def test_run_gate_round_resumes_partial_snapshot(monkeypatch, tmp_path: Path) ->
             "elapsed_seconds": 1.0,
         },
     )
-    monkeypatch.setattr("review_gate._print_live_completed_run", lambda run: None)
+    monkeypatch.setattr("review_gate._print_live_gate_completed_run", lambda run: None)
 
     payload, exit_code = run_gate_round(
         gate_task_class="phase_gate",
@@ -1807,7 +1841,7 @@ def test_run_gate_round_preserves_waiting_retry_delay_on_resume(monkeypatch, tmp
     monkeypatch.setattr("review_gate.load_roster", lambda path: {})
     monkeypatch.setattr("review_gate._launch_gate_run", fake_launch_gate_run)
     monkeypatch.setattr("review_gate.collect_completed_review_capture", lambda *, slot, **kwargs: outcomes[slot])
-    monkeypatch.setattr("review_gate._print_live_completed_run", lambda run: None)
+    monkeypatch.setattr("review_gate._print_live_gate_completed_run", lambda run: None)
 
     payload, exit_code = run_gate_round(
         gate_task_class="phase_gate",

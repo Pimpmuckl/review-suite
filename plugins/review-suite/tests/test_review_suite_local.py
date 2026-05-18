@@ -17,9 +17,9 @@ from review_suite_local import (
     _apply_capacity_cooldowns,
     _classify_review_result,
     _launch_reviewer_process,
-    _live_output_body,
     _live_review_thread,
     _maybe_retry_capacity_run,
+    _heartbeat_status_line,
     _print_live_completed_run,
     _print_stall_warnings,
     _print_transport_events,
@@ -42,6 +42,7 @@ from review_suite_local import (
     normalize_service_tier,
     output_isatty,
     public_round_result,
+    reviewer_completion_status,
     select_pair,
     variant_service_tier,
     ungraded_round_exposure_records,
@@ -422,6 +423,19 @@ def test_running_status_line_compacts_alive_reviewers(monkeypatch: pytest.Monkey
     assert line == "Running: 42s Alpha, Bravo"
 
 
+def test_heartbeat_status_line_is_minimal(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("review_suite_local.utc_now", lambda: __import__("datetime").datetime.fromisoformat("2026-04-13T12:02:05+00:00"))
+
+    line = _heartbeat_status_line(
+        [
+            {"slot": "Alpha", "started_at": "2026-04-13T12:00:00Z"},
+            {"slot": "Bravo", "started_at": "2026-04-13T12:00:20Z"},
+        ]
+    )
+
+    assert line == "OK 2m: Alpha,Bravo"
+
+
 def test_transport_stalled_requires_reconnect_exhaustion_and_quiet_artifacts(tmp_path: Path) -> None:
     stdout = tmp_path / "review.stdout"
     stderr = tmp_path / "review.stderr"
@@ -558,6 +572,9 @@ def test_collect_round_results_stops_transport_stalled_live_reviewer(
     captured = capsys.readouterr()
     assert "bravo transport: ERROR: Reconnecting... 5/5" in captured.err
     assert "bravo transport stalled (http_fallback_no_output)" in captured.err
+    assert "Running:" not in captured.err
+    assert "OK " in captured.err
+    assert ": bravo" in captured.err
     assert result["runs"][0]["review_status"] == "transport_stalled"
     assert result["runs"][0]["grade_block_reason"] == "review_transport_stalled"
     assert killed == {123}
@@ -615,6 +632,9 @@ def test_collect_round_results_stops_transport_hung_after_output_as_completed(
 
     captured = capsys.readouterr()
     assert "bravo transport hung after output (output_captured_process_still_running)" in captured.err
+    assert "Running:" not in captured.err
+    assert "OK " in captured.err
+    assert ": bravo" in captured.err
     assert result["runs"][0]["review_status"] == "completed"
     assert result["runs"][0]["grade_blocked"] is False
     assert killed == {123}
@@ -654,8 +674,7 @@ def test_print_stall_warnings_flags_heartbeat_only_review(
     )
 
     captured = capsys.readouterr()
-    assert "possible stall: bravo has no visible reviewer activity for 20m" in captured.err
-    assert "Do not rerun solely because of this warning" in captured.err
+    assert "possible stall: bravo idle 20m; wrapper will keep waiting." in captured.err
     assert warned == {"bravo"}
 
 
@@ -685,7 +704,7 @@ def test_print_stall_warnings_flags_empty_rollout(
     )
 
     captured = capsys.readouterr()
-    assert "possible stall: bravo has no visible reviewer activity for 20m" in captured.err
+    assert "possible stall: bravo idle 20m; wrapper will keep waiting." in captured.err
     assert warned == {"bravo"}
 
 
@@ -911,9 +930,10 @@ def test_find_blocking_rounds_for_caller_ignores_dismissed_and_completed_blocked
     assert [payload["round_id"] for payload in blocking] == ["running-round"]
 
 
-def test_live_output_body_prefers_full_output_then_summary() -> None:
-    assert _live_output_body({"reviewer_output": "Full review", "status_summary": "summary"}) == "Full review"
-    assert _live_output_body({"reviewer_output": "", "status_summary": "summary"}) == "summary"
+def test_reviewer_completion_status_never_classifies_review_content() -> None:
+    assert reviewer_completion_status({"reviewer_output": "Full review", "status_summary": "summary", "review_status": "completed"}) == "completed"
+    assert reviewer_completion_status({"reviewer_output": "P2 - bug", "review_status": "completed"}) == "completed"
+    assert reviewer_completion_status({"review_status": "transport_stalled", "grade_block_reason": "review_transport_stalled"}) == "review_transport_stalled"
 
 
 def test_maybe_retry_capacity_run_emits_retry_notice(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys) -> None:
@@ -1001,13 +1021,15 @@ def test_print_live_completed_run_includes_terminal_status(capsys) -> None:
         {
             "slot": "Alpha",
             "review_status": "completed",
+            "status_summary": "summary only",
             "reviewer_output": "Full review",
         }
     )
 
     captured = capsys.readouterr()
-    assert "Alpha:" in captured.err
-    assert "Full review" in captured.err
+    assert "Alpha: completed" in captured.err
+    assert "summary only" not in captured.err
+    assert "Full review" not in captured.err
 
 
 def test_public_round_result_includes_public_task_name() -> None:

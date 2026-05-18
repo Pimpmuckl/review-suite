@@ -124,7 +124,7 @@ def includes_deep_review_effort(items: list[dict[str, Any]]) -> bool:
 
 def print_deep_review_wait_note() -> None:
     print(
-        "[review-suite] deep review selected; reviews can take up to 20m. Wait for wrapper output; do not inspect state files or rerun unless the wrapper exits.",
+        "[review-suite] deep review selected; reviews can take up to 20m. Wait for wrapper output; do not inspect state files/logs or rerun unless the wrapper exits.",
         file=sys.stderr,
         flush=True,
     )
@@ -301,11 +301,11 @@ def _manual_prompt_too_large_message(
         preview = ", ".join(str(path) for path in paths[:3])
         suffix = f" Examples: {preview}." if preview else ""
         return (
-            f"{message} Dirty worktree paths outside the committed branch diff forced token-heavy manual diff mode.{suffix} "
-            "Clean, stash, or commit unrelated dirty files, then rerun the same base review without --allow-dirty so the wrapper can use native --base review."
+            f"{message} Dirty worktree paths outside the committed branch diff were included.{suffix} "
+            "Clean, stash, or commit unrelated dirty files, then rerun without --allow-dirty."
         )
     return (
-        f"{message} Split the change into a smaller review slice, or remove custom instructions so a clean base review can use native --base mode when possible."
+        f"{message} Split the change into a smaller review slice, or remove custom instructions."
     )
 
 
@@ -1231,8 +1231,7 @@ def public_reviewer_label(slot: str) -> str:
     return slot
 
 
-def _running_status_line(runs: list[dict[str, Any]]) -> str:
-    labels = [public_reviewer_label(str(run["slot"])) for run in runs]
+def _elapsed_seconds_for_runs(runs: list[dict[str, Any]]) -> int:
     elapsed = 0
     for run in runs:
         started_at = run.get("started_at")
@@ -1240,7 +1239,25 @@ def _running_status_line(runs: list[dict[str, Any]]) -> str:
             continue
         value = int((utc_now() - datetime.fromisoformat(str(started_at).replace("Z", "+00:00"))).total_seconds())
         elapsed = max(elapsed, value)
+    return elapsed
+
+
+def _running_status_line(runs: list[dict[str, Any]]) -> str:
+    labels = [public_reviewer_label(str(run["slot"])) for run in runs]
+    elapsed = _elapsed_seconds_for_runs(runs)
     return f"Running: {elapsed}s {', '.join(labels)}"
+
+
+def _heartbeat_status_line(runs: list[dict[str, Any]]) -> str:
+    labels = [public_reviewer_label(str(run["slot"])) for run in runs]
+    minutes = max(1, _elapsed_seconds_for_runs(runs) // 60)
+    return f"OK {minutes}m: {','.join(labels)}"
+
+
+def _progress_status_line(runs: list[dict[str, Any]]) -> str:
+    if progress_output_isatty():
+        return _running_status_line(runs)
+    return _heartbeat_status_line(runs)
 
 
 def _run_started_at_datetime(run: dict[str, Any]) -> datetime | None:
@@ -1497,27 +1514,27 @@ def _print_stall_warnings(
             continue
         label = public_reviewer_label(slot)
         print(
-            f"[review-suite] possible stall: {label} has no visible reviewer activity for {idle_seconds // 60}m. "
-            "Token heartbeats alone do not prove progress; wrapper will keep waiting. Do not rerun solely because of this warning.",
+            f"[review-suite] possible stall: {label} idle {idle_seconds // 60}m; wrapper will keep waiting.",
             file=sys.stderr,
             flush=True,
         )
         warned_slots.add(slot)
 
 
-def _live_output_body(run: dict[str, Any]) -> str:
-    reviewer_output = str(run.get("reviewer_output") or "").strip()
-    if reviewer_output:
-        return reviewer_output
-    status_summary = str(run.get("status_summary") or "").strip()
-    if status_summary:
-        return status_summary
+def reviewer_completion_status(run: dict[str, Any]) -> str:
+    block = str(run.get("grade_block_reason") or "").strip()
+    if block:
+        return block
     status = str(run.get("review_status") or "").strip()
-    return f"({status or 'no output'})"
+    return status or "unknown"
 
 
 def output_isatty() -> bool:
     return bool(getattr(sys.stdout, "isatty", lambda: False)())
+
+
+def progress_output_isatty() -> bool:
+    return bool(getattr(sys.stderr, "isatty", lambda: False)())
 
 
 def reviewer_output_heading(run: dict[str, Any]) -> str:
@@ -1529,9 +1546,7 @@ def reviewer_output_heading(run: dict[str, Any]) -> str:
 
 
 def _print_live_completed_run(run: dict[str, Any]) -> None:
-    write_text(reviewer_output_heading(run), stream=sys.stderr)
-    write_text(_live_output_body(run), stream=sys.stderr)
-    write_text("", stream=sys.stderr)
+    write_text(f"{reviewer_output_heading(run)} {reviewer_completion_status(run)}", stream=sys.stderr)
 
 
 def final_display_body(run: dict[str, Any]) -> str:
@@ -2621,14 +2636,14 @@ def _classify_review_result(
     if capacity:
         return {
             "review_status": "interrupted_capacity",
-            "status_summary": "Review interrupted because the selected model was at capacity. Do not grade this against the model.",
+            "status_summary": "selected_model_at_capacity",
             "grade_blocked": True,
             "grade_block_reason": "selected_model_at_capacity",
         }
     if _tooling_failure_detected(stderr_text=stderr_text, reviewer_output=output):
         return {
             "review_status": "tooling_failure",
-            "status_summary": "Reviewer could not inspect the diff because of an environment/tooling failure. Do not grade this against the model.",
+            "status_summary": "review_tooling_failure",
             "grade_blocked": True,
             "grade_block_reason": "review_tooling_failure",
         }
@@ -3292,9 +3307,9 @@ def collect_round_results(
     last_progress = time.monotonic()
     announced_terminal_states: set[str] = set()
     stall_warned_slots: set[str] = set()
-    live_output_streamed_bodies: dict[str, str] = {}
+    live_completion_statuses: dict[str, str] = {}
     print(
-        "[review-suite] waiting for both reviewers; outputs will stream as each reviewer finishes.",
+        "[review-suite] waiting for both reviewers; statuses will stream as each reviewer finishes.",
         file=sys.stderr,
         flush=True,
     )
@@ -3349,7 +3364,7 @@ def collect_round_results(
             item.update(terminal_summary)
             write_round(state_dir, round_payload)
             _print_live_completed_run(terminal_summary)
-            live_output_streamed_bodies[slot] = _live_output_body(terminal_summary)
+            live_completion_statuses[slot] = reviewer_completion_status(terminal_summary)
             announced_terminal_states.add(slot)
         if restarted_capacity_run:
             continue
@@ -3389,7 +3404,7 @@ def collect_round_results(
                 review_cwd=review_cwd,
                 warned_slots=stall_warned_slots,
             )
-            print(_running_status_line(alive), file=sys.stderr, flush=True)
+            print(_progress_status_line(alive), file=sys.stderr, flush=True)
             last_progress = now
         time.sleep(1.0)
 
@@ -3428,7 +3443,7 @@ def collect_round_results(
     round_payload = deepcopy(round_payload)
     round_payload["status"] = "completed"
     round_payload["review_completed_at"] = utc_now_iso()
-    round_payload["live_output_streamed_bodies"] = dict(sorted(live_output_streamed_bodies.items()))
+    round_payload["live_completion_statuses"] = dict(sorted(live_completion_statuses.items()))
     round_payload["runs"] = completed_runs
     cooldown_updates = _apply_capacity_cooldowns(state_dir=state_dir, round_payload=round_payload)
     if cooldown_updates:

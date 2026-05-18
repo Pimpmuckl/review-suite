@@ -336,9 +336,9 @@ def test_collect_round_results_persists_each_exited_reviewer_immediately(
     )
     assert alpha_partial["runs"][0]["review_status"] == "completed"
     assert [run["slot"] for run in streamed] == ["alpha", "bravo"]
-    assert completed["live_output_streamed_bodies"] == {
-        "alpha": "alpha completed body",
-        "bravo": "bravo completed body",
+    assert completed["live_completion_statuses"] == {
+        "alpha": "completed",
+        "bravo": "completed",
     }
     assert all("stdout_path" not in run and "stderr_path" not in run and "pid" not in run for run in completed["runs"])
     assert not alpha_stdout.exists()

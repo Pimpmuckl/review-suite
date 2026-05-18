@@ -68,6 +68,7 @@ from review_suite_local import (
     public_task_name,
     round_has_live_reviewer_process,
     output_isatty,
+    reviewer_completion_status,
     reviewer_output_heading,
     usable_output_slots,
     write_json,
@@ -178,7 +179,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--caller-id")
     run.add_argument("--ignore-pending-grades", action="store_true")
     run.add_argument("--winner", help="alpha, bravo, or tie")
-    run.add_argument("--basis", help="why the winner won")
+    run.add_argument("--basis", help="grade basis")
     run.add_argument("--note")
     run.add_argument("--alpha-note")
     run.add_argument("--bravo-note")
@@ -249,7 +250,7 @@ def build_parser() -> argparse.ArgumentParser:
     grade.add_argument("--round-id")
     grade.add_argument("--task-id")
     grade.add_argument("--winner", required=True, help="alpha, bravo, tie, or a concrete variant id")
-    grade.add_argument("--basis", required=True, help="why the winner won")
+    grade.add_argument("--basis", required=True, help="grade basis")
     grade.add_argument("--note")
     grade.add_argument("--alpha-note")
     grade.add_argument("--bravo-note")
@@ -405,26 +406,15 @@ def _prompt_basis(rubric: dict[str, object]) -> str:
 
 
 def _print_findings(result: dict[str, object]) -> None:
-    streamed_bodies = {str(key): str(value) for key, value in dict(result.get("live_output_streamed_bodies", {})).items()}
+    streamed_statuses = {str(key): str(value) for key, value in dict(result.get("live_completion_statuses", {})).items()}
     printed = False
     for raw_run in result.get("runs", []):
         run = _finalized_run_summary(raw_run) if isinstance(raw_run, dict) else {}
         slot = str(run.get("slot") or "reviewer")
-        emitted_body = streamed_bodies.get(str(slot))
-        final_body = final_display_body(run)
-        if bool(run.get("grade_blocked")):
-            if emitted_body and emitted_body == final_body:
-                continue
-            print(reviewer_output_heading(run), file=sys.stderr, flush=True)
-            print(final_body, file=sys.stderr, flush=True)
-            print("", file=sys.stderr, flush=True)
-            printed = True
+        status = reviewer_completion_status(run)
+        if streamed_statuses.get(str(slot)) == status:
             continue
-        if emitted_body and emitted_body == final_body:
-            continue
-        print(reviewer_output_heading(run), file=sys.stderr, flush=True)
-        print(final_body, file=sys.stderr, flush=True)
-        print("", file=sys.stderr, flush=True)
+        print(f"{reviewer_output_heading(run)} {status}", file=sys.stderr, flush=True)
         printed = True
     return printed
 
@@ -476,6 +466,18 @@ def _grade_command(
         ]
     )
     return format_command(parts)
+
+
+def _show_round_command(*, round_id: str) -> str:
+    return format_command(
+        [
+            sys.executable,
+            Path(__file__).resolve().as_posix(),
+            "show-round",
+            "--round-id",
+            round_id,
+        ]
+    )
 
 
 def _dismiss_round_command(
@@ -634,6 +636,11 @@ def _completed_round_payload(
     manual: bool | None = None,
 ) -> dict[str, object]:
     actions: list[dict[str, object]] = []
+    show_command = None
+    round_id = str(round_result.get("round_id") or "").strip()
+    if round_id:
+        show_command = _show_round_command(round_id=round_id)
+        actions.append({"kind": "inspect", "cmd": show_command})
     if grade_command:
         actions.append({"kind": "grade", "cmd": grade_command})
     if reroll_rows:
@@ -646,7 +653,11 @@ def _completed_round_payload(
         and grade is None
         and not manual
     ):
-        return {"To-Do": {"grade": grade_command}}
+        todo: dict[str, str] = {}
+        if show_command:
+            todo["inspect"] = show_command
+        todo["grade"] = grade_command
+        return {"To-Do": todo}
     payload: dict[str, object] = {
         "status": status,
         "blocked": bool(round_result.get("blocked")),

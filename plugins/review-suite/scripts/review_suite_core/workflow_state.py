@@ -976,10 +976,9 @@ def same_tier_review_pressure(
         return None
     status = "high_pressure" if count >= SAME_TIER_REVIEW_HIGH_PRESSURE_THRESHOLD else "caution"
     instruction = (
-        "Before another same-tier review, inspect the full diff and state in one or two sentences why the core approach is still right; "
-        "if the findings are not converging or reviewers are flagging unclear product decisions, pause and discuss the approach with the user or parent agent."
+        "Before another same-tier review, check the full diff. If findings are not converging or product decisions are unclear, pause and discuss."
         if status == "high_pressure"
-        else "Before another same-tier review, briefly confirm the remaining findings are converging and patch-sized; escalate unclear product decisions to the user or parent agent."
+        else "Before another same-tier review, confirm the remaining findings are converging and patch-sized."
     )
     return {
         "status": status,

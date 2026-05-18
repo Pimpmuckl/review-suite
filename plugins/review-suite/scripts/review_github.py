@@ -349,18 +349,6 @@ def sorted_cycle_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(items, key=lambda item: (item_timestamp(item) or utc_now(), str(item.get("id") or "")))
 
 
-def latest_top_level_response_item(items: list[dict[str, Any]]) -> dict[str, Any] | None:
-    top_level = [
-        item
-        for item in sorted_cycle_items(items)
-        if str(item.get("kind") or "") in {"issue_comment", "review"} and str(item.get("body") or "").strip()
-    ]
-    if top_level:
-        return top_level[-1]
-    text_items = [item for item in sorted_cycle_items(items) if str(item.get("body") or "").strip()]
-    return text_items[-1] if text_items else None
-
-
 def cycle_coverage_timestamp(items: list[dict[str, Any]], *, head_sha: str) -> datetime | None:
     explicit_head_matches = [
         response_creation_timestamp(item)
@@ -428,12 +416,6 @@ def public_cycle_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if items:
         ordered_items = sorted_cycle_items(items)
         result["responses"] = [public_response_item(item) for item in ordered_items]
-        main_response = latest_top_level_response_item(ordered_items)
-        if main_response is not None:
-            result["main_response"] = public_response_item(main_response)
-        child_comments = [public_response_item(item) for item in ordered_items if str(item.get("kind") or "") == "review_comment"]
-        if child_comments:
-            result["child_comments"] = child_comments
     attempts = payload.get("request_attempts")
     if attempts not in (None, 0, 1):
         result["attempts"] = attempts
@@ -719,8 +701,9 @@ def run_review_cycle(
         if status_interval_seconds > 0:
             if last_status_emit_at is None or int((now - last_status_emit_at).total_seconds()) >= status_interval_seconds:
                 seconds_since_request = max(int((now - anchor_since).total_seconds()), 0)
+                minutes_since_request = max(1, seconds_since_request // 60)
                 emit_state_change(
-                    f"waiting for review response ({seconds_since_request}s since request, eyes={'yes' if eyes_confirmed else 'no'}, responses={len(collected_items)})"
+                    f"OK {minutes_since_request}m: github eyes={'yes' if eyes_confirmed else 'no'} responses={len(collected_items)}"
                 )
                 last_status_emit_at = now
         seconds_since_request = int((now - anchor_since).total_seconds())

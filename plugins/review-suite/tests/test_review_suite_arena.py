@@ -42,7 +42,7 @@ def test_print_findings_keeps_only_unstreamed_recap_content(capsys) -> None:
     _print_findings(
         {
             "round_id": "round-123",
-            "live_output_streamed_bodies": {"Alpha": "full body"},
+            "live_completion_statuses": {"Alpha": "completed"},
             "runs": [
                 {
                     "slot": "Alpha",
@@ -66,7 +66,9 @@ def test_print_findings_keeps_only_unstreamed_recap_content(capsys) -> None:
     assert "ALPHA" not in captured.err
     assert "full body" not in captured.err
     assert "Bravo:" in captured.err
-    assert "Bravo body" in captured.err
+    assert "completed" in captured.err
+    assert "No findings." not in captured.err
+    assert "Bravo body" not in captured.err
 
 
 def test_public_round_result_does_not_repeat_streamed_output() -> None:
@@ -92,11 +94,11 @@ def test_public_round_result_does_not_repeat_streamed_output() -> None:
     assert "output" not in result["runs"][0]
 
 
-def test_print_findings_keeps_final_body_when_live_and_final_text_differ(capsys) -> None:
+def test_print_findings_keeps_compact_summary_when_live_and_final_text_differ(capsys) -> None:
     _print_findings(
         {
             "round_id": "round-456",
-            "live_output_streamed_bodies": {"Alpha": "placeholder"},
+            "live_completion_statuses": {"Alpha": "other_status"},
             "runs": [
                 {
                     "slot": "Alpha",
@@ -110,7 +112,10 @@ def test_print_findings_keeps_final_body_when_live_and_final_text_differ(capsys)
     )
 
     captured = capsys.readouterr()
-    assert "Recovered full body" in captured.err
+    assert "Alpha:" in captured.err
+    assert "completed" in captured.err
+    assert "placeholder" not in captured.err
+    assert "Recovered full body" not in captured.err
 
 
 def test_print_findings_keeps_unstreamed_blocked_runs(capsys) -> None:
@@ -432,7 +437,7 @@ def test_cmd_show_last_prints_latest_outputs_per_local_lane(tmp_path: Path, caps
 def test_print_findings_skips_blocked_runs_when_body_already_streamed(capsys) -> None:
     _print_findings(
         {
-            "live_output_streamed_bodies": {"Alpha": "Recovered full body"},
+            "live_completion_statuses": {"Alpha": "selected_model_at_capacity"},
             "runs": [
                 {
                     "slot": "Alpha",
@@ -478,6 +483,20 @@ def test_completed_round_payload_success_only_emits_grade_todo() -> None:
     )
 
     assert payload == {"To-Do": {"grade": "grade-cmd"}}
+
+
+def test_completed_round_payload_includes_inspect_todo_when_round_id_is_known() -> None:
+    payload = _completed_round_payload(
+        round_result={
+            "round_id": "round-123",
+            "blocked": False,
+            "runs": [],
+        },
+        grade_command="grade-cmd",
+    )
+
+    assert payload["To-Do"]["grade"] == "grade-cmd"
+    assert "show-round --round-id round-123" in payload["To-Do"]["inspect"]
 
 
 def test_has_direct_grade_inputs_requires_complete_tuple() -> None:

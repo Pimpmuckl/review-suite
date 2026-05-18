@@ -71,7 +71,7 @@ def test_request_body_matching_is_exact_after_whitespace_normalization() -> None
     )
 
 
-def test_public_cycle_payload_surfaces_verbatim_main_response_and_child_comments() -> None:
+def test_public_cycle_payload_surfaces_verbatim_responses_without_duplicate_aliases() -> None:
     payload = {
         "status": "response_found",
         "pr_number": 87,
@@ -103,23 +103,11 @@ def test_public_cycle_payload_surfaces_verbatim_main_response_and_child_comments
     assert "summary" not in result
     assert "findings" not in result
     assert result["attempts"] == 2
-    assert result["main_response"] == {
-        "kind": "issue_comment",
-        "url": "https://github.com/example-owner/example-repo/pull/87#issuecomment-1",
-        "body": "Codex Review: Didn't find any major issues. Already looking forward to the next diff.",
-        "created_at": "2026-04-20T10:01:00Z",
-    }
-    assert result["child_comments"] == [
-        {
-            "kind": "review_comment",
-            "url": "https://github.com/example-owner/example-repo/pull/87#discussion_r1",
-            "body": "Please rename this helper for clarity.",
-            "created_at": "2026-04-20T10:01:05Z",
-            "loc": "src/app.ts:42",
-        }
-    ]
+    assert "main_response" not in result
+    assert "child_comments" not in result
     assert result["responses"][0]["body"] == "Codex Review: Didn't find any major issues. Already looking forward to the next diff."
     assert result["responses"][1]["body"] == "Please rename this helper for clarity."
+    assert result["responses"][1]["loc"] == "src/app.ts:42"
 
 
 def test_inspect_existing_cycle_reuses_any_bot_response_without_cleanliness_judgment(monkeypatch) -> None:
@@ -1076,4 +1064,4 @@ def test_run_review_cycle_uses_status_interval_seconds_for_wait_updates(monkeypa
     )
 
     assert payload["status"] == "timeout"
-    assert any(message.startswith("waiting for review response") for message in events)
+    assert any(message == "OK 1m: github eyes=no responses=0" for message in events)
