@@ -164,6 +164,11 @@ def create_cycle(
             "status": "none",
             "retry_count": 0,
         },
+        "review_progress": {
+            "next_step_index": 0,
+            "current_step": None,
+            "completed_steps": [],
+        },
         "rounds": [],
         "decisions": [],
         "active_findings": None,
@@ -268,6 +273,169 @@ def _upsert_decision(
 def _set_stage(state: dict[str, Any], stage: str, pending_action: dict[str, Any] | None = None) -> None:
     state["stage"] = stage
     state["pending_action"] = _compact(deepcopy(pending_action or {})) or None
+
+
+def _nonnegative_int(value: Any, *, field: str) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field} must be an integer") from exc
+    if number < 0:
+        raise ValueError(f"{field} must be >= 0")
+    return number
+
+
+def _review_plan_steps(state: dict[str, Any]) -> list[dict[str, Any]]:
+    plan = state.get("review_plan")
+    if not isinstance(plan, dict):
+        return []
+    return [dict(item) for item in list(plan.get("steps") or []) if isinstance(item, dict)]
+
+
+def _review_progress(state: dict[str, Any]) -> dict[str, Any]:
+    progress = dict(state.get("review_progress") or {})
+    completed = [dict(item) for item in list(progress.get("completed_steps") or []) if isinstance(item, dict)]
+    current = progress.get("current_step")
+    return {
+        "next_step_index": _nonnegative_int(progress.get("next_step_index", len(completed)), field="review_progress.next_step_index"),
+        "current_step": dict(current) if isinstance(current, dict) else None,
+        "completed_steps": completed,
+        **({"next_step_name": str(progress.get("next_step_name"))} if str(progress.get("next_step_name") or "").strip() else {}),
+    }
+
+
+def _review_step_name(state: dict[str, Any], step_index: int) -> str | None:
+    steps = _review_plan_steps(state)
+    if step_index < 0 or step_index >= len(steps):
+        return None
+    return _optional_text(steps[step_index].get("name"))
+
+
+def _set_review_progress(
+    state: dict[str, Any],
+    *,
+    next_step_index: int,
+    current_step: dict[str, Any] | None,
+    completed_steps: list[dict[str, Any]] | None = None,
+) -> None:
+    progress = _review_progress(state)
+    index = _nonnegative_int(next_step_index, field="review_progress.next_step_index")
+    progress["next_step_index"] = index
+    progress["current_step"] = deepcopy(current_step) if current_step else None
+    if completed_steps is not None:
+        progress["completed_steps"] = deepcopy(completed_steps)
+    next_step_name = _review_step_name(state, index)
+    if next_step_name:
+        progress["next_step_name"] = next_step_name
+    else:
+        progress.pop("next_step_name", None)
+    state["review_progress"] = progress
+
+
+def next_review_profile_step(state: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+    progress = _review_progress(state)
+    step_index = int(progress["next_step_index"])
+    steps = _review_plan_steps(state)
+    if step_index >= len(steps):
+        raise ValueError("no review profile steps remain")
+    return step_index, dict(steps[step_index])
+
+
+def review_profile_has_next_step(state: dict[str, Any]) -> bool:
+    progress = _review_progress(state)
+    return int(progress["next_step_index"]) < len(_review_plan_steps(state))
+
+
+def mark_review_step_pending(
+    state: dict[str, Any],
+    *,
+    round_id: str,
+    lane: str,
+    step_index: int,
+    step_name: str,
+    reviewed_head: str | None = None,
+) -> dict[str, Any]:
+    index = _nonnegative_int(step_index, field="step_index")
+    name = _required_text(step_name, field="step_name")
+    next_state = mark_decision_pending(
+        state,
+        round_id=round_id,
+        lane=lane,
+        reviewed_head=reviewed_head,
+        pending_action={
+            "kind": "decision",
+            "round_id": round_id,
+            "lane": lane,
+            "step_index": index,
+            "step": name,
+        },
+    )
+    profile_step = {
+        "index": index,
+        "name": name,
+        "round_id": _required_text(round_id, field="round_id"),
+        "lane": _required_text(lane, field="lane"),
+    }
+    for item in list(next_state.get("rounds") or []):
+        if isinstance(item, dict) and item.get("round_id") == round_id:
+            item["profile_step"] = {"index": index, "name": name}
+            break
+    _set_review_progress(next_state, next_step_index=index, current_step=profile_step)
+    return next_state
+
+
+def _profile_step_for_round(state: dict[str, Any], round_id: str) -> dict[str, Any] | None:
+    progress = _review_progress(state)
+    current = progress.get("current_step")
+    if isinstance(current, dict) and current.get("round_id") == round_id:
+        return current
+    pending = dict(state.get("pending_action") or {})
+    if pending.get("round_id") == round_id and "step_index" in pending and pending.get("step"):
+        return {
+            "index": pending.get("step_index"),
+            "name": pending.get("step"),
+            "round_id": round_id,
+            "lane": pending.get("lane"),
+        }
+    for item in list(state.get("rounds") or []):
+        if not isinstance(item, dict) or item.get("round_id") != round_id:
+            continue
+        profile_step = item.get("profile_step")
+        if isinstance(profile_step, dict):
+            return {
+                "index": profile_step.get("index"),
+                "name": profile_step.get("name"),
+                "round_id": round_id,
+                "lane": item.get("lane"),
+            }
+    return None
+
+
+def _complete_profile_step(state: dict[str, Any], *, round_id: str, lane: str, reviewed_head: str) -> bool:
+    profile_step = _profile_step_for_round(state, round_id)
+    if not profile_step:
+        return False
+    index = _nonnegative_int(profile_step.get("index"), field="profile_step.index")
+    name = _required_text(profile_step.get("name"), field="profile_step.name")
+    progress = _review_progress(state)
+    completed = list(progress["completed_steps"])
+    completed_item = _compact(
+        {
+            "index": index,
+            "name": name,
+            "round_id": _required_text(round_id, field="round_id"),
+            "lane": _required_text(lane, field="lane"),
+            "reviewed_head": reviewed_head,
+        }
+    )
+    for item in completed:
+        if item.get("round_id") == round_id:
+            item.update(completed_item)
+            break
+    else:
+        completed.append(completed_item)
+    _set_review_progress(state, next_step_index=max(int(progress["next_step_index"]), index + 1), current_step=None, completed_steps=completed)
+    return True
 
 
 def deslop_is_ready(state: dict[str, Any]) -> bool:
@@ -581,6 +749,7 @@ def record_clean_decision(
         gate=gate_context,
     )
     next_state.setdefault("review_heads", {})["last_reviewed_head"] = head
+    completed_profile_step = False
     if active_gate:
         next_state.setdefault("review_heads", {})["last_gate_clean_head"] = head
         resolved = _compact(
@@ -597,6 +766,21 @@ def record_clean_decision(
         if not any(isinstance(item, dict) and item.get("source_round_id") == resolved.get("source_round_id") for item in resolved_items):
             resolved_items.append(resolved)
         next_state["active_findings"] = None
+    else:
+        completed_profile_step = _complete_profile_step(next_state, round_id=round_id, lane=resolved_lane, reviewed_head=head)
+    if completed_profile_step and review_profile_has_next_step(next_state):
+        progress = _review_progress(next_state)
+        _set_review_green(next_state, "unknown")
+        _set_stage(
+            next_state,
+            STAGE_CREATED,
+            {
+                "kind": "run-review-step",
+                "step_index": progress.get("next_step_index"),
+                "step": progress.get("next_step_name"),
+            },
+        )
+        return next_state
     _set_review_green(next_state, "passed")
     _set_stage(next_state, STAGE_REVIEW_GREEN)
     return next_state

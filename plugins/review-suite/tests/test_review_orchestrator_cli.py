@@ -193,7 +193,7 @@ def test_orchestrator_review_helper_uses_phase_prompt_without_predecision_anchor
 
 def test_create_resume_and_id_reprint_use_one_pending_action(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     deslop_calls = _stub_deslop(monkeypatch)
-    review_calls = _stub_review(monkeypatch)
+    review_calls = _stub_review(monkeypatch, "phase_review-round-1", "phase_review-round-2")
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
     _init_repo(repo)
@@ -242,6 +242,50 @@ def test_create_resume_and_id_reprint_use_one_pending_action(monkeypatch: pytest
     assert by_id["Action"] == resumed["Action"]
     assert len(_cycle_payload(state_dir, public_id)["rounds"]) == 1
     assert len(review_calls) == 1
+
+    exit_code, first_clean = _run_review(monkeypatch, ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)])
+    assert exit_code == 0
+    assert first_clean["review"] == public_id
+    assert first_clean["stage"] == "created"
+    assert set(dict(first_clean["Action"])) == {"cmd"}
+    assert f"--id {public_id}" in str(first_clean["Action"]["cmd"])
+    assert "--decision" not in str(first_clean["Action"]["cmd"])
+    state = _cycle_payload(state_dir, public_id)
+    assert state["pending_action"] == {"kind": "run-review-step", "step_index": 1, "step": "precision-signoff"}
+    assert state["review_progress"]["completed_steps"] == [
+        {
+            "index": 0,
+            "name": "broad-discovery",
+            "round_id": "phase_review-round-1",
+            "lane": "review_t1",
+            "reviewed_head": state["rounds"][0]["reviewed_head"],
+        }
+    ]
+    assert len(review_calls) == 1
+
+    exit_code, second_step = _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+    assert exit_code == 0
+    assert second_step["review"] == public_id
+    assert second_step["stage"] == "decision-pending"
+    assert "--decision clean" in str(second_step["Action"]["cmd"])
+    assert len(review_calls) == 2
+    assert review_calls[0]["step_name"] == "broad-discovery"
+    assert review_calls[1]["step_name"] == "precision-signoff"
+    state = _cycle_payload(state_dir, public_id)
+    assert len(state["rounds"]) == 2
+    assert state["rounds"][1]["round_id"] == "phase_review-round-2"
+
+    exit_code, final_clean = _run_review(monkeypatch, ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)])
+    assert exit_code == 0
+    assert final_clean["stage"] == "review-green"
+    assert final_clean["Action"] == {"status": "none"}
+    state = _cycle_payload(state_dir, public_id)
+    assert state["pending_action"] is None
+    assert state["validation"]["review_green"] == "passed"
+    assert [item["round_id"] for item in state["review_progress"]["completed_steps"]] == [
+        "phase_review-round-1",
+        "phase_review-round-2",
+    ]
 
 
 def test_findings_fix_progression_and_clean_decision(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -345,6 +389,14 @@ def test_emergency_mode_skips_deslop_and_runs_review(monkeypatch: pytest.MonkeyP
     assert exit_code == 0
     assert payload["stage"] == "decision-pending"
     assert set(dict(payload["Action"])) == {"cmd", "alt"}
+    assert len(review_calls) == 1
+    public_id = str(payload["review"])
+
+    exit_code, clean = _run_review(monkeypatch, ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)])
+
+    assert exit_code == 0
+    assert clean["stage"] == "review-green"
+    assert clean["Action"] == {"status": "none"}
     assert len(review_calls) == 1
 
 

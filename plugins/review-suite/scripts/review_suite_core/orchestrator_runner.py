@@ -15,9 +15,11 @@ from .orchestrator_state import (
     STAGE_DECISION_PENDING,
     deslop_is_ready,
     deslop_should_run,
-    mark_decision_pending,
     mark_deslop_done,
     mark_deslop_failed,
+    mark_review_step_pending,
+    next_review_profile_step,
+    review_profile_has_next_step,
 )
 from .paths import cwd_path_from_normalized
 from .workflow_state import current_head, merge_base
@@ -104,25 +106,19 @@ def _review_should_run(state: dict[str, Any]) -> bool:
         return False
     if not deslop_is_ready(state):
         return False
-    if list(state.get("rounds") or []):
-        return False
     pending_kind = dict(state.get("pending_action") or {}).get("kind")
-    return pending_kind in (None, "resume-after-deslop")
+    return pending_kind in (None, "resume-after-deslop", "run-review-step") and review_profile_has_next_step(state)
 
 
-def _first_review_step(state: dict[str, Any]) -> dict[str, Any]:
-    plan = dict(state.get("review_plan") or {})
-    steps = [dict(item) for item in list(plan.get("steps") or []) if isinstance(item, dict)]
-    if not steps:
-        raise ValueError("state.review_plan.steps[0] is required before running review")
-    step = steps[0]
+def _next_review_step(state: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+    step_index, step = next_review_profile_step(state)
     for key in ("name", "count", "model", "reasoning_effort"):
         if not str(step.get(key) or "").strip():
-            raise ValueError(f"state.review_plan.steps[0].{key} is required")
+            raise ValueError(f"state.review_plan.steps[{step_index}].{key} is required")
     step["count"] = int(step["count"])
     if int(step["count"]) <= 0:
-        raise ValueError("state.review_plan.steps[0].count must be > 0")
-    return step
+        raise ValueError(f"state.review_plan.steps[{step_index}].count must be > 0")
+    return step_index, step
 
 
 def _identity_cwd(state: dict[str, Any]) -> Path:
@@ -178,8 +174,8 @@ def run_review_step(**kwargs: Any) -> dict[str, object]:
     return run_orchestrator_review_step(**kwargs)
 
 
-def _run_initial_review_once(state: dict[str, Any], *, state_dir: Path) -> OrchestratorRunnerResult:
-    step = _first_review_step(state)
+def _run_profile_review_once(state: dict[str, Any], *, state_dir: Path) -> OrchestratorRunnerResult:
+    step_index, step = _next_review_step(state)
     cwd = _identity_cwd(state)
     scope = _review_scope(state, cwd)
     review_result = run_review_step(
@@ -203,16 +199,13 @@ def _run_initial_review_once(state: dict[str, Any], *, state_dir: Path) -> Orche
     if not round_id:
         raise ValueError("review step did not return a round_id")
     reviewed_head = str(review_result.get("reviewed_head") or scope.get("reviewed_head") or "").strip() or None
-    next_state = mark_decision_pending(
+    next_state = mark_review_step_pending(
         state,
         round_id=round_id,
         lane=INITIAL_REVIEW_LANE,
+        step_index=step_index,
+        step_name=str(step["name"]),
         reviewed_head=reviewed_head,
-        pending_action={
-            "kind": "decision",
-            "round_id": round_id,
-            "lane": INITIAL_REVIEW_LANE,
-        },
     )
     return OrchestratorRunnerResult(
         _attach_review_result(next_state, review_result),
@@ -225,7 +218,7 @@ def run_one_expensive_step(state: dict[str, Any], *, state_dir: Path | None = No
     if deslop_should_run(state):
         return _run_deslop_once(state)
     if _review_should_run(state):
-        return _run_initial_review_once(state, state_dir=state_dir or Path.home() / ".codex" / "state" / "review-suite")
+        return _run_profile_review_once(state, state_dir=state_dir or Path.home() / ".codex" / "state" / "review-suite")
     if state.get("stage") == STAGE_DECISION_PENDING:
         return OrchestratorRunnerResult(state, ran_step=False)
     return OrchestratorRunnerResult(state, ran_step=False)

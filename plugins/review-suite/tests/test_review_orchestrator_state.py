@@ -27,6 +27,7 @@ from review_suite_core.orchestrator_state import (
     mark_local_green_handoff,
     mark_retry_requested,
     mark_running,
+    mark_review_step_pending,
     no_work_stage_is_idle,
     record_clean_decision,
     record_findings_decision,
@@ -138,6 +139,63 @@ def test_wait_states_are_idle_and_transitions_are_idempotent(tmp_path: Path) -> 
     assert dismissed["pending_action"] is None
     assert aborted["recovery"]["status"] == "aborted"
     assert aborted["pending_action"] is None
+
+
+def test_clean_profile_steps_record_progress_until_final_review_green(tmp_path: Path) -> None:
+    state = _cycle(tmp_path)
+    state["review_plan"] = {
+        "steps": [
+            {"name": "broad-discovery", "count": 1, "model": "gpt-5.4", "reasoning_effort": "medium"},
+            {"name": "precision-signoff", "count": 1, "model": "gpt-5.5", "reasoning_effort": "medium"},
+        ]
+    }
+    first_pending = mark_review_step_pending(
+        state,
+        round_id="round-1",
+        lane="review_t1",
+        step_index=0,
+        step_name="broad-discovery",
+        reviewed_head="head-1",
+    )
+
+    assert first_pending["review_progress"]["current_step"] == {
+        "index": 0,
+        "name": "broad-discovery",
+        "round_id": "round-1",
+        "lane": "review_t1",
+    }
+    assert first_pending["rounds"][0]["profile_step"] == {"index": 0, "name": "broad-discovery"}
+
+    queued = record_clean_decision(first_pending, round_id="round-1", lane="review_t1", reviewed_head="head-1")
+
+    assert queued["stage"] == "created"
+    assert queued["pending_action"] == {"kind": "run-review-step", "step_index": 1, "step": "precision-signoff"}
+    assert queued["review_progress"]["current_step"] is None
+    assert queued["review_progress"]["next_step_index"] == 1
+    assert queued["review_progress"]["completed_steps"] == [
+        {
+            "index": 0,
+            "name": "broad-discovery",
+            "round_id": "round-1",
+            "lane": "review_t1",
+            "reviewed_head": "head-1",
+        }
+    ]
+
+    second_pending = mark_review_step_pending(
+        queued,
+        round_id="round-2",
+        lane="review_t1",
+        step_index=1,
+        step_name="precision-signoff",
+        reviewed_head="head-1",
+    )
+    green = record_clean_decision(second_pending, round_id="round-2", lane="review_t1", reviewed_head="head-1")
+
+    assert green["stage"] == STAGE_REVIEW_GREEN
+    assert green["pending_action"] is None
+    assert green["review_progress"]["next_step_index"] == 2
+    assert [item["round_id"] for item in green["review_progress"]["completed_steps"]] == ["round-1", "round-2"]
 
 
 def test_gate_findings_require_fix_followup_clean_and_same_gate_rerun(tmp_path: Path) -> None:
