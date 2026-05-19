@@ -17,6 +17,9 @@
     "enabled": true
   },
   "orchestrator": {
+    "calibration": {
+      "auto_promotion_enabled": false
+    },
     "profiles": {
       "stable": {
         "brief": {

@@ -220,10 +220,12 @@ def _create_or_resume_cycle(*, args: argparse.Namespace, state_dir: Path) -> dic
         effective_selection=resolution.effective_selection,
         deslop_enabled=resolution.profile.deslop_enabled,
     )
+    state["selection"]["reason"] = resolution.selection_reason
     existing = load_cycle_by_key(state_dir, str(state["cycle_key"]))
     if existing is not None:
         return existing
     state["grading"] = {"required": bool(resolution.requires_grading)}
+
     def step_payload(step: Any) -> dict[str, Any]:
         payload = {
             "kind": step.kind,

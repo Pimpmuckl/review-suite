@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -326,6 +327,12 @@ def test_create_resume_and_id_reprint_use_one_pending_action(monkeypatch: pytest
     assert "--decision" not in str(payload["Action"]["cmd"])
     assert len(deslop_calls) == 1
     state = _cycle_payload(state_dir, public_id)
+    assert state["selection"] == {
+        "requested": "auto",
+        "effective": "stable",
+        "reason": "auto_stable_profile",
+    }
+    assert state["grading"] == {"required": False}
     assert state["deslop"]["status"] == "done"
     assert state["rounds"] == []
 
@@ -765,6 +772,53 @@ def test_benchmark_selection_prints_grading_requirement(monkeypatch: pytest.Monk
     assert exit_code == 0
     assert payload["selection"] == "benchmark"
     assert payload["grading"] == "required"
+    public_id = str(payload["review"])
+    state = _cycle_payload(state_dir, public_id)
+    assert state["selection"] == {
+        "requested": "benchmark",
+        "effective": "benchmark",
+        "reason": "explicit_benchmark",
+    }
+    assert state["grading"] == {"required": True}
+
+
+def test_auto_selection_fallback_to_benchmark_persists_reason(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _stub_deslop(monkeypatch)
+    _stub_review(monkeypatch)
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    config = deepcopy(review.load_config(state_dir))
+    del config["orchestrator"]["profiles"]["stable"]["normal"]
+    monkeypatch.setattr(review, "load_config", lambda state_dir: config)
+
+    exit_code, payload = _run_review(
+        monkeypatch,
+        [
+            "--mode",
+            "normal",
+            "--selection",
+            "auto",
+            "--cd",
+            str(repo),
+            "--base",
+            "main",
+            "--state-dir",
+            str(state_dir),
+        ],
+    )
+
+    assert exit_code == 0
+    assert payload["selection"] == "benchmark"
+    assert payload["grading"] == "required"
+    state = _cycle_payload(state_dir, str(payload["review"]))
+    assert state["selection"] == {
+        "requested": "auto",
+        "effective": "benchmark",
+        "reason": "auto_benchmark_missing_stable",
+    }
+    assert state["grading"] == {"required": True}
 
 
 def test_emergency_mode_skips_deslop_and_runs_review(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

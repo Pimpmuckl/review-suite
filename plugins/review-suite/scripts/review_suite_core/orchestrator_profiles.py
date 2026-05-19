@@ -5,6 +5,12 @@ from typing import Any
 
 SUPPORTED_MODES = ("brief", "normal", "deep", "emergency")
 SUPPORTED_SELECTIONS = ("stable", "benchmark", "auto")
+SUPPORTED_SELECTION_REASONS = (
+    "explicit_stable",
+    "explicit_benchmark",
+    "auto_stable_profile",
+    "auto_benchmark_missing_stable",
+)
 SUPPORTED_REASONING_EFFORTS = {"low", "medium", "high", "xhigh"}
 SUPPORTED_STEP_KINDS = ("review", "gate")
 SUPPORTED_GATE_TASK_CLASSES = ("phase_gate", "pr_gate")
@@ -36,6 +42,7 @@ class OrchestratorProfileResolution:
     effective_mode: str
     requested_selection: str
     effective_selection: str
+    selection_reason: str
     profile: OrchestratorProfile
 
     @property
@@ -139,10 +146,19 @@ def _normalize_profile(raw_profile: Any, *, mode: str, profile: str) -> Orchestr
     )
 
 
+def _validate_calibration_policy(orchestrator: dict[str, Any]) -> None:
+    raw_calibration = orchestrator.get("calibration") or {}
+    if not isinstance(raw_calibration, dict):
+        raise ValueError("orchestrator.calibration must be an object")
+    if bool(raw_calibration.get("auto_promotion_enabled", False)):
+        raise ValueError("orchestrator.calibration.auto_promotion_enabled must be false")
+
+
 def load_orchestrator_profiles(config: dict[str, Any]) -> dict[str, dict[str, OrchestratorProfile]]:
     orchestrator = config.get("orchestrator") or {}
     if not isinstance(orchestrator, dict):
         raise ValueError("orchestrator config must be an object")
+    _validate_calibration_policy(orchestrator)
     raw_profiles = orchestrator.get("profiles") or {}
     if not isinstance(raw_profiles, dict):
         raise ValueError("orchestrator.profiles config must be an object")
@@ -171,8 +187,14 @@ def resolve_orchestrator_profile(
     profiles = load_orchestrator_profiles(config)
 
     effective_selection = requested_selection
-    if effective_selection == "auto":
-        effective_selection = "stable" if requested_mode in profiles["stable"] else "benchmark"
+    selection_reason = f"explicit_{requested_selection}"
+    if requested_selection == "auto":
+        if requested_mode in profiles["stable"]:
+            effective_selection = "stable"
+            selection_reason = "auto_stable_profile"
+        else:
+            effective_selection = "benchmark"
+            selection_reason = "auto_benchmark_missing_stable"
 
     profile = profiles[effective_selection].get(requested_mode)
     if profile is None:
@@ -182,5 +204,6 @@ def resolve_orchestrator_profile(
         effective_mode=profile.mode,
         requested_selection=requested_selection,
         effective_selection=effective_selection,
+        selection_reason=selection_reason,
         profile=profile,
     )
