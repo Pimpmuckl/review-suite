@@ -23,6 +23,7 @@ from review_suite_local import (
     _print_live_completed_run,
     _print_stall_warnings,
     _print_transport_events,
+    _reviewer_wait_line,
     _reroll_candidate_variants,
     _running_status_line,
     _transport_hung_after_output,
@@ -49,6 +50,15 @@ from review_suite_local import (
     write_reports,
     write_round,
 )
+
+
+def test_reviewer_wait_line_uses_actual_count() -> None:
+    assert _reviewer_wait_line({"runs": [{"slot": "alpha"}]}) == (
+        "[review-suite] waiting for 1 reviewer; completion status prints as each finishes."
+    )
+    assert _reviewer_wait_line({"runs": [{"slot": "alpha"}, {"slot": "bravo"}]}) == (
+        "[review-suite] waiting for 2 reviewers; completion status prints as each finishes."
+    )
 
 
 def test_normalize_record_review_cwd_value_matches_wsl_unc_and_native(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -3303,6 +3303,12 @@ def round_has_live_reviewer_process(round_payload: dict[str, Any]) -> bool:
     return False
 
 
+def _reviewer_wait_line(round_payload: dict[str, Any]) -> str:
+    count = len([run for run in list(round_payload.get("runs") or []) if isinstance(run, dict)])
+    label = "reviewer" if count == 1 else "reviewers"
+    return f"[review-suite] waiting for {count} {label}; completion status prints as each finishes."
+
+
 def collect_round_results(
     *,
     round_payload: dict[str, Any],
@@ -3321,11 +3327,7 @@ def collect_round_results(
     announced_terminal_states: set[str] = set()
     stall_warned_slots: set[str] = set()
     live_completion_statuses: dict[str, str] = {}
-    print(
-        "[review-suite] waiting for both reviewers; completion status prints as each finishes.",
-        file=sys.stderr,
-        flush=True,
-    )
+    print(_reviewer_wait_line(round_payload), file=sys.stderr, flush=True)
     while True:
         alive = [run for run in round_payload["runs"] if _process_is_running(run.get("pid"))]
         restarted_capacity_run = False
