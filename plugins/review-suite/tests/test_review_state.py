@@ -1490,7 +1490,8 @@ def test_review_state_status_does_not_route_coherence_to_review_deslop(monkeypat
     assert exit_code == 0
     assert "lane" not in emitted[0]["Action"]
     assert "cmd" not in emitted[0]["Action"]
-    assert "review-deslop" in emitted[0]["Action"]["note"]
+    assert "full-diff correctness review lane" in emitted[0]["Action"]["note"]
+    assert "review-deslop" not in emitted[0]["Action"]["note"]
 
 
 def test_review_state_status_routes_stage_full_review_lane(monkeypatch, tmp_path: Path) -> None:

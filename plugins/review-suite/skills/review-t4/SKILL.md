@@ -18,11 +18,8 @@ Rules:
 - Completion leaves the gate in `signoff_pending`.
 - Read the final `Output:` block for reviewer text.
 - Close with emitted `Action.cmd`; replace `VERDICT` with `clean` or `findings`.
-- Do not inspect raw state JSON or rollout logs.
 - Do not step down to T3 after T4. Use `review-state`.
-- Code only valid findings. Verify locally and check adjacent code.
-- Add regression tests for bugs found.
+- Code only valid findings; verify locally and add regression coverage.
 - Launch after focused review-relevant validation is green.
-- Do not wait on slow full-suite/CI before dispatch; run it after dispatch and resolve relevant failures before PR-final/merge-ready.
-- Do not call PR-final/merge-ready while full-suite/CI is pending or unknown.
+- Run slow full-suite/CI after dispatch and resolve relevant failures before PR-final/merge-ready.
 - Move on only after both reviewers are effectively green and the gate is closed `clean`.

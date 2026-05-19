@@ -15,13 +15,10 @@ Use `python` on Windows and usually `python3` on WSL/Linux. Add `--cd <repo-root
 
 Rules:
 - Graded lane. Grade with emitted `Action.cmd`.
-- Completion lines are status-only. Read the final `Output:` block for reviewer text.
-- Do not inspect raw state JSON or rollout logs.
+- Read the final `Output:` block for reviewer text.
 - Do not use after the branch reaches T4. Run `review-state` and follow its action.
-- Code only valid findings. Verify locally and check adjacent code.
-- Add regression tests for bugs found.
+- Code only valid findings; verify locally and add regression coverage.
 - Use `review-followup` after fixing valid findings unless `review-state` routes wider.
 - Launch after focused review-relevant validation is green.
-- Do not wait on slow full-suite/CI before dispatch; run it after dispatch and resolve relevant failures before PR-final/merge-ready.
-- Do not call PR-final/merge-ready while full-suite/CI is pending or unknown.
+- Run slow full-suite/CI after dispatch and resolve relevant failures before PR-final/merge-ready.
 - Move on only when both reviewers are effectively green on the same head.

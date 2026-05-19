@@ -23,10 +23,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="Tier 3 local arena review wrapper.",
         epilog=(
             "If another arena round blocks this wrapper, the error names the exact "
-            "round id and prints the compact Action. Use review_state.py "
-            "status to inspect the current branch before starting another round. "
-            "Reviewer sampling is controlled by roster selection_mode: true_scramble, "
-            "slight_bias, or legacy."
+            "round id and prints the next Action. Run that Action before starting another round."
         ),
     )
     parser.add_argument("--cd")

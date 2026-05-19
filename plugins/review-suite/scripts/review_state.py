@@ -175,11 +175,9 @@ def _gate_signoff_override(
     reviewed_head = str(scope.get("reviewed_head") or scope.get("commit_end") or scope.get("commit") or "").strip()
     current_head = str(current_payload.get("head") or "").strip()
     head_matches_current = bool(reviewed_head and current_head and reviewed_head == current_head)
-    note = "Run Action.show_cmd, then close the gate as clean or findings."
+    note = "View the round, then close the gate as clean or findings."
     if reviewed_head and current_head and reviewed_head != current_head:
-        note = (
-            "Reviewed head moved since this gate ran. Run Action.show_cmd, close the gate for that head, then rerun review-state."
-        )
+        note = "Reviewed head moved since this gate ran. View the round, close the gate for that head, then rerun review-state."
     return {
         "recommendation": "signoff-decision",
         "reason": "pending_gate_signoff_decision",
@@ -319,7 +317,7 @@ def _status_action(payload: dict[str, object], *, review_cwd: Path, base: str, s
             {
                 "lane": "gate-findings",
                 "show_cmd": _arena_show_round_command(round_id=round_id),
-                "note": "Run show_cmd, fix valid bugs, then rerun review-state.",
+                "note": "View the round, fix valid bugs, then rerun review-state.",
             },
             review_cwd=review_cwd,
             round_id=round_id,
@@ -404,10 +402,7 @@ def _status_action(payload: dict[str, object], *, review_cwd: Path, base: str, s
         return _with_action_context(
             {
                 "lane": "coherence-review",
-                "note": (
-                    "Run the appropriate full-diff correctness review lane for the current stage before more narrow follow-up. "
-                    "Use review-deslop only as an optional cleanup pass, not as the primary coherence/correctness review."
-                ),
+                "note": "Run the appropriate full-diff correctness review lane for the current stage before more narrow follow-up.",
             },
             review_cwd=review_cwd,
         )

@@ -568,8 +568,8 @@ def test_arena_wrapper_help_mentions_blocking_round_recovery() -> None:
     ):
         assert "blocks this wrapper" in help_text
         assert "round id" in help_text
-        assert "compact Action" in help_text
-        assert "review_state.py status" in help_text
+        assert "next Action" in help_text
+        assert "selection_mode" not in help_text
 
 
 def test_local_review_wrappers_expose_short_wsl_flag() -> None:

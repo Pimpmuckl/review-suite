@@ -5,7 +5,8 @@ Review Suite is a Codex plugin for stateful review workflows:
 - plan review
 - post-implementation simplification review
 - fix follow-up review
-- local T1-T4 review gates
+- default stateful local review orchestration
+- specialist local review and signoff lanes
 - anchored GitHub `@codex review` polling
 - local review state and cost reporting
 
@@ -15,6 +16,7 @@ Add this repository as a Codex plugin marketplace:
 
 ```powershell
 codex plugin marketplace add https://github.com/Pimpmuckl/review-suite --ref main
+codex plugin add review-suite@review-suite
 ```
 
 Refresh later with:
@@ -32,25 +34,9 @@ codex plugin marketplace upgrade review-suite
 
 ## Quick Start
 
-Use `$review-suite` to choose the right lane, or call a specific skill:
+Use `$review` for local review, `$review-suite` when unsure which lane fits, and `$review-github` for PR-scoped GitHub review.
 
-- `$review-plan`
-- `$review-deslop`
-- `$review-state`
-- `$review-followup`
-- `$review-t1`
-- `$review-t2`
-- `$review-t3`
-- `$review-t4`
-- `$review-github`
-
-The plugin stores local routing state under:
-
-```text
-~/.codex/state/review-suite/
-```
-
-Default review command output is compact for agent callers. Long-running reviews emit a sparse `OK <minutes>m: ...` heartbeat about every 60s. Reviewer completion lines are status-only. Current runs print reviewer bodies once in the final `Output:` block, followed by one compact `Action.cmd`. Stored reviewer bodies are available through `review_suite_arena.py show-round` or `show-last`.
+Default local runs print reviewer text once in `Output:`, then one `Action.cmd`.
 
 ## Configuration
 
@@ -113,4 +99,10 @@ Compile scripts:
 
 ```powershell
 python -m py_compile plugins/review-suite/scripts/*.py plugins/review-suite/scripts/review_suite_core/*.py
+```
+
+Sync a local installed plugin cache after source edits:
+
+```powershell
+.\scripts\sync-installed-cache.ps1
 ```

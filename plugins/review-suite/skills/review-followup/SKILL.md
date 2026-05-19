@@ -15,7 +15,7 @@ Use after fixing a valid reviewer finding.
 Rules:
 - Ungraded lane.
 - Reviews only `<last_reviewed_head>..HEAD`.
-- Include a compact root-cause note: invariant, owner/source, sibling paths, structural fix, regression coverage.
+- Include a brief RCA note and regression coverage.
 - If the wrapper rejects the delta, run `review-state status`.
 - Use `--force` only for an intentional guard override.
 - Launch after focused validation for the fix is green.
