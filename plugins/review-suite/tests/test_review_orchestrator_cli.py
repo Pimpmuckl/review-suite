@@ -206,7 +206,7 @@ def _gate_signoff_decisions(state_dir: Path) -> list[dict[str, object]]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
-def _assert_github_handoff(action: object, *, blocked_by: list[str]) -> None:
+def _assert_github_handoff(action: object, *, public_id: str, state_dir: Path, blocked_by: list[str]) -> None:
     assert isinstance(action, dict)
     payload = dict(action)
     assert payload["kind"] == "github-handoff"
@@ -214,7 +214,12 @@ def _assert_github_handoff(action: object, *, blocked_by: list[str]) -> None:
     assert payload["after"] == "PR create/update"
     assert payload["github_review"] == "not-run"
     assert "merge_ready" not in payload
-    assert "cmd" not in payload
+    cmd = str(payload["cmd"])
+    assert f"--id {public_id}" in cmd
+    assert "--github-review" in cmd
+    assert "--state-dir" in cmd
+    assert str(state_dir) in cmd
+    assert "--github-force" not in cmd
     if blocked_by:
         assert payload["validation_ready"] is False
         assert payload["blocked_by"] == blocked_by
@@ -427,7 +432,12 @@ def test_create_resume_and_id_reprint_use_one_pending_action(monkeypatch: pytest
     exit_code, final_clean = _run_review(monkeypatch, ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)])
     assert exit_code == 0
     assert final_clean["stage"] == "review-green"
-    _assert_github_handoff(final_clean["Action"], blocked_by=["full_suite:unknown", "ci:unknown"])
+    _assert_github_handoff(
+        final_clean["Action"],
+        public_id=public_id,
+        state_dir=state_dir,
+        blocked_by=["full_suite:unknown", "ci:unknown"],
+    )
     state = _cycle_payload(state_dir, public_id)
     assert state["pending_action"] is None
     assert state["validation"]["review_green"] == "passed"
@@ -458,7 +468,12 @@ def test_create_resume_and_id_reprint_use_one_pending_action(monkeypatch: pytest
     )
     assert exit_code == 0
     assert pending_validation["stage"] == "review-green"
-    _assert_github_handoff(pending_validation["Action"], blocked_by=["full_suite:pending", "ci:pending"])
+    _assert_github_handoff(
+        pending_validation["Action"],
+        public_id=public_id,
+        state_dir=state_dir,
+        blocked_by=["full_suite:pending", "ci:pending"],
+    )
     state = _cycle_payload(state_dir, public_id)
     assert state["validation"]["focused"] == "passed"
     assert state["validation"]["full_suite"] == "pending"
@@ -480,12 +495,96 @@ def test_create_resume_and_id_reprint_use_one_pending_action(monkeypatch: pytest
         ],
     )
     assert exit_code == 0
-    _assert_github_handoff(validation_ready["Action"], blocked_by=[])
+    _assert_github_handoff(validation_ready["Action"], public_id=public_id, state_dir=state_dir, blocked_by=[])
     state = _cycle_payload(state_dir, public_id)
     assert state["validation"]["full_suite"] == "passed"
     assert state["validation"]["ci"] == "classified"
     assert len(deslop_calls) == 1
     assert len(review_calls) == 2
+    assert len(gate_calls) == 1
+
+
+def test_github_review_rejects_cycle_before_local_green(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _stub_deslop(monkeypatch)
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+
+    _, created = _run_review(
+        monkeypatch,
+        ["--mode", "normal", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)],
+    )
+    errors: list[tuple[str, dict[str, object]]] = []
+
+    def fake_error(message: str, **kwargs: object) -> int:
+        errors.append((message, dict(kwargs)))
+        return 2
+
+    monkeypatch.setattr(review, "emit_error", fake_error)
+    monkeypatch.setattr(sys, "argv", ["review.py", "--id", str(created["review"]), "--github-review", "--state-dir", str(state_dir)])
+
+    exit_code = review.main()
+
+    assert exit_code == 2
+    assert errors == [
+        (
+            "--github-review requires local green review state",
+            {
+                "status": "usage_error",
+                "help_items": [review._help_command()],
+            },
+        )
+    ]
+
+
+def test_github_review_runs_existing_lane_with_state_dir_and_force(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    review_calls = _stub_review(monkeypatch)
+    gate_calls = _stub_gate(monkeypatch, "phase_gate-emergency-1")
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+
+    _, opened = _run_review(
+        monkeypatch,
+        ["--mode", "emergency", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)],
+    )
+    public_id = str(opened["review"])
+    _run_review(monkeypatch, ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)])
+    _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+    _, clean = _run_review(monkeypatch, ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)])
+    assert clean["stage"] == "review-green"
+
+    calls: list[list[str]] = []
+
+    def fake_subprocess_run(command: list[str], check: bool) -> subprocess.CompletedProcess:
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 23)
+
+    monkeypatch.setattr(review.subprocess, "run", fake_subprocess_run)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["review.py", "--id", public_id, "--github-review", "--github-force", "--state-dir", str(state_dir)],
+    )
+
+    exit_code = review.main()
+
+    assert exit_code == 23
+    assert calls == [
+        [
+            sys.executable,
+            str((SCRIPT_DIR / "review_github.py").resolve()),
+            "run",
+            "--cd",
+            str(repo.resolve()),
+            "--state-dir",
+            str(state_dir),
+            "--force",
+        ]
+    ]
+    assert len(review_calls) == 1
     assert len(gate_calls) == 1
 
 
@@ -592,7 +691,12 @@ def test_findings_fix_progression_and_clean_decision(monkeypatch: pytest.MonkeyP
     exit_code, final_clean = _run_review(monkeypatch, ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)])
     assert exit_code == 0
     assert final_clean["stage"] == "review-green"
-    _assert_github_handoff(final_clean["Action"], blocked_by=["full_suite:unknown", "ci:unknown"])
+    _assert_github_handoff(
+        final_clean["Action"],
+        public_id=public_id,
+        state_dir=state_dir,
+        blocked_by=["full_suite:unknown", "ci:unknown"],
+    )
     state = _cycle_payload(state_dir, public_id)
     assert state["active_findings"] is None
     assert state["validation"]["review_green"] == "passed"
@@ -859,7 +963,12 @@ def test_emergency_mode_skips_deslop_and_runs_review(monkeypatch: pytest.MonkeyP
     exit_code, clean = _run_review(monkeypatch, ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)])
     assert exit_code == 0
     assert clean["stage"] == "review-green"
-    _assert_github_handoff(clean["Action"], blocked_by=["full_suite:unknown", "ci:unknown"])
+    _assert_github_handoff(
+        clean["Action"],
+        public_id=public_id,
+        state_dir=state_dir,
+        blocked_by=["full_suite:unknown", "ci:unknown"],
+    )
     assert len(review_calls) == 1
     assert _gate_signoff_decisions(state_dir)[0]["round_id"] == "phase_gate-emergency-1"
 

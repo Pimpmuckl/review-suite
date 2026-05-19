@@ -23,13 +23,13 @@ Rules:
 - Use `review.py` unless the user asks for a specialist lane.
 - Start with `--mode brief|normal|deep|emergency`.
 - Non-emergency runs deslop once, then one review profile step per invocation.
-- Follow emitted `Action.cmd` with only `--id <id>` and `--decision clean|findings` when asked.
+- For local review decisions, follow emitted `Action.cmd` with only `--id <id>` and `--decision clean|findings`.
 - Classify reviewer output before coding valid findings.
 - Fix valid findings, then run emitted `review.py --id <id>`.
 - When HEAD changed, `review.py --id <id>` runs follow-up.
 - Clean follow-up resumes profile progression.
 - Final clean reaches `review-green`.
-- GitHub review is standalone.
+- After `review-green`, run the emitted GitHub `Action.cmd`.
 - T1/T2/T3/T4 are expert/debug/benchmark escape hatches.
 - Keep one review lane active unless the user explicitly asks otherwise.
 - Follow `review-state` after T2/T3/T4; do not step down after amended commits.

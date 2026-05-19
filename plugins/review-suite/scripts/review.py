@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -61,6 +62,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cd")
     parser.add_argument("--base", default="main")
     parser.add_argument("--decision", choices=(DECISION_CLEAN, DECISION_FINDINGS))
+    parser.add_argument("--github-review", action="store_true")
+    parser.add_argument("--github-force", action="store_true")
     parser.add_argument("--focused-validation", choices=CLI_VALIDATION_STATUSES)
     parser.add_argument("--full-suite", choices=CLI_VALIDATION_STATUSES)
     parser.add_argument("--ci", choices=CLI_VALIDATION_STATUSES)
@@ -74,6 +77,10 @@ def _help_command() -> str:
 
 def _review_command(public_id: str, *extra: str) -> str:
     return format_command([sys.executable, str(Path(__file__).resolve()), "--id", public_id, *extra])
+
+
+def _github_review_action_command(public_id: str, *, state_dir: Path) -> str:
+    return _review_command(public_id, "--github-review", "--state-dir", str(state_dir))
 
 
 def _round_by_id(state: dict[str, Any], round_id: str) -> dict[str, Any]:
@@ -309,10 +316,12 @@ def _validation_blockers(state: dict[str, Any]) -> list[str]:
     return blockers
 
 
-def _github_handoff_action(state: dict[str, Any]) -> dict[str, Any]:
+def _github_handoff_action(state: dict[str, Any], *, state_dir: Path) -> dict[str, Any]:
+    public_id = str(state.get("public_id") or "").strip()
     action: dict[str, Any] = {
         "kind": "github-handoff",
         "lane": "review-github",
+        "cmd": _github_review_action_command(public_id, state_dir=state_dir),
         "after": "PR create/update",
         "github_review": "not-run",
     }
@@ -325,7 +334,7 @@ def _github_handoff_action(state: dict[str, Any]) -> dict[str, Any]:
     return action
 
 
-def _action_payload(state: dict[str, Any]) -> dict[str, Any] | None:
+def _action_payload(state: dict[str, Any], *, state_dir: Path) -> dict[str, Any] | None:
     public_id = str(state.get("public_id") or "").strip()
     stage = state.get("stage")
     if stage == STAGE_DECISION_PENDING:
@@ -339,11 +348,11 @@ def _action_payload(state: dict[str, Any]) -> dict[str, Any] | None:
             "note": "Fix valid findings, then rerun this command.",
         }
     if stage in {STAGE_REVIEW_GREEN, STAGE_LOCAL_GREEN_HANDOFF}:
-        return _github_handoff_action(state)
+        return _github_handoff_action(state, state_dir=state_dir)
     return {"cmd": _review_command(public_id)}
 
 
-def _render(state: dict[str, Any]) -> None:
+def _render(state: dict[str, Any], *, state_dir: Path) -> None:
     mode = dict(state.get("mode") or {})
     selection = dict(state.get("selection") or {})
     payload: dict[str, Any] = {
@@ -355,10 +364,40 @@ def _render(state: dict[str, Any]) -> None:
     grading = dict(state.get("grading") or {})
     if grading.get("required"):
         payload["grading"] = "required"
-    action = _action_payload(state)
+    action = _action_payload(state, state_dir=state_dir)
     if action:
         payload["Action"] = action
     emit_toon(payload)
+
+
+def _require_local_green_for_github_review(state: dict[str, Any]) -> None:
+    if state.get("stage") not in {STAGE_REVIEW_GREEN, STAGE_LOCAL_GREEN_HANDOFF}:
+        raise ValueError("--github-review requires local green review state")
+
+
+def _github_review_subprocess_command(state: dict[str, Any], *, state_dir: Path, force: bool) -> list[str]:
+    identity = dict(state.get("identity") or {})
+    cwd = str(identity.get("cwd") or "").strip()
+    if not cwd:
+        raise ValueError("review cycle is missing cwd for --github-review")
+    command = [
+        sys.executable,
+        str(Path(__file__).with_name("review_github.py").resolve()),
+        "run",
+        "--cd",
+        str(cwd_path_from_normalized(cwd)),
+        "--state-dir",
+        str(state_dir),
+    ]
+    if force:
+        command.append("--force")
+    return command
+
+
+def _run_github_review(state: dict[str, Any], *, state_dir: Path, force: bool) -> int:
+    _require_local_green_for_github_review(state)
+    command = _github_review_subprocess_command(state, state_dir=state_dir, force=force)
+    return subprocess.run(command, check=False).returncode
 
 
 def main() -> int:
@@ -369,10 +408,18 @@ def main() -> int:
         has_validation_status = _has_validation_status(args)
         if args.decision and not args.id:
             raise ValueError("--decision requires --id")
+        if args.github_force and not args.github_review:
+            raise ValueError("--github-force requires --github-review")
+        if args.github_review and not args.id:
+            raise ValueError("--github-review requires --id")
+        if args.github_review and (args.decision or has_validation_status):
+            raise ValueError("--github-review cannot be combined with decisions or validation status flags")
         if has_validation_status and not args.id:
             raise ValueError("validation status flags require --id")
         if args.id:
             state = load_cycle_by_public_id(state_dir, str(args.id))
+            if args.github_review:
+                return _run_github_review(state, state_dir=state_dir, force=bool(args.github_force))
             if args.decision:
                 state = _apply_decision(state, str(args.decision), state_dir=state_dir)
             if has_validation_status:
@@ -383,7 +430,7 @@ def main() -> int:
             state = _create_or_resume_cycle(args=args, state_dir=state_dir)
             state = _advance_without_decision(state, state_dir=state_dir)
         saved = save_cycle(state_dir, state)
-        _render(saved)
+        _render(saved, state_dir=state_dir)
         return 0
     except ValueError as exc:
         return emit_error(str(exc), status="usage_error", help_items=[_help_command()])
