@@ -16,7 +16,10 @@ from review_suite_core.orchestrator_state import (
     STAGE_REVIEW_GREEN,
     STAGE_RETRY_REQUESTED,
     create_cycle,
+    mark_fix_detected,
+    mark_review_step_pending,
     record_clean_decision,
+    record_findings_decision,
 )
 
 
@@ -79,6 +82,40 @@ def _stub_review(monkeypatch, *round_ids: str) -> list[dict[str, object]]:
         }
 
     monkeypatch.setattr(orchestrator_runner, "run_review_step", fake_run)
+    return calls
+
+
+def _stub_followup(monkeypatch, *round_ids: str) -> list[dict[str, object]]:
+    calls: list[dict[str, object]] = []
+    ids = list(round_ids) or ["followup-round-1"]
+
+    def fake_run(**kwargs: object) -> dict[str, object]:
+        calls.append(dict(kwargs))
+        round_id = ids[min(len(calls) - 1, len(ids) - 1)]
+        scope = kwargs.get("review_scope")
+        reviewed_head = str(scope.get("reviewed_head") if isinstance(scope, dict) else "head-2")
+        return {
+            "round_id": round_id,
+            "lane": "review-followup",
+            "kind": "followup",
+            "status": "completed",
+            "blocked": False,
+            "reviewed_head": reviewed_head,
+            "output_refs": [f"rollout://{round_id}/alpha"],
+            "runs": [
+                {
+                    "slot": "alpha",
+                    "status": "completed",
+                    "summary": "No findings.",
+                    "ref": f"rollout://{round_id}/alpha",
+                    "blocked": False,
+                    "block": None,
+                }
+            ],
+            "round_state_dir": "state/orchestrator/review-rounds",
+        }
+
+    monkeypatch.setattr(orchestrator_runner, "run_followup_review_step", fake_run)
     return calls
 
 
@@ -229,3 +266,44 @@ def test_runner_marks_failed_deslop_retryable_and_retries_from_retry_stage(monke
     assert retried.state["deslop"]["status"] == "done"
     assert retried.state["recovery"]["status"] == "none"
     assert calls == 2
+
+
+def test_runner_runs_real_followup_once_from_followup_pending(monkeypatch, tmp_path: Path) -> None:
+    followup_calls = _stub_followup(monkeypatch)
+    monkeypatch.setattr(orchestrator_runner, "current_head", lambda cwd: "head-2")
+    monkeypatch.setattr(orchestrator_runner, "merge_base", lambda cwd, left, right="HEAD": "base-1")
+    monkeypatch.setattr(orchestrator_runner, "diff_artifact", lambda cwd, start_ref, end_ref="HEAD": "diff --git a/app.txt b/app.txt\n")
+    state = _cycle(tmp_path, deslop_enabled=False, step_names=("broad-discovery", "precision-signoff"))
+    pending = mark_review_step_pending(
+        state,
+        round_id="phase_review-round-1",
+        lane="review_t1",
+        step_index=0,
+        step_name="broad-discovery",
+        reviewed_head="head-1",
+    )
+    findings = record_findings_decision(pending, round_id="phase_review-round-1", lane="review_t1", reviewed_head="head-1")
+    fixed = mark_fix_detected(findings, head="head-2")
+
+    result = orchestrator_runner.run_one_expensive_step(fixed, state_dir=tmp_path / "state")
+
+    assert result.ran_step is True
+    assert result.step == "review-followup"
+    assert result.state["stage"] == STAGE_DECISION_PENDING
+    assert result.state["pending_action"] == {
+        "kind": "decision",
+        "round_id": "followup-round-1",
+        "lane": "review-followup",
+        "source_round_id": "phase_review-round-1",
+    }
+    assert result.state["rounds"][1]["lane"] == "review-followup"
+    assert result.state["rounds"][1]["kind"] == "followup"
+    assert result.state["rounds"][1]["source_round_id"] == "phase_review-round-1"
+    assert result.state["rounds"][1]["reviewed_head"] == "head-2"
+    assert result.state["rounds"][1]["output_refs"] == ["rollout://followup-round-1/alpha"]
+    assert len(followup_calls) == 1
+    assert followup_calls[0]["review_scope"]["source_round_id"] == "phase_review-round-1"
+    assert followup_calls[0]["review_scope"]["commit"] == "head-1"
+    assert followup_calls[0]["review_scope"]["commit_end"] == "head-2"
+    assert "Review this follow-up diff" in str(followup_calls[0]["prompt"])
+    assert "Source review round phase_review-round-1" in str(followup_calls[0]["prompt"])

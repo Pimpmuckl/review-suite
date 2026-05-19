@@ -107,6 +107,40 @@ def _stub_review(monkeypatch: pytest.MonkeyPatch, *round_ids: str) -> list[dict[
     return calls
 
 
+def _stub_followup(monkeypatch: pytest.MonkeyPatch, *round_ids: str) -> list[dict[str, object]]:
+    calls: list[dict[str, object]] = []
+    ids = list(round_ids) or ["followup-round-1"]
+
+    def fake_run(**kwargs: object) -> dict[str, object]:
+        calls.append(dict(kwargs))
+        round_id = ids[min(len(calls) - 1, len(ids) - 1)]
+        scope = kwargs.get("review_scope")
+        reviewed_head = str(scope.get("reviewed_head") if isinstance(scope, dict) else "head-2")
+        return {
+            "round_id": round_id,
+            "lane": "review-followup",
+            "kind": "followup",
+            "status": "completed",
+            "blocked": False,
+            "reviewed_head": reviewed_head,
+            "output_refs": [f"rollout://{round_id}/alpha"],
+            "runs": [
+                {
+                    "slot": "alpha",
+                    "status": "completed",
+                    "summary": "No findings.",
+                    "ref": f"rollout://{round_id}/alpha",
+                    "blocked": False,
+                    "block": None,
+                }
+            ],
+            "round_state_dir": "state/orchestrator/review-rounds",
+        }
+
+    monkeypatch.setattr(orchestrator_runner, "run_followup_review_step", fake_run)
+    return calls
+
+
 def _cycle_payload(state_dir: Path, public_id: str) -> dict[str, object]:
     index = json.loads((state_dir / "orchestrator" / "index.json").read_text(encoding="utf-8"))
     cycle_key = index["ids"][public_id]
@@ -290,7 +324,8 @@ def test_create_resume_and_id_reprint_use_one_pending_action(monkeypatch: pytest
 
 def test_findings_fix_progression_and_clean_decision(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _stub_deslop(monkeypatch)
-    _stub_review(monkeypatch)
+    review_calls = _stub_review(monkeypatch, "phase_review-round-1", "phase_review-round-2")
+    followup_calls = _stub_followup(monkeypatch, "followup-round-1")
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
     _init_repo(repo)
@@ -321,23 +356,105 @@ def test_findings_fix_progression_and_clean_decision(monkeypatch: pytest.MonkeyP
     assert exit_code == 0
     assert reprint["stage"] == "fix-pending"
     assert len(_cycle_payload(state_dir, public_id)["rounds"]) == 1
+    assert len(followup_calls) == 0
 
     _commit_file(repo, "app.txt", "fixed\n", "fix findings")
     exit_code, followup = _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
     assert exit_code == 0
     assert followup["stage"] == "decision-pending"
     assert "--decision clean" in str(followup["Action"]["cmd"])
+    assert len(followup_calls) == 1
+    assert "Review this follow-up diff" in str(followup_calls[0]["prompt"])
+    assert followup_calls[0]["review_scope"]["source_round_id"] == "phase_review-round-1"
     state = _cycle_payload(state_dir, public_id)
     assert len(state["rounds"]) == 2
     assert state["rounds"][1]["lane"] == "review-followup"
+    assert state["rounds"][1]["round_id"] == "followup-round-1"
+    assert state["rounds"][1]["source_round_id"] == "phase_review-round-1"
+    assert state["rounds"][1]["output_refs"] == ["rollout://followup-round-1/alpha"]
+
+    exit_code, followup_reprint = _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+    assert exit_code == 0
+    assert followup_reprint["Action"] == followup["Action"]
+    assert len(followup_calls) == 1
 
     exit_code, clean = _run_review(monkeypatch, ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)])
     assert exit_code == 0
-    assert clean["stage"] == "review-green"
-    assert clean["Action"] == {"status": "none"}
+    assert clean["stage"] == "created"
+    assert f"--id {public_id}" in str(clean["Action"]["cmd"])
+    state = _cycle_payload(state_dir, public_id)
+    assert state["active_findings"] is None
+    assert state["validation"]["review_green"] == "unknown"
+    assert state["pending_action"] == {"kind": "run-review-step", "step_index": 1, "step": "precision-signoff"}
+    assert state["review_progress"]["completed_steps"] == [
+        {
+            "index": 0,
+            "name": "broad-discovery",
+            "round_id": "phase_review-round-1",
+            "lane": "review_t1",
+            "reviewed_head": state["rounds"][1]["reviewed_head"],
+        }
+    ]
+
+    exit_code, second_step = _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+    assert exit_code == 0
+    assert second_step["stage"] == "decision-pending"
+    assert len(review_calls) == 2
+    assert review_calls[1]["step_name"] == "precision-signoff"
+
+    exit_code, final_clean = _run_review(monkeypatch, ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)])
+    assert exit_code == 0
+    assert final_clean["stage"] == "review-green"
+    assert final_clean["Action"] == {"status": "none"}
     state = _cycle_payload(state_dir, public_id)
     assert state["active_findings"] is None
     assert state["validation"]["review_green"] == "passed"
+    assert [item["round_id"] for item in state["review_progress"]["completed_steps"]] == [
+        "phase_review-round-1",
+        "phase_review-round-2",
+    ]
+
+
+def test_followup_findings_loops_back_to_fix_pending(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _stub_deslop(monkeypatch)
+    _stub_review(monkeypatch, "phase_review-round-1")
+    followup_calls = _stub_followup(monkeypatch, "followup-round-1")
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/followup-findings")
+    _commit_file(repo, "app.txt", "feature\n", "feature")
+
+    _, created = _run_review(
+        monkeypatch,
+        ["--mode", "normal", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)],
+    )
+    public_id = str(created["review"])
+    _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+    _run_review(monkeypatch, ["--id", public_id, "--decision", "findings", "--state-dir", str(state_dir)])
+    _commit_file(repo, "app.txt", "fixed once\n", "fix findings")
+
+    _, followup = _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+    assert followup["stage"] == "decision-pending"
+    assert len(followup_calls) == 1
+
+    exit_code, findings = _run_review(monkeypatch, ["--id", public_id, "--decision", "findings", "--state-dir", str(state_dir)])
+
+    assert exit_code == 0
+    assert findings["stage"] == "fix-pending"
+    assert findings["Action"]["note"] == "Fix valid findings, then rerun this command."
+    state = _cycle_payload(state_dir, public_id)
+    assert state["active_findings"]["round_id"] == "followup-round-1"
+    assert state["active_findings"]["lane"] == "review-followup"
+    assert state["active_findings"]["previous_round_id"] == "phase_review-round-1"
+    assert state["active_findings"]["status"] == "fix-pending"
+    assert state["validation"]["review_green"] == "unknown"
+
+    exit_code, reprint = _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+    assert exit_code == 0
+    assert reprint["stage"] == "fix-pending"
+    assert len(followup_calls) == 1
 
 
 def test_benchmark_selection_prints_grading_requirement(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

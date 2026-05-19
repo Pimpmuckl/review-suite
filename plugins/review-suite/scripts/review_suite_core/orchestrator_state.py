@@ -411,6 +411,19 @@ def _profile_step_for_round(state: dict[str, Any], round_id: str) -> dict[str, A
     return None
 
 
+def _profile_round_id_for_findings(state: dict[str, Any], active: dict[str, Any]) -> str | None:
+    candidates = (
+        active.get("profile_round_id"),
+        active.get("previous_round_id"),
+        active.get("round_id"),
+    )
+    for candidate in candidates:
+        round_id = _optional_text(candidate)
+        if round_id and _profile_step_for_round(state, round_id):
+            return round_id
+    return None
+
+
 def _complete_profile_step(state: dict[str, Any], *, round_id: str, lane: str, reviewed_head: str) -> bool:
     profile_step = _profile_step_for_round(state, round_id)
     if not profile_step:
@@ -543,6 +556,7 @@ def record_findings_decision(
     next_state = _copy_state(state)
     head = reviewed_head or _state_head(next_state)
     gate_context = _gate_name(lane, gate)
+    profile_step = _profile_step_for_round(next_state, round_id)
     _upsert_decision(next_state, round_id=round_id, lane=lane, command=DECISION_FINDINGS, reviewed_head=head, gate=gate_context)
     _upsert_round(
         next_state,
@@ -560,6 +574,7 @@ def record_findings_decision(
             "lane": _required_text(lane, field="lane"),
             "reviewed_head": head,
             "status": STAGE_FIX_PENDING,
+            "profile_round_id": round_id if profile_step else None,
             "gate": {
                 "lane": lane,
                 "gate": gate_context,
@@ -603,6 +618,37 @@ def mark_fix_detected(
             "head": fix_head,
         },
     )
+    return next_state
+
+
+def mark_followup_review_pending(
+    state: dict[str, Any],
+    *,
+    round_id: str,
+    reviewed_head: str,
+    source_round_id: str,
+) -> dict[str, Any]:
+    next_state = mark_decision_pending(
+        state,
+        round_id=round_id,
+        lane="review-followup",
+        reviewed_head=reviewed_head,
+        pending_action={
+            "kind": "decision",
+            "round_id": round_id,
+            "lane": "review-followup",
+            "source_round_id": source_round_id,
+        },
+    )
+    active = _active_findings(next_state)
+    active["followup_round_id"] = _required_text(round_id, field="round_id")
+    active["followup_head"] = _required_text(reviewed_head, field="reviewed_head")
+    active["status"] = STAGE_DECISION_PENDING
+    for item in list(next_state.get("rounds") or []):
+        if isinstance(item, dict) and item.get("round_id") == round_id:
+            item["source_round_id"] = _required_text(source_round_id, field="source_round_id")
+            break
+    next_state.setdefault("review_heads", {})["last_followup_head"] = reviewed_head
     return next_state
 
 
@@ -668,6 +714,29 @@ def record_followup_clean(
         _mark_gate_rerun_needed_inplace(next_state)
         return next_state
     next_state["active_findings"] = None
+    profile_round_id = _profile_round_id_for_findings(next_state, active)
+    completed_profile_step = False
+    if profile_round_id:
+        profile_step = _profile_step_for_round(next_state, profile_round_id) or {}
+        completed_profile_step = _complete_profile_step(
+            next_state,
+            round_id=profile_round_id,
+            lane=_required_text(profile_step.get("lane"), field="profile_step.lane"),
+            reviewed_head=head,
+        )
+    if completed_profile_step and review_profile_has_next_step(next_state):
+        progress = _review_progress(next_state)
+        _set_review_green(next_state, "unknown")
+        _set_stage(
+            next_state,
+            STAGE_CREATED,
+            {
+                "kind": "run-review-step",
+                "step_index": progress.get("next_step_index"),
+                "step": progress.get("next_step_name"),
+            },
+        )
+        return next_state
     _set_review_green(next_state, "passed")
     _set_stage(next_state, STAGE_REVIEW_GREEN)
     return next_state
@@ -700,6 +769,7 @@ def record_followup_findings(
         source_round_id=str(active.get("round_id") or ""),
     )
     next_state.setdefault("review_heads", {})["last_followup_head"] = head
+    profile_round_id = active.get("profile_round_id") or _profile_round_id_for_findings(next_state, active)
     next_state["active_findings"] = _compact(
         {
             "round_id": _required_text(round_id, field="round_id"),
@@ -707,6 +777,7 @@ def record_followup_findings(
             "reviewed_head": head,
             "status": STAGE_FIX_PENDING,
             "previous_round_id": active.get("round_id"),
+            "profile_round_id": profile_round_id,
             "gate": gate,
         }
     )

@@ -12,6 +12,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from review_suite_core.orchestrator_state import (
+    STAGE_CREATED,
     STAGE_FIX_PENDING,
     STAGE_GATE_RERUN_NEEDED,
     STAGE_LOCAL_GREEN_HANDOFF,
@@ -24,6 +25,7 @@ from review_suite_core.orchestrator_state import (
     mark_crashed,
     mark_decision_pending,
     mark_fix_detected,
+    mark_followup_review_pending,
     mark_local_green_handoff,
     mark_retry_requested,
     mark_running,
@@ -196,6 +198,47 @@ def test_clean_profile_steps_record_progress_until_final_review_green(tmp_path: 
     assert green["pending_action"] is None
     assert green["review_progress"]["next_step_index"] == 2
     assert [item["round_id"] for item in green["review_progress"]["completed_steps"]] == ["round-1", "round-2"]
+
+
+def test_followup_clean_completes_source_profile_step_and_continues(tmp_path: Path) -> None:
+    state = _cycle(tmp_path)
+    state["review_plan"] = {
+        "steps": [
+            {"name": "broad-discovery", "count": 1, "model": "gpt-5.4", "reasoning_effort": "medium"},
+            {"name": "precision-signoff", "count": 1, "model": "gpt-5.5", "reasoning_effort": "medium"},
+        ]
+    }
+    pending = mark_review_step_pending(
+        state,
+        round_id="round-1",
+        lane="review_t1",
+        step_index=0,
+        step_name="broad-discovery",
+        reviewed_head="head-1",
+    )
+    findings = record_findings_decision(pending, round_id="round-1", lane="review_t1", reviewed_head="head-1")
+    fixed = mark_fix_detected(findings, head="head-2")
+    followup_pending = mark_followup_review_pending(
+        fixed,
+        round_id="followup-1",
+        reviewed_head="head-2",
+        source_round_id="round-1",
+    )
+    clean = record_followup_clean(followup_pending, round_id="followup-1", reviewed_head="head-2")
+
+    assert clean["stage"] == STAGE_CREATED
+    assert clean["active_findings"] is None
+    assert clean["validation"]["review_green"] == "unknown"
+    assert clean["pending_action"] == {"kind": "run-review-step", "step_index": 1, "step": "precision-signoff"}
+    assert clean["review_progress"]["completed_steps"] == [
+        {
+            "index": 0,
+            "name": "broad-discovery",
+            "round_id": "round-1",
+            "lane": "review_t1",
+            "reviewed_head": "head-2",
+        }
+    ]
 
 
 def test_gate_findings_require_fix_followup_clean_and_same_gate_rerun(tmp_path: Path) -> None:

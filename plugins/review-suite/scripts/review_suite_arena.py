@@ -809,6 +809,49 @@ def run_orchestrator_review_step(
     if not base:
         raise ValueError("review_scope.base is required")
     request = _orchestrator_phase_review_request(review_cwd=review_cwd, base=base)
+    return _run_orchestrator_manual_review_step(
+        lane=lane,
+        step_name=step_name,
+        reviewer_count=reviewer_count,
+        model=model,
+        reasoning_effort=reasoning_effort,
+        service_tier=service_tier,
+        review_cwd=review_cwd,
+        state_dir=state_dir,
+        sqlite_path=sqlite_path,
+        review_scope=request.review_scope,
+        prompt=request.prompt,
+        task_id=task_id,
+        allow_dirty=allow_dirty,
+        progress_interval_seconds=progress_interval_seconds,
+        allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
+        grading_required=grading_required,
+    )
+
+
+def _run_orchestrator_manual_review_step(
+    *,
+    lane: str,
+    step_name: str,
+    reviewer_count: int,
+    model: str,
+    reasoning_effort: str,
+    service_tier: str | None,
+    review_cwd: Path,
+    state_dir: Path,
+    sqlite_path: Path,
+    review_scope: dict[str, object],
+    prompt: str,
+    task_id: str | None,
+    allow_dirty: bool,
+    progress_interval_seconds: int,
+    allow_unsafe_windows_wsl_fallback: bool,
+    grading_required: bool = False,
+) -> dict[str, object]:
+    if reviewer_count <= 0:
+        raise ValueError("reviewer_count must be > 0")
+    if not prompt.strip():
+        raise ValueError("orchestrator review requires a non-empty prompt")
     variant_id = "-".join(part for part in [model, reasoning_effort, service_tier] if part)
     variant = {
         "id": variant_id,
@@ -829,7 +872,7 @@ def run_orchestrator_review_step(
         "grading_required": bool(grading_required),
         "sampled_at": utc_now_iso(),
         "review_cwd_normalized": normalize_review_cwd_value(review_cwd),
-        "review_scope": dict(request.review_scope),
+        "review_scope": dict(review_scope),
         "status": "sampled",
         "runs": [
             {
@@ -850,8 +893,8 @@ def run_orchestrator_review_step(
         roster={"settings": {}, "variants": [variant]},
         state_dir=round_state_dir,
         review_cwd=review_cwd,
-        prompt=request.prompt,
-        review_scope=request.review_scope,
+        prompt=prompt,
+        review_scope=review_scope,
         sqlite_path=sqlite_path,
         progress_interval_seconds=progress_interval_seconds,
         allow_dirty=allow_dirty,
@@ -871,12 +914,48 @@ def run_orchestrator_review_step(
         "kind": "review",
         "status": result.get("status"),
         "blocked": bool(result.get("blocked")),
-        "reviewed_head": str(request.review_scope.get("reviewed_head") or ""),
+        "reviewed_head": str(review_scope.get("reviewed_head") or review_scope.get("commit_end") or ""),
         "output_refs": output_refs,
         "runs": list(result.get("runs") or []),
         "round_state_dir": str(round_state_dir),
         "grading_required": bool(grading_required),
     }
+
+
+def run_orchestrator_followup_review_step(
+    *,
+    model: str,
+    reasoning_effort: str,
+    service_tier: str | None,
+    review_cwd: Path,
+    state_dir: Path,
+    sqlite_path: Path,
+    review_scope: dict[str, object],
+    prompt: str,
+    task_id: str | None,
+    progress_interval_seconds: int,
+    allow_unsafe_windows_wsl_fallback: bool,
+) -> dict[str, object]:
+    result = _run_orchestrator_manual_review_step(
+        lane="review-followup",
+        step_name="followup",
+        reviewer_count=1,
+        model=model,
+        reasoning_effort=reasoning_effort,
+        service_tier=service_tier,
+        review_cwd=review_cwd,
+        state_dir=state_dir,
+        sqlite_path=sqlite_path,
+        review_scope=review_scope,
+        prompt=prompt,
+        task_id=task_id,
+        allow_dirty=False,
+        progress_interval_seconds=progress_interval_seconds,
+        allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
+        grading_required=False,
+    )
+    result["kind"] = "followup"
+    return result
 
 
 def _record_anchor_warning(exc: Exception) -> None:

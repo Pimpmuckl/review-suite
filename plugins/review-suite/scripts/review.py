@@ -29,7 +29,6 @@ from review_suite_core.orchestrator_state import (
     STAGE_FOLLOWUP_PENDING,
     STAGE_REVIEW_GREEN,
     create_cycle,
-    mark_decision_pending,
     mark_fix_detected,
     record_clean_decision,
     record_findings_decision,
@@ -39,7 +38,6 @@ from review_suite_core.orchestrator_state import (
 from review_suite_core.orchestrator_store import load_cycle_by_key, load_cycle_by_public_id, save_cycle
 
 
-INITIAL_LANE = "review_t1"
 FOLLOWUP_LANE = "review-followup"
 
 
@@ -61,10 +59,6 @@ def _help_command() -> str:
 
 def _review_command(public_id: str, *extra: str) -> str:
     return format_command([sys.executable, str(Path(__file__).resolve()), "--id", public_id, *extra])
-
-
-def _next_round_id(state: dict[str, Any]) -> str:
-    return f"round-{len(list(state.get('rounds') or [])) + 1}"
 
 
 def _round_by_id(state: dict[str, Any], round_id: str) -> dict[str, Any]:
@@ -89,30 +83,6 @@ def _pending_decision(state: dict[str, Any]) -> tuple[str, str]:
             return round_id, lane
     raise ValueError("no decision is pending for this review cycle")
 
-
-def _open_decision(state: dict[str, Any], *, lane: str, reviewed_head: str | None = None) -> dict[str, Any]:
-    if state.get("stage") == STAGE_DECISION_PENDING:
-        pending = dict(state.get("pending_action") or {})
-        if pending.get("kind") == "decision" and pending.get("round_id") and pending.get("lane"):
-            return state
-    round_id = _next_round_id(state)
-    pending_action: dict[str, Any] = {
-        "kind": "decision",
-        "round_id": round_id,
-        "lane": lane,
-    }
-    active = state.get("active_findings")
-    if lane == FOLLOWUP_LANE and isinstance(active, dict):
-        pending_action["source_round_id"] = active.get("round_id")
-    return mark_decision_pending(
-        state,
-        round_id=round_id,
-        lane=lane,
-        reviewed_head=reviewed_head,
-        pending_action=pending_action,
-    )
-
-
 def _with_fix_action(state: dict[str, Any]) -> dict[str, Any]:
     next_state = dict(state)
     active = dict(next_state.get("active_findings") or {})
@@ -136,11 +106,8 @@ def _identity_head(state: dict[str, Any]) -> str | None:
 
 def _resume_progress(state: dict[str, Any]) -> dict[str, Any]:
     stage = state.get("stage")
-    if stage == STAGE_CREATED:
+    if stage in {STAGE_CREATED, STAGE_FOLLOWUP_PENDING}:
         return state
-    if stage == STAGE_FOLLOWUP_PENDING:
-        lane = FOLLOWUP_LANE if stage == STAGE_FOLLOWUP_PENDING else INITIAL_LANE
-        return _open_decision(state, lane=lane, reviewed_head=_identity_head(state))
     if stage != STAGE_FIX_PENDING:
         return state
 
@@ -148,8 +115,7 @@ def _resume_progress(state: dict[str, Any]) -> dict[str, Any]:
     reviewed_head = str(active.get("reviewed_head") or "").strip()
     head = _identity_head(state)
     if head and reviewed_head and head != reviewed_head:
-        fixed = mark_fix_detected(state, head=head)
-        return _open_decision(fixed, lane=FOLLOWUP_LANE, reviewed_head=head)
+        return mark_fix_detected(state, head=head)
     return _with_fix_action(state)
 
 
@@ -193,10 +159,11 @@ def _create_or_resume_cycle(*, args: argparse.Namespace, state_dir: Path) -> dic
 
 
 def _advance_without_decision(state: dict[str, Any], *, state_dir: Path) -> dict[str, Any]:
-    result = run_one_expensive_step(state, state_dir=state_dir)
+    ready_state = _resume_progress(state)
+    result = run_one_expensive_step(ready_state, state_dir=state_dir)
     if result.ran_step:
         return result.state
-    return _resume_progress(state)
+    return _resume_progress(ready_state)
 
 
 def _apply_decision(state: dict[str, Any], decision: str) -> dict[str, Any]:
