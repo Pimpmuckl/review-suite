@@ -943,7 +943,7 @@ def _set_validation_status(state: dict[str, Any], key: str, value: str | None) -
     state.setdefault("validation", {})[key] = value
 
 
-def mark_local_green_handoff(
+def record_validation_statuses(
     state: dict[str, Any],
     *,
     focused: str | None = None,
@@ -951,11 +951,22 @@ def mark_local_green_handoff(
     ci: str | None = None,
 ) -> dict[str, Any]:
     next_state = _copy_state(state)
-    if not can_advance_or_anchor(next_state):
-        raise ValueError("local-green handoff requires review_green without unresolved findings or gate rerun")
     _set_validation_status(next_state, "focused", focused)
     _set_validation_status(next_state, "full_suite", full_suite)
     _set_validation_status(next_state, "ci", ci)
+    return next_state
+
+
+def mark_local_green_handoff(
+    state: dict[str, Any],
+    *,
+    focused: str | None = None,
+    full_suite: str | None = None,
+    ci: str | None = None,
+) -> dict[str, Any]:
+    if not can_advance_or_anchor(state):
+        raise ValueError("local-green handoff requires review_green without unresolved findings or gate rerun")
+    next_state = record_validation_statuses(state, focused=focused, full_suite=full_suite, ci=ci)
     _set_stage(next_state, STAGE_LOCAL_GREEN_HANDOFF)
     return next_state
 

@@ -147,6 +147,23 @@ def _cycle_payload(state_dir: Path, public_id: str) -> dict[str, object]:
     return json.loads((state_dir / "orchestrator" / "cycles" / f"{cycle_key}.json").read_text(encoding="utf-8"))
 
 
+def _assert_github_handoff(action: object, *, blocked_by: list[str]) -> None:
+    assert isinstance(action, dict)
+    payload = dict(action)
+    assert payload["kind"] == "github-handoff"
+    assert payload["lane"] == "review-github"
+    assert payload["after"] == "PR create/update"
+    assert payload["github_review"] == "not-run"
+    assert "merge_ready" not in payload
+    assert "cmd" not in payload
+    if blocked_by:
+        assert payload["validation_ready"] is False
+        assert payload["blocked_by"] == blocked_by
+    else:
+        assert payload["validation_ready"] is True
+        assert "blocked_by" not in payload
+
+
 def test_orchestrator_review_helper_uses_phase_prompt_without_predecision_anchor(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -312,7 +329,7 @@ def test_create_resume_and_id_reprint_use_one_pending_action(monkeypatch: pytest
     exit_code, final_clean = _run_review(monkeypatch, ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)])
     assert exit_code == 0
     assert final_clean["stage"] == "review-green"
-    assert final_clean["Action"] == {"status": "none"}
+    _assert_github_handoff(final_clean["Action"], blocked_by=["full_suite:unknown", "ci:unknown"])
     state = _cycle_payload(state_dir, public_id)
     assert state["pending_action"] is None
     assert state["validation"]["review_green"] == "passed"
@@ -320,6 +337,52 @@ def test_create_resume_and_id_reprint_use_one_pending_action(monkeypatch: pytest
         "phase_review-round-1",
         "phase_review-round-2",
     ]
+
+    exit_code, pending_validation = _run_review(
+        monkeypatch,
+        [
+            "--id",
+            public_id,
+            "--focused-validation",
+            "passed",
+            "--full-suite",
+            "pending",
+            "--ci",
+            "pending",
+            "--state-dir",
+            str(state_dir),
+        ],
+    )
+    assert exit_code == 0
+    assert pending_validation["stage"] == "review-green"
+    _assert_github_handoff(pending_validation["Action"], blocked_by=["full_suite:pending", "ci:pending"])
+    state = _cycle_payload(state_dir, public_id)
+    assert state["validation"]["focused"] == "passed"
+    assert state["validation"]["full_suite"] == "pending"
+    assert state["validation"]["ci"] == "pending"
+    assert len(deslop_calls) == 1
+    assert len(review_calls) == 2
+
+    exit_code, validation_ready = _run_review(
+        monkeypatch,
+        [
+            "--id",
+            public_id,
+            "--full-suite",
+            "passed",
+            "--ci",
+            "classified",
+            "--state-dir",
+            str(state_dir),
+        ],
+    )
+    assert exit_code == 0
+    _assert_github_handoff(validation_ready["Action"], blocked_by=[])
+    state = _cycle_payload(state_dir, public_id)
+    assert state["validation"]["full_suite"] == "passed"
+    assert state["validation"]["ci"] == "classified"
+    assert len(deslop_calls) == 1
+    assert len(review_calls) == 2
 
 
 def test_findings_fix_progression_and_clean_decision(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -405,7 +468,7 @@ def test_findings_fix_progression_and_clean_decision(monkeypatch: pytest.MonkeyP
     exit_code, final_clean = _run_review(monkeypatch, ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)])
     assert exit_code == 0
     assert final_clean["stage"] == "review-green"
-    assert final_clean["Action"] == {"status": "none"}
+    _assert_github_handoff(final_clean["Action"], blocked_by=["full_suite:unknown", "ci:unknown"])
     state = _cycle_payload(state_dir, public_id)
     assert state["active_findings"] is None
     assert state["validation"]["review_green"] == "passed"
@@ -455,6 +518,41 @@ def test_followup_findings_loops_back_to_fix_pending(monkeypatch: pytest.MonkeyP
     assert exit_code == 0
     assert reprint["stage"] == "fix-pending"
     assert len(followup_calls) == 1
+
+
+def test_validation_flags_do_not_run_expensive_resume(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    deslop_calls = _stub_deslop(monkeypatch)
+    review_calls = _stub_review(monkeypatch, "phase_review-round-1")
+    followup_calls = _stub_followup(monkeypatch, "followup-round-1")
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/validation-only")
+    _commit_file(repo, "app.txt", "feature\n", "feature")
+
+    _, created = _run_review(
+        monkeypatch,
+        ["--mode", "normal", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)],
+    )
+    public_id = str(created["review"])
+    _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+    _run_review(monkeypatch, ["--id", public_id, "--decision", "findings", "--state-dir", str(state_dir)])
+    _commit_file(repo, "app.txt", "fixed\n", "fix findings")
+
+    exit_code, payload = _run_review(
+        monkeypatch,
+        ["--id", public_id, "--full-suite", "pending", "--state-dir", str(state_dir)],
+    )
+
+    assert exit_code == 0
+    assert payload["stage"] == "fix-pending"
+    assert len(deslop_calls) == 1
+    assert len(review_calls) == 1
+    assert followup_calls == []
+    state = _cycle_payload(state_dir, public_id)
+    assert state["validation"]["full_suite"] == "pending"
+    assert state["active_findings"]["round_id"] == "phase_review-round-1"
 
 
 def test_benchmark_selection_prints_grading_requirement(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -513,7 +611,7 @@ def test_emergency_mode_skips_deslop_and_runs_review(monkeypatch: pytest.MonkeyP
 
     assert exit_code == 0
     assert clean["stage"] == "review-green"
-    assert clean["Action"] == {"status": "none"}
+    _assert_github_handoff(clean["Action"], blocked_by=["full_suite:unknown", "ci:unknown"])
     assert len(review_calls) == 1
 
 

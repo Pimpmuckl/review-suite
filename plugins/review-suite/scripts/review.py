@@ -27,6 +27,7 @@ from review_suite_core.orchestrator_state import (
     STAGE_DECISION_PENDING,
     STAGE_FIX_PENDING,
     STAGE_FOLLOWUP_PENDING,
+    STAGE_LOCAL_GREEN_HANDOFF,
     STAGE_REVIEW_GREEN,
     create_cycle,
     mark_fix_detected,
@@ -34,11 +35,14 @@ from review_suite_core.orchestrator_state import (
     record_findings_decision,
     record_followup_clean,
     record_followup_findings,
+    record_validation_statuses,
 )
 from review_suite_core.orchestrator_store import load_cycle_by_key, load_cycle_by_public_id, save_cycle
 
 
 FOLLOWUP_LANE = "review-followup"
+CLI_VALIDATION_STATUSES = ("passed", "failed", "pending", "waived", "classified")
+VALIDATION_READY_STATUSES = {"passed", "waived", "classified"}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -49,6 +53,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cd")
     parser.add_argument("--base", default="main")
     parser.add_argument("--decision", choices=(DECISION_CLEAN, DECISION_FINDINGS))
+    parser.add_argument("--focused-validation", choices=CLI_VALIDATION_STATUSES)
+    parser.add_argument("--full-suite", choices=CLI_VALIDATION_STATUSES)
+    parser.add_argument("--ci", choices=CLI_VALIDATION_STATUSES)
     parser.add_argument("--state-dir", default=str(default_state_dir()), help=argparse.SUPPRESS)
     return parser
 
@@ -183,6 +190,48 @@ def _apply_decision(state: dict[str, Any], decision: str) -> dict[str, Any]:
     raise ValueError(f"unsupported decision: {decision}")
 
 
+def _has_validation_status(args: argparse.Namespace) -> bool:
+    return any(
+        getattr(args, name) is not None
+        for name in ("focused_validation", "full_suite", "ci")
+    )
+
+
+def _record_validation_status(state: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
+    return record_validation_statuses(
+        state,
+        focused=args.focused_validation,
+        full_suite=args.full_suite,
+        ci=args.ci,
+    )
+
+
+def _validation_blockers(state: dict[str, Any]) -> list[str]:
+    validation = dict(state.get("validation") or {})
+    blockers: list[str] = []
+    for key in ("full_suite", "ci"):
+        value = str(validation.get(key) or "unknown").strip() or "unknown"
+        if value not in VALIDATION_READY_STATUSES:
+            blockers.append(f"{key}:{value}")
+    return blockers
+
+
+def _github_handoff_action(state: dict[str, Any]) -> dict[str, Any]:
+    action: dict[str, Any] = {
+        "kind": "github-handoff",
+        "lane": "review-github",
+        "after": "PR create/update",
+        "github_review": "not-run",
+    }
+    blockers = _validation_blockers(state)
+    if blockers:
+        action["validation_ready"] = False
+        action["blocked_by"] = blockers
+    else:
+        action["validation_ready"] = True
+    return action
+
+
 def _action_payload(state: dict[str, Any]) -> dict[str, Any] | None:
     public_id = str(state.get("public_id") or "").strip()
     stage = state.get("stage")
@@ -196,8 +245,8 @@ def _action_payload(state: dict[str, Any]) -> dict[str, Any] | None:
             "cmd": _review_command(public_id),
             "note": "Fix valid findings, then rerun this command.",
         }
-    if stage == STAGE_REVIEW_GREEN:
-        return {"status": "none"}
+    if stage in {STAGE_REVIEW_GREEN, STAGE_LOCAL_GREEN_HANDOFF}:
+        return _github_handoff_action(state)
     return {"cmd": _review_command(public_id)}
 
 
@@ -224,11 +273,19 @@ def main() -> int:
     try:
         args = parser.parse_args()
         state_dir = Path(args.state_dir)
+        has_validation_status = _has_validation_status(args)
         if args.decision and not args.id:
             raise ValueError("--decision requires --id")
+        if has_validation_status and not args.id:
+            raise ValueError("validation status flags require --id")
         if args.id:
             state = load_cycle_by_public_id(state_dir, str(args.id))
-            state = _apply_decision(state, str(args.decision)) if args.decision else _advance_without_decision(state, state_dir=state_dir)
+            if args.decision:
+                state = _apply_decision(state, str(args.decision))
+            if has_validation_status:
+                state = _record_validation_status(state, args)
+            elif not args.decision:
+                state = _advance_without_decision(state, state_dir=state_dir)
         else:
             state = _create_or_resume_cycle(args=args, state_dir=state_dir)
             state = _advance_without_decision(state, state_dir=state_dir)
