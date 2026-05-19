@@ -305,8 +305,24 @@ def _public_status_payload(payload: dict[str, object]) -> dict[str, object]:
     return public or payload
 
 
-def _review_command(public_id: str, *extra: str) -> str:
-    return format_command([sys.executable, Path(__file__).resolve().with_name("review.py").as_posix(), "--id", public_id, *extra])
+def _state_dir_args(state_dir: Path) -> list[str]:
+    resolved = state_dir.resolve(strict=False)
+    if resolved == Path(default_state_dir()).resolve(strict=False):
+        return []
+    return ["--state-dir", str(resolved)]
+
+
+def _review_command(public_id: str, *, state_dir: Path, extra: tuple[str, ...] = ()) -> str:
+    return format_command(
+        [
+            sys.executable,
+            Path(__file__).resolve().with_name("review.py").as_posix(),
+            "--id",
+            public_id,
+            *extra,
+            *_state_dir_args(state_dir),
+        ]
+    )
 
 
 def _orchestrator_cycles(state_dir: Path) -> list[dict[str, object]]:
@@ -360,21 +376,21 @@ def _orchestrator_progress_label(state: dict[str, object]) -> str | None:
     return None
 
 
-def _orchestrator_action(state: dict[str, object], public_id: str) -> dict[str, object]:
+def _orchestrator_action(state: dict[str, object], public_id: str, *, state_dir: Path) -> dict[str, object]:
     stage = str(state.get("stage") or "").strip()
     if stage == "decision-pending":
         return {
-            "cmd": _review_command(public_id, "--decision", "clean"),
-            "alt": _review_command(public_id, "--decision", "findings"),
+            "cmd": _review_command(public_id, state_dir=state_dir, extra=("--decision", "clean")),
+            "alt": _review_command(public_id, state_dir=state_dir, extra=("--decision", "findings")),
         }
     if stage == "fix-pending":
         return {
-            "cmd": _review_command(public_id),
+            "cmd": _review_command(public_id, state_dir=state_dir),
             "note": "Fix valid findings, then rerun this command.",
         }
     if stage in {"review-green", "local-green-handoff"}:
         action: dict[str, object] = {
-            "cmd": _review_command(public_id, "--github-review"),
+            "cmd": _review_command(public_id, state_dir=state_dir, extra=("--github-review",)),
             "after": "PR create/update",
         }
         blockers = []
@@ -386,7 +402,7 @@ def _orchestrator_action(state: dict[str, object], public_id: str) -> dict[str, 
         if blockers:
             action["blocked_by"] = blockers
         return action
-    return {"cmd": _review_command(public_id)}
+    return {"cmd": _review_command(public_id, state_dir=state_dir)}
 
 
 def _orchestrator_status_override(
@@ -425,7 +441,7 @@ def _orchestrator_status_override(
     public_id = str(state.get("public_id") or "").strip()
     payload: dict[str, object] = {
         "review": public_id,
-        "Action": _orchestrator_action(state, public_id),
+        "Action": _orchestrator_action(state, public_id, state_dir=state_dir),
     }
     progress = _orchestrator_progress_label(state)
     if progress:

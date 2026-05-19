@@ -295,6 +295,8 @@ def test_review_state_status_surfaces_orchestrator_progress(monkeypatch, tmp_pat
     assert "reason" not in emitted[0]
     assert "--id rvw_progress --decision clean" in str(emitted[0]["Action"]["cmd"])
     assert "--id rvw_progress --decision findings" in str(emitted[0]["Action"]["alt"])
+    assert "--state-dir" in str(emitted[0]["Action"]["cmd"])
+    assert str(state_dir.resolve(strict=False)) in str(emitted[0]["Action"]["cmd"])
     assert "review_t1.py" not in str(emitted[0]["Action"])
 
 
