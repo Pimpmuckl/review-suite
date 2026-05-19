@@ -244,6 +244,7 @@ def test_orchestrator_review_helper_uses_phase_prompt_without_predecision_anchor
     head = _commit_file(repo, "app.txt", "feature\n", "feature")
     captured: dict[str, object] = {}
     anchor_calls: list[dict[str, object]] = []
+    banner_calls: list[dict[str, object]] = []
     refresh_calls: list[dict[str, object]] = []
 
     def fake_run_round(
@@ -279,7 +280,7 @@ def test_orchestrator_review_helper_uses_phase_prompt_without_predecision_anchor
         }
 
     monkeypatch.setattr(review_suite_arena, "run_round", fake_run_round)
-    monkeypatch.setattr(review_suite_arena, "_print_round_banner", lambda **kwargs: None)
+    monkeypatch.setattr(review_suite_arena, "_print_round_banner", lambda **kwargs: banner_calls.append(kwargs))
     monkeypatch.setattr(review_suite_arena, "_print_findings", lambda result: False)
     monkeypatch.setattr(review_suite_arena, "record_review_anchor", lambda **kwargs: anchor_calls.append(kwargs))
     monkeypatch.setattr(review_suite_arena, "refresh_review_cost_report_best_effort", lambda **kwargs: refresh_calls.append(kwargs))
@@ -299,6 +300,8 @@ def test_orchestrator_review_helper_uses_phase_prompt_without_predecision_anchor
         allow_dirty=False,
         progress_interval_seconds=1,
         allow_unsafe_windows_wsl_fallback=False,
+        step_position=1,
+        step_total=2,
     )
 
     prompt = str(captured["prompt"])
@@ -309,6 +312,7 @@ def test_orchestrator_review_helper_uses_phase_prompt_without_predecision_anchor
     assert dict(captured["review_scope"])["manual_prompt_mode"] is True
     assert result["reviewed_head"] == head
     assert result["output_refs"] == ["rollout://alpha"]
+    assert banner_calls == [{"task_name": "review 1/2 precision", "round_id": result["round_id"]}]
     assert anchor_calls == []
     assert refresh_calls == [{"state_dir": state_dir, "review_cwd": repo}]
 
@@ -400,7 +404,11 @@ def test_create_resume_and_id_reprint_use_one_pending_action(monkeypatch: pytest
     assert "--decision clean" in str(second_step["Action"]["cmd"])
     assert len(review_calls) == 2
     assert review_calls[0]["step_name"] == "broad-discovery"
+    assert review_calls[0]["step_position"] == 1
+    assert review_calls[0]["step_total"] == 2
     assert review_calls[1]["step_name"] == "precision-signoff"
+    assert review_calls[1]["step_position"] == 2
+    assert review_calls[1]["step_total"] == 2
     state = _cycle_payload(state_dir, public_id)
     assert len(state["rounds"]) == 2
     assert state["rounds"][1]["round_id"] == "phase_review-round-2"
@@ -794,6 +802,8 @@ def test_findings_fix_progression_and_clean_decision(monkeypatch: pytest.MonkeyP
     assert "stage" not in second_step
     assert len(review_calls) == 2
     assert review_calls[1]["step_name"] == "precision-signoff"
+    assert review_calls[1]["step_position"] == 2
+    assert review_calls[1]["step_total"] == 2
 
     exit_code, final_clean = _run_review(monkeypatch, ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)])
     assert exit_code == 0

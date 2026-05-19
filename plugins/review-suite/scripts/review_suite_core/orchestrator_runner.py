@@ -200,6 +200,14 @@ def _task_id(state: dict[str, Any]) -> str | None:
     return branch or None
 
 
+def _review_step_position(state: dict[str, Any], step_index: int) -> tuple[int | None, int | None]:
+    steps = [item for item in list(dict(state.get("review_plan") or {}).get("steps") or []) if isinstance(item, dict)]
+    review_indices = [index for index, item in enumerate(steps) if _step_kind(item) == "review"]
+    if step_index not in review_indices:
+        return None, None
+    return review_indices.index(step_index) + 1, len(review_indices)
+
+
 def _attach_review_result(state: dict[str, Any], review_result: dict[str, object]) -> dict[str, Any]:
     round_id = str(review_result.get("round_id") or "").strip()
     for item in list(state.get("rounds") or []):
@@ -255,9 +263,12 @@ def _run_profile_review_once(
         raise ValueError("profile step is not a review step")
     cwd = _identity_cwd(state)
     scope = _review_scope(state, cwd)
+    step_position, step_total = _review_step_position(state, step_index)
     review_result = run_review_step(
         lane=INITIAL_REVIEW_LANE,
         step_name=str(step["name"]),
+        step_position=step_position,
+        step_total=step_total,
         reviewer_count=int(step["count"]),
         model=str(step["model"]),
         reasoning_effort=str(step["reasoning_effort"]),

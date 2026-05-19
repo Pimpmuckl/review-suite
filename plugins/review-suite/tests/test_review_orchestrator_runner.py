@@ -214,6 +214,8 @@ def test_runner_walks_profile_steps_after_clean_decisions(monkeypatch, tmp_path:
     assert first.state["pending_action"]["step"] == "broad-discovery"
     assert first.state["review_progress"]["current_step"]["name"] == "broad-discovery"
     assert review_calls[0]["step_name"] == "broad-discovery"
+    assert review_calls[0]["step_position"] == 1
+    assert review_calls[0]["step_total"] == 2
 
     queued = record_clean_decision(first.state, round_id="phase_review-round-1", lane="review_t1", reviewed_head="head-1")
 
@@ -237,6 +239,8 @@ def test_runner_walks_profile_steps_after_clean_decisions(monkeypatch, tmp_path:
     assert second.state["pending_action"]["step"] == "precision-signoff"
     assert second.state["rounds"][1]["round_id"] == "phase_review-round-2"
     assert review_calls[1]["step_name"] == "precision-signoff"
+    assert review_calls[1]["step_position"] == 2
+    assert review_calls[1]["step_total"] == 2
 
     green = record_clean_decision(second.state, round_id="phase_review-round-2", lane="review_t1", reviewed_head="head-1")
 

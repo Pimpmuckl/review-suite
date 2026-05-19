@@ -685,6 +685,21 @@ def _print_round_banner(*, task_name: str, round_id: str) -> None:
     print(f"[review-suite] round {task_name} {round_id}", file=sys.stderr, flush=True)
 
 
+def _orchestrator_banner_task_name(
+    lane: str,
+    *,
+    step_name: str | None = None,
+    step_position: int | None = None,
+    step_total: int | None = None,
+) -> str:
+    if lane != "review_t1":
+        return lane
+    name = str(step_name or "").strip()
+    if step_position and step_total and step_position > 0 and step_total > 0 and name:
+        return f"review {step_position}/{step_total} {name}"
+    return "review"
+
+
 def _public_summary(summary: dict[str, object]) -> dict[str, object]:
     public = copy.deepcopy(summary)
     task_classes = dict(public.get("task_classes") or {})
@@ -802,6 +817,8 @@ def run_orchestrator_review_step(
     progress_interval_seconds: int,
     allow_unsafe_windows_wsl_fallback: bool,
     grading_required: bool = False,
+    step_position: int | None = None,
+    step_total: int | None = None,
 ) -> dict[str, object]:
     if reviewer_count <= 0:
         raise ValueError("reviewer_count must be > 0")
@@ -826,6 +843,8 @@ def run_orchestrator_review_step(
         progress_interval_seconds=progress_interval_seconds,
         allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
         grading_required=grading_required,
+        step_position=step_position,
+        step_total=step_total,
     )
 
 
@@ -847,6 +866,8 @@ def _run_orchestrator_manual_review_step(
     progress_interval_seconds: int,
     allow_unsafe_windows_wsl_fallback: bool,
     grading_required: bool = False,
+    step_position: int | None = None,
+    step_total: int | None = None,
 ) -> dict[str, object]:
     if reviewer_count <= 0:
         raise ValueError("reviewer_count must be > 0")
@@ -884,8 +905,19 @@ def _run_orchestrator_manual_review_step(
             for slot in _orchestrator_review_slots(reviewer_count)
         ],
     }
+    if step_position is not None and step_total is not None:
+        payload["orchestrator_step_position"] = step_position
+        payload["orchestrator_step_total"] = step_total
     write_round(round_state_dir, payload)
-    _print_round_banner(task_name=lane, round_id=round_id)
+    _print_round_banner(
+        task_name=_orchestrator_banner_task_name(
+            lane,
+            step_name=step_name,
+            step_position=step_position,
+            step_total=step_total,
+        ),
+        round_id=round_id,
+    )
     if includes_deep_review_effort(list(payload.get("runs") or [])):
         print_deep_review_wait_note()
     completed = run_round(
@@ -904,6 +936,9 @@ def _run_orchestrator_manual_review_step(
     completed["grading_required"] = bool(grading_required)
     completed["public_task"] = lane
     completed["orchestrator_step"] = step_name
+    if step_position is not None and step_total is not None:
+        completed["orchestrator_step_position"] = step_position
+        completed["orchestrator_step_total"] = step_total
     write_round(round_state_dir, completed)
     refresh_review_cost_report_best_effort(state_dir=state_dir, review_cwd=review_cwd)
     result = public_round_result(completed)
