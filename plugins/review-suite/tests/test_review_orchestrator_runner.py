@@ -119,6 +119,38 @@ def _stub_followup(monkeypatch, *round_ids: str) -> list[dict[str, object]]:
     return calls
 
 
+def _stub_gate(monkeypatch, *round_ids: str) -> list[dict[str, object]]:
+    calls: list[dict[str, object]] = []
+    ids = list(round_ids) or ["phase_gate-round-1"]
+
+    def fake_run(**kwargs: object) -> tuple[dict[str, object], int]:
+        calls.append(dict(kwargs))
+        round_id = ids[min(len(calls) - 1, len(ids) - 1)]
+        return (
+            {
+                "round_id": round_id,
+                "task": "review_t2",
+                "status": "signoff_pending",
+                "blocked": False,
+                "signoff_required": True,
+                "runs": [
+                    {
+                        "slot": "Alpha",
+                        "status": "completed",
+                        "summary": "No findings.",
+                        "blocked": False,
+                        "block": None,
+                        "ref": f"rollout://{round_id}/alpha",
+                    }
+                ],
+            },
+            0,
+        )
+
+    monkeypatch.setattr(orchestrator_runner, "run_gate_step", fake_run)
+    return calls
+
+
 def test_runner_executes_one_deslop_step_and_marks_done(monkeypatch, tmp_path: Path) -> None:
     calls: list[tuple[list[str], Path]] = []
     review_calls = _stub_review(monkeypatch)
@@ -216,6 +248,46 @@ def test_runner_walks_profile_steps_after_clean_decisions(monkeypatch, tmp_path:
         "phase_review-round-2",
     ]
     assert len(review_calls) == 2
+
+
+def test_runner_runs_gate_profile_step_once_after_review_steps(monkeypatch, tmp_path: Path) -> None:
+    _stub_review(monkeypatch, "phase_review-round-1")
+    gate_calls = _stub_gate(monkeypatch, "phase_gate-round-1")
+    monkeypatch.setattr(
+        orchestrator_runner,
+        "_gate_review_scope_and_prompt",
+        lambda **kwargs: ({"base": "main", "reviewed_head": "head-1"}, ""),
+    )
+    state = _cycle(tmp_path, deslop_enabled=False, step_names=("precision",))
+    state["review_plan"]["steps"].append({"name": "local-signoff", "kind": "gate", "gate": "phase_gate"})
+
+    first = orchestrator_runner.run_one_expensive_step(state, state_dir=tmp_path / "state")
+    queued = record_clean_decision(first.state, round_id="phase_review-round-1", lane="review_t1", reviewed_head="head-1")
+    gate = orchestrator_runner.run_one_expensive_step(queued, state_dir=tmp_path / "state")
+
+    assert gate.ran_step is True
+    assert gate.step == "gate"
+    assert gate.state["stage"] == STAGE_DECISION_PENDING
+    assert gate.state["pending_action"] == {
+        "kind": "decision",
+        "round_id": "phase_gate-round-1",
+        "lane": "review_t2",
+        "gate": "phase_gate",
+        "step_index": 1,
+        "step": "local-signoff",
+    }
+    assert gate.state["rounds"][1]["kind"] == "gate"
+    assert gate.state["rounds"][1]["gate"] == "phase_gate"
+    assert gate.state["rounds"][1]["signoff_required"] is True
+    assert gate.state["rounds"][1]["output_refs"] == ["rollout://phase_gate-round-1/alpha"]
+    assert len(gate_calls) == 1
+    assert gate_calls[0]["gate_task_class"] == "phase_gate"
+    assert gate_calls[0]["review_scope"]["base"] == "main"
+
+    reprint = orchestrator_runner.run_one_expensive_step(gate.state, state_dir=tmp_path / "state")
+
+    assert reprint.ran_step is False
+    assert len(gate_calls) == 1
 
 
 def test_runner_skips_emergency_deslop(monkeypatch, tmp_path: Path) -> None:

@@ -311,6 +311,29 @@ def _review_step_name(state: dict[str, Any], step_index: int) -> str | None:
     return _optional_text(steps[step_index].get("name"))
 
 
+def _profile_step_kind(step: dict[str, Any]) -> str:
+    return str(step.get("kind") or "review").strip() or "review"
+
+
+def _next_profile_step_action(state: dict[str, Any]) -> dict[str, Any]:
+    progress = _review_progress(state)
+    step_index = int(progress["next_step_index"])
+    steps = _review_plan_steps(state)
+    step = steps[step_index] if 0 <= step_index < len(steps) else {}
+    action = {
+        "kind": "run-review-step",
+        "step_index": step_index,
+        "step": progress.get("next_step_name"),
+    }
+    step_kind = _profile_step_kind(step)
+    if step_kind != "review":
+        action["step_kind"] = step_kind
+    gate = _optional_text(step.get("gate"))
+    if gate:
+        action["gate"] = gate
+    return action
+
+
 def _set_review_progress(
     state: dict[str, Any],
     *,
@@ -384,30 +407,89 @@ def mark_review_step_pending(
     return next_state
 
 
+def mark_gate_step_pending(
+    state: dict[str, Any],
+    *,
+    round_id: str,
+    lane: str,
+    gate: str,
+    step_index: int,
+    step_name: str,
+    reviewed_head: str | None = None,
+) -> dict[str, Any]:
+    index = _nonnegative_int(step_index, field="step_index")
+    name = _required_text(step_name, field="step_name")
+    gate_context = _required_text(gate, field="gate")
+    next_state = mark_decision_pending(
+        state,
+        round_id=round_id,
+        lane=lane,
+        gate=gate_context,
+        reviewed_head=reviewed_head,
+        pending_action={
+            "kind": "decision",
+            "round_id": round_id,
+            "lane": lane,
+            "gate": gate_context,
+            "step_index": index,
+            "step": name,
+        },
+    )
+    profile_step = {
+        "index": index,
+        "name": name,
+        "round_id": _required_text(round_id, field="round_id"),
+        "lane": _required_text(lane, field="lane"),
+        "kind": "gate",
+        "gate": gate_context,
+    }
+    for item in list(next_state.get("rounds") or []):
+        if isinstance(item, dict) and item.get("round_id") == round_id:
+            item["profile_step"] = {"index": index, "name": name, "kind": "gate", "gate": gate_context}
+            break
+    active = next_state.get("active_findings")
+    if isinstance(active, dict) and isinstance(active.get("gate"), dict):
+        active_gate = dict(active["gate"])
+        if active_gate.get("lane") != lane or active_gate.get("gate") != gate_context:
+            raise ValueError("gate findings require rerunning the same gate before advancing")
+        active["rerun_round_id"] = _required_text(round_id, field="round_id")
+        active["status"] = STAGE_DECISION_PENDING
+    _set_review_progress(next_state, next_step_index=index, current_step=profile_step)
+    return next_state
+
+
 def _profile_step_for_round(state: dict[str, Any], round_id: str) -> dict[str, Any] | None:
     progress = _review_progress(state)
     current = progress.get("current_step")
     if isinstance(current, dict) and current.get("round_id") == round_id:
-        return current
+        return dict(current)
     pending = dict(state.get("pending_action") or {})
     if pending.get("round_id") == round_id and "step_index" in pending and pending.get("step"):
-        return {
+        payload = {
             "index": pending.get("step_index"),
             "name": pending.get("step"),
             "round_id": round_id,
             "lane": pending.get("lane"),
         }
+        if pending.get("gate"):
+            payload["kind"] = "gate"
+            payload["gate"] = pending.get("gate")
+        return payload
     for item in list(state.get("rounds") or []):
         if not isinstance(item, dict) or item.get("round_id") != round_id:
             continue
         profile_step = item.get("profile_step")
         if isinstance(profile_step, dict):
-            return {
+            payload = {
                 "index": profile_step.get("index"),
                 "name": profile_step.get("name"),
                 "round_id": round_id,
                 "lane": item.get("lane"),
             }
+            if profile_step.get("gate"):
+                payload["kind"] = "gate"
+                payload["gate"] = profile_step.get("gate")
+            return payload
     return None
 
 
@@ -424,20 +506,28 @@ def _profile_round_id_for_findings(state: dict[str, Any], active: dict[str, Any]
     return None
 
 
-def _complete_profile_step(state: dict[str, Any], *, round_id: str, lane: str, reviewed_head: str) -> bool:
-    profile_step = _profile_step_for_round(state, round_id)
-    if not profile_step:
-        return False
+def _complete_profile_step_from_metadata(
+    state: dict[str, Any],
+    *,
+    profile_step: dict[str, Any],
+    round_id: str,
+    lane: str,
+    reviewed_head: str,
+) -> bool:
     index = _nonnegative_int(profile_step.get("index"), field="profile_step.index")
     name = _required_text(profile_step.get("name"), field="profile_step.name")
     progress = _review_progress(state)
     completed = list(progress["completed_steps"])
+    step_kind = _profile_step_kind(profile_step)
+    gate = _optional_text(profile_step.get("gate"))
     completed_item = _compact(
         {
             "index": index,
             "name": name,
             "round_id": _required_text(round_id, field="round_id"),
             "lane": _required_text(lane, field="lane"),
+            "kind": step_kind if step_kind != "review" else None,
+            "gate": gate,
             "reviewed_head": reviewed_head,
         }
     )
@@ -449,6 +539,19 @@ def _complete_profile_step(state: dict[str, Any], *, round_id: str, lane: str, r
         completed.append(completed_item)
     _set_review_progress(state, next_step_index=max(int(progress["next_step_index"]), index + 1), current_step=None, completed_steps=completed)
     return True
+
+
+def _complete_profile_step(state: dict[str, Any], *, round_id: str, lane: str, reviewed_head: str) -> bool:
+    profile_step = _profile_step_for_round(state, round_id)
+    if not profile_step:
+        return False
+    return _complete_profile_step_from_metadata(
+        state,
+        profile_step=profile_step,
+        round_id=round_id,
+        lane=lane,
+        reviewed_head=reviewed_head,
+    )
 
 
 def deslop_is_ready(state: dict[str, Any]) -> bool:
@@ -661,19 +764,21 @@ def _mark_gate_rerun_needed_inplace(state: dict[str, Any]) -> None:
     if not followup_round_id:
         raise ValueError("gate rerun requires a clean follow-up round")
     active["status"] = STAGE_GATE_RERUN_NEEDED
+    profile_round_id = _profile_round_id_for_findings(state, active)
+    profile_step = _profile_step_for_round(state, profile_round_id) if profile_round_id else None
+    action = {
+        "kind": "rerun-gate",
+        "lane": gate.get("lane"),
+        "gate": gate.get("gate"),
+        "source_round_id": gate.get("round_id"),
+        "after_followup_round_id": followup_round_id,
+        "head": active.get("followup_head") or active.get("fix_head"),
+    }
+    if profile_step:
+        action["step_index"] = profile_step.get("index")
+        action["step"] = profile_step.get("name")
     _set_review_green(state, "unknown")
-    _set_stage(
-        state,
-        STAGE_GATE_RERUN_NEEDED,
-        {
-            "kind": "rerun-gate",
-            "lane": gate.get("lane"),
-            "gate": gate.get("gate"),
-            "source_round_id": gate.get("round_id"),
-            "after_followup_round_id": followup_round_id,
-            "head": active.get("followup_head") or active.get("fix_head"),
-        },
-    )
+    _set_stage(state, STAGE_GATE_RERUN_NEEDED, action)
 
 
 def mark_gate_rerun_needed(state: dict[str, Any]) -> dict[str, Any]:
@@ -725,17 +830,8 @@ def record_followup_clean(
             reviewed_head=head,
         )
     if completed_profile_step and review_profile_has_next_step(next_state):
-        progress = _review_progress(next_state)
         _set_review_green(next_state, "unknown")
-        _set_stage(
-            next_state,
-            STAGE_CREATED,
-            {
-                "kind": "run-review-step",
-                "step_index": progress.get("next_step_index"),
-                "step": progress.get("next_step_name"),
-            },
-        )
+        _set_stage(next_state, STAGE_CREATED, _next_profile_step_action(next_state))
         return next_state
     _set_review_green(next_state, "passed")
     _set_stage(next_state, STAGE_REVIEW_GREEN)
@@ -801,7 +897,7 @@ def record_clean_decision(
     active = next_state.get("active_findings")
     active_gate = active.get("gate") if isinstance(active, dict) and isinstance(active.get("gate"), dict) else None
     if active_gate:
-        if pending_action.get("kind") != "rerun-gate":
+        if pending_action.get("kind") != "decision" or pending_action.get("round_id") != round_id:
             raise ValueError("gate findings require fix, follow-up clean, and same gate rerun before advancing")
         if pending_action.get("lane") != resolved_lane or pending_action.get("gate") != _gate_name(resolved_lane, gate):
             raise ValueError("gate findings require rerunning the same gate before advancing")
@@ -836,21 +932,24 @@ def record_clean_decision(
         resolved_items = next_state.setdefault("resolved_gate_findings", [])
         if not any(isinstance(item, dict) and item.get("source_round_id") == resolved.get("source_round_id") for item in resolved_items):
             resolved_items.append(resolved)
+        profile_step = _profile_step_for_round(next_state, round_id)
+        if not profile_step and isinstance(active, dict):
+            profile_round_id = _profile_round_id_for_findings(next_state, active)
+            profile_step = _profile_step_for_round(next_state, profile_round_id) if profile_round_id else None
+        if profile_step:
+            completed_profile_step = _complete_profile_step_from_metadata(
+                next_state,
+                profile_step=profile_step,
+                round_id=round_id,
+                lane=resolved_lane,
+                reviewed_head=head,
+            )
         next_state["active_findings"] = None
     else:
         completed_profile_step = _complete_profile_step(next_state, round_id=round_id, lane=resolved_lane, reviewed_head=head)
     if completed_profile_step and review_profile_has_next_step(next_state):
-        progress = _review_progress(next_state)
         _set_review_green(next_state, "unknown")
-        _set_stage(
-            next_state,
-            STAGE_CREATED,
-            {
-                "kind": "run-review-step",
-                "step_index": progress.get("next_step_index"),
-                "step": progress.get("next_step_name"),
-            },
-        )
+        _set_stage(next_state, STAGE_CREATED, _next_profile_step_action(next_state))
         return next_state
     _set_review_green(next_state, "passed")
     _set_stage(next_state, STAGE_REVIEW_GREEN)

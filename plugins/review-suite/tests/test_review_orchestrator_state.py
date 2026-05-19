@@ -26,6 +26,7 @@ from review_suite_core.orchestrator_state import (
     mark_decision_pending,
     mark_fix_detected,
     mark_followup_review_pending,
+    mark_gate_step_pending,
     mark_local_green_handoff,
     mark_retry_requested,
     mark_running,
@@ -200,6 +201,63 @@ def test_clean_profile_steps_record_progress_until_final_review_green(tmp_path: 
     assert [item["round_id"] for item in green["review_progress"]["completed_steps"]] == ["round-1", "round-2"]
 
 
+def test_clean_gate_profile_step_records_pending_signoff_and_completes(tmp_path: Path) -> None:
+    state = _cycle(tmp_path)
+    state["review_plan"] = {
+        "steps": [
+            {"name": "precision", "count": 1, "model": "gpt-5.5", "reasoning_effort": "medium"},
+            {"name": "local-signoff", "kind": "gate", "gate": "phase_gate"},
+        ]
+    }
+    review_pending = mark_review_step_pending(
+        state,
+        round_id="round-1",
+        lane="review_t1",
+        step_index=0,
+        step_name="precision",
+        reviewed_head="head-1",
+    )
+    gate_queued = record_clean_decision(review_pending, round_id="round-1", lane="review_t1", reviewed_head="head-1")
+
+    assert gate_queued["stage"] == STAGE_CREATED
+    assert gate_queued["pending_action"] == {
+        "kind": "run-review-step",
+        "step_index": 1,
+        "step": "local-signoff",
+        "step_kind": "gate",
+        "gate": "phase_gate",
+    }
+
+    gate_pending = mark_gate_step_pending(
+        gate_queued,
+        round_id="gate-1",
+        lane="review_t2",
+        gate="phase_gate",
+        step_index=1,
+        step_name="local-signoff",
+        reviewed_head="head-1",
+    )
+
+    assert gate_pending["stage"] == "decision-pending"
+    assert gate_pending["pending_action"]["gate"] == "phase_gate"
+    assert gate_pending["rounds"][1]["kind"] == "gate"
+    assert gate_pending["rounds"][1]["gate"] == "phase_gate"
+
+    green = record_clean_decision(gate_pending, round_id="gate-1", lane="review_t2", gate="phase_gate", reviewed_head="head-1")
+
+    assert green["stage"] == STAGE_REVIEW_GREEN
+    assert green["validation"]["review_green"] == "passed"
+    assert green["review_progress"]["completed_steps"][-1] == {
+        "index": 1,
+        "name": "local-signoff",
+        "round_id": "gate-1",
+        "lane": "review_t2",
+        "kind": "gate",
+        "gate": "phase_gate",
+        "reviewed_head": "head-1",
+    }
+
+
 def test_followup_clean_completes_source_profile_step_and_continues(tmp_path: Path) -> None:
     state = _cycle(tmp_path)
     state["review_plan"] = {
@@ -265,7 +323,16 @@ def test_gate_findings_require_fix_followup_clean_and_same_gate_rerun(tmp_path: 
     with pytest.raises(ValueError, match="local-green handoff"):
         mark_local_green_handoff(followup_clean)
 
-    rerun_clean = record_clean_decision(followup_clean, round_id="gate-2", lane="review_t2", reviewed_head="head-2")
+    rerun_pending = mark_gate_step_pending(
+        followup_clean,
+        round_id="gate-2",
+        lane="review_t2",
+        gate="review_t2",
+        step_index=0,
+        step_name="review_t2",
+        reviewed_head="head-2",
+    )
+    rerun_clean = record_clean_decision(rerun_pending, round_id="gate-2", lane="review_t2", reviewed_head="head-2")
     assert rerun_clean["stage"] == STAGE_REVIEW_GREEN
     assert rerun_clean["active_findings"] is None
     assert rerun_clean["pending_action"] is None
@@ -289,6 +356,54 @@ def test_gate_findings_require_fix_followup_clean_and_same_gate_rerun(tmp_path: 
     assert handoff["validation"]["focused"] == "passed"
     assert handoff["validation"]["full_suite"] == "classified"
     assert handoff["validation"]["ci"] == "classified"
+
+
+def test_gate_profile_findings_require_same_gate_rerun_before_completion(tmp_path: Path) -> None:
+    state = _cycle(tmp_path)
+    state["review_plan"] = {"steps": [{"name": "local-signoff", "kind": "gate", "gate": "phase_gate"}]}
+    pending = mark_gate_step_pending(
+        state,
+        round_id="gate-1",
+        lane="review_t2",
+        gate="phase_gate",
+        step_index=0,
+        step_name="local-signoff",
+        reviewed_head="head-1",
+    )
+    findings = record_findings_decision(pending, round_id="gate-1", lane="review_t2", gate="phase_gate", reviewed_head="head-1")
+    fixed = mark_fix_detected(findings, head="head-2")
+    followup_clean = record_followup_clean(fixed, round_id="followup-1", reviewed_head="head-2")
+
+    assert followup_clean["stage"] == STAGE_GATE_RERUN_NEEDED
+    assert followup_clean["pending_action"]["gate"] == "phase_gate"
+    assert followup_clean["pending_action"]["step"] == "local-signoff"
+    with pytest.raises(ValueError, match="same gate"):
+        record_clean_decision(followup_clean, round_id="gate-2", lane="review_t4", gate="pr_gate", reviewed_head="head-2")
+
+    rerun_pending = mark_gate_step_pending(
+        followup_clean,
+        round_id="gate-2",
+        lane="review_t2",
+        gate="phase_gate",
+        step_index=0,
+        step_name="local-signoff",
+        reviewed_head="head-2",
+    )
+    rerun_clean = record_clean_decision(rerun_pending, round_id="gate-2", lane="review_t2", gate="phase_gate", reviewed_head="head-2")
+
+    assert rerun_clean["stage"] == STAGE_REVIEW_GREEN
+    assert rerun_clean["active_findings"] is None
+    assert rerun_clean["review_progress"]["completed_steps"] == [
+        {
+            "index": 0,
+            "name": "local-signoff",
+            "round_id": "gate-2",
+            "lane": "review_t2",
+            "kind": "gate",
+            "gate": "phase_gate",
+            "reviewed_head": "head-2",
+        }
+    ]
 
 
 def test_followup_findings_preserve_original_gate_rerun_requirement(tmp_path: Path) -> None:

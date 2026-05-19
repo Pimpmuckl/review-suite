@@ -6,15 +6,19 @@ from typing import Any
 SUPPORTED_MODES = ("brief", "normal", "deep", "emergency")
 SUPPORTED_SELECTIONS = ("stable", "benchmark", "auto")
 SUPPORTED_REASONING_EFFORTS = {"low", "medium", "high", "xhigh"}
+SUPPORTED_STEP_KINDS = ("review", "gate")
+SUPPORTED_GATE_TASK_CLASSES = ("phase_gate", "pr_gate")
 
 
 @dataclass(frozen=True)
 class OrchestratorProfileStep:
+    kind: str
     name: str
-    count: int
-    model: str
-    reasoning_effort: str
+    count: int | None = None
+    model: str | None = None
+    reasoning_effort: str | None = None
     service_tier: str | None = None
+    gate: str | None = None
 
 
 @dataclass(frozen=True)
@@ -74,15 +78,38 @@ def _normalize_selection(selection: str) -> str:
     return normalized
 
 
+def _normalize_step_kind(value: Any, *, field: str) -> str:
+    kind = str(value or "review").strip() or "review"
+    if kind not in SUPPORTED_STEP_KINDS:
+        raise ValueError(f"{field}.kind must be one of: {', '.join(SUPPORTED_STEP_KINDS)}")
+    return kind
+
+
+def _normalize_gate(value: Any, *, field: str) -> str:
+    gate = _non_empty_text(value, field=f"{field}.gate")
+    if gate not in SUPPORTED_GATE_TASK_CLASSES:
+        raise ValueError(f"{field}.gate must be one of: {', '.join(SUPPORTED_GATE_TASK_CLASSES)}")
+    return gate
+
+
 def _normalize_step(raw_step: Any, *, field: str) -> OrchestratorProfileStep:
     if not isinstance(raw_step, dict):
         raise ValueError(f"{field} must be an object")
+    kind = _normalize_step_kind(raw_step.get("kind"), field=field)
+    name = _non_empty_text(raw_step.get("name"), field=f"{field}.name")
+    if kind == "gate":
+        return OrchestratorProfileStep(
+            kind=kind,
+            name=name,
+            gate=_normalize_gate(raw_step.get("gate"), field=field),
+        )
     effort = _non_empty_text(raw_step.get("reasoning_effort"), field=f"{field}.reasoning_effort")
     if effort not in SUPPORTED_REASONING_EFFORTS:
         raise ValueError(f"{field}.reasoning_effort must be one of: {', '.join(sorted(SUPPORTED_REASONING_EFFORTS))}")
     service_tier = str(raw_step.get("service_tier") or "").strip() or None
     return OrchestratorProfileStep(
-        name=_non_empty_text(raw_step.get("name"), field=f"{field}.name"),
+        kind=kind,
+        name=name,
         count=_positive_int(raw_step.get("count"), field=f"{field}.count"),
         model=_non_empty_text(raw_step.get("model"), field=f"{field}.model"),
         reasoning_effort=effort,

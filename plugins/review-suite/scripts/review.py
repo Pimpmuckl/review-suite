@@ -6,6 +6,12 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from review_gate import (
+    gate_record_status,
+    gate_signoff_decision_for_round,
+    load_gate_record,
+    record_gate_signoff_decision,
+)
 from review_suite_core import (
     AxiArgumentParser,
     current_branch,
@@ -15,6 +21,7 @@ from review_suite_core import (
     emit_toon,
     format_command,
     merge_base,
+    record_review_anchor,
     resolve_repo_root,
 )
 from review_suite_core.config import default_state_dir, load_config
@@ -41,6 +48,7 @@ from review_suite_core.orchestrator_store import load_cycle_by_key, load_cycle_b
 
 
 FOLLOWUP_LANE = "review-followup"
+GATE_LANES = {"review_t2", "review_t4"}
 CLI_VALIDATION_STATUSES = ("passed", "failed", "pending", "waived", "classified")
 VALIDATION_READY_STATUSES = {"passed", "waived", "classified"}
 
@@ -90,6 +98,7 @@ def _pending_decision(state: dict[str, Any]) -> tuple[str, str]:
             return round_id, lane
     raise ValueError("no decision is pending for this review cycle")
 
+
 def _with_fix_action(state: dict[str, Any]) -> dict[str, Any]:
     next_state = dict(state)
     active = dict(next_state.get("active_findings") or {})
@@ -98,6 +107,71 @@ def _with_fix_action(state: dict[str, Any]) -> dict[str, Any]:
         "round_id": active.get("round_id"),
     }
     return next_state
+
+
+def _round_gate(round_payload: dict[str, Any], lane: str) -> str | None:
+    gate = str(round_payload.get("gate") or "").strip()
+    if gate:
+        return gate
+    return lane if lane in GATE_LANES else None
+
+
+def _gate_output_refs(runs: list[object]) -> list[str]:
+    refs: list[str] = []
+    for run in runs:
+        if not isinstance(run, dict):
+            continue
+        ref = str(run.get("reviewer_output_ref") or "").strip()
+        if ref:
+            refs.append(ref)
+    return refs
+
+
+def _record_gate_decision(
+    *,
+    state_dir: Path,
+    round_id: str,
+    lane: str,
+    verdict: str,
+) -> None:
+    gate_record = load_gate_record(state_dir, round_id)
+    if gate_record is None:
+        raise ValueError(f"gate round not found: {round_id}")
+    existing = gate_signoff_decision_for_round(state_dir, round_id)
+    status = gate_record_status(gate_record, existing)
+    if status == "blocked":
+        raise ValueError(f"blocked gate rounds cannot be closed as signoff decisions: {round_id}")
+    if existing:
+        record_gate_signoff_decision(
+            state_dir=state_dir,
+            gate_record=gate_record,
+            verdict=verdict,
+            workflow_anchor_recorded=bool(existing.get("workflow_anchor_recorded")),
+        )
+        return
+    workflow_anchor_recorded = False
+    review_cwd_text = str(gate_record.get("review_cwd") or "").strip()
+    if verdict == DECISION_CLEAN:
+        if not review_cwd_text:
+            raise ValueError(f"gate round is missing review_cwd and cannot be anchored: {round_id}")
+        review_scope = dict(gate_record.get("review_scope") or {})
+        record_review_anchor(
+            state_dir=state_dir,
+            review_cwd=Path(review_cwd_text),
+            lane=lane,
+            base=str(review_scope.get("base") or "") or None,
+            review_scope=review_scope,
+            round_id=round_id,
+            task_id=str(gate_record.get("task_id") or round_id),
+            output_refs=_gate_output_refs(list(gate_record.get("runs") or [])),
+        )
+        workflow_anchor_recorded = True
+    record_gate_signoff_decision(
+        state_dir=state_dir,
+        gate_record=gate_record,
+        verdict=verdict,
+        workflow_anchor_recorded=workflow_anchor_recorded,
+    )
 
 
 def _identity_head(state: dict[str, Any]) -> str | None:
@@ -150,17 +224,26 @@ def _create_or_resume_cycle(*, args: argparse.Namespace, state_dir: Path) -> dic
     if existing is not None:
         return existing
     state["grading"] = {"required": bool(resolution.requires_grading)}
-    state["review_plan"] = {
-        "steps": [
+    def step_payload(step: Any) -> dict[str, Any]:
+        payload = {
+            "kind": step.kind,
+            "name": step.name,
+        }
+        if step.kind == "gate":
+            payload["gate"] = step.gate
+            return payload
+        payload.update(
             {
-                "name": step.name,
                 "count": step.count,
                 "model": step.model,
                 "reasoning_effort": step.reasoning_effort,
                 "service_tier": step.service_tier,
             }
-            for step in resolution.steps
-        ],
+        )
+        return payload
+
+    state["review_plan"] = {
+        "steps": [step_payload(step) for step in resolution.steps],
     }
     return state
 
@@ -173,20 +256,28 @@ def _advance_without_decision(state: dict[str, Any], *, state_dir: Path) -> dict
     return _resume_progress(ready_state)
 
 
-def _apply_decision(state: dict[str, Any], decision: str) -> dict[str, Any]:
+def _apply_decision(state: dict[str, Any], decision: str, *, state_dir: Path) -> dict[str, Any]:
     ready_state = _resume_progress(state)
     if ready_state.get("stage") != STAGE_DECISION_PENDING:
         raise ValueError("no decision is pending for this review cycle")
     round_id, lane = _pending_decision(ready_state)
-    reviewed_head = str(_round_by_id(ready_state, round_id).get("reviewed_head") or "").strip() or None
+    round_payload = _round_by_id(ready_state, round_id)
+    reviewed_head = str(round_payload.get("reviewed_head") or "").strip() or None
+    gate = _round_gate(round_payload, lane)
     if decision == DECISION_CLEAN:
         if lane == FOLLOWUP_LANE:
             return record_followup_clean(ready_state, round_id=round_id, reviewed_head=reviewed_head)
-        return record_clean_decision(ready_state, round_id=round_id, lane=lane, reviewed_head=reviewed_head)
+        next_state = record_clean_decision(ready_state, round_id=round_id, lane=lane, reviewed_head=reviewed_head, gate=gate)
+        if gate:
+            _record_gate_decision(state_dir=state_dir, round_id=round_id, lane=lane, verdict=decision)
+        return next_state
     if decision == DECISION_FINDINGS:
         if lane == FOLLOWUP_LANE:
             return _with_fix_action(record_followup_findings(ready_state, round_id=round_id, reviewed_head=reviewed_head))
-        return _with_fix_action(record_findings_decision(ready_state, round_id=round_id, lane=lane, reviewed_head=reviewed_head))
+        next_state = _with_fix_action(record_findings_decision(ready_state, round_id=round_id, lane=lane, reviewed_head=reviewed_head, gate=gate))
+        if gate:
+            _record_gate_decision(state_dir=state_dir, round_id=round_id, lane=lane, verdict=decision)
+        return next_state
     raise ValueError(f"unsupported decision: {decision}")
 
 
@@ -281,7 +372,7 @@ def main() -> int:
         if args.id:
             state = load_cycle_by_public_id(state_dir, str(args.id))
             if args.decision:
-                state = _apply_decision(state, str(args.decision))
+                state = _apply_decision(state, str(args.decision), state_dir=state_dir)
             if has_validation_status:
                 state = _record_validation_status(state, args)
             elif not args.decision:

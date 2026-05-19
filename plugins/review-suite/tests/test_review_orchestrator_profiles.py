@@ -23,10 +23,25 @@ def test_default_stable_profiles_cover_all_modes(tmp_path: Path) -> None:
     assert set(profiles["stable"]) == {"brief", "normal", "deep", "emergency"}
     assert profiles["stable"]["brief"].steps[0].count == 2
     assert profiles["stable"]["brief"].steps[0].model == "gpt-5.5"
-    assert [step.model for step in profiles["stable"]["normal"].steps] == ["gpt-5.4", "gpt-5.5"]
-    assert [step.count for step in profiles["stable"]["normal"].steps] == [4, 2]
-    assert {step.reasoning_effort for step in profiles["stable"]["deep"].steps} == {"xhigh"}
+    assert [step.model for step in profiles["stable"]["normal"].steps if step.kind == "review"] == ["gpt-5.4", "gpt-5.5"]
+    assert [step.count for step in profiles["stable"]["normal"].steps if step.kind == "review"] == [4, 2]
+    assert {step.reasoning_effort for step in profiles["stable"]["deep"].steps if step.kind == "review"} == {"xhigh"}
+    for mode in ("brief", "normal", "deep", "emergency"):
+        step = profiles["stable"][mode].steps[-1]
+        assert step.kind == "gate"
+        assert step.gate == "phase_gate"
     assert profiles["stable"]["emergency"].deslop_enabled is False
+
+
+def test_profile_step_kind_defaults_to_review(tmp_path: Path) -> None:
+    config = deepcopy(load_config(tmp_path / "state"))
+    config["orchestrator"]["profiles"]["stable"]["brief"]["steps"] = [
+        {"name": "precision", "count": 1, "model": "gpt-5.5", "reasoning_effort": "medium"}
+    ]
+
+    profiles = load_orchestrator_profiles(config)
+
+    assert profiles["stable"]["brief"].steps[0].kind == "review"
 
 
 @pytest.mark.parametrize("mode", ["brief", "normal", "deep", "emergency"])

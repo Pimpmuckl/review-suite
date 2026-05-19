@@ -6,21 +6,26 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from review_gate import run_gate_round
 from review_followup import build_followup_prompt
 from review_suite_arena import run_orchestrator_followup_review_step, run_orchestrator_review_step
+from review_suite_local import build_local_review_request, build_phase_instructions, default_roster_path
 
 from .axi_output import format_command
 from .config import lens_model_config
-from .lens_runtime import DEFAULT_PROGRESS_INTERVAL_SECONDS
+from .lens_runtime import DEFAULT_PROGRESS_INTERVAL_SECONDS, DEFAULT_TIMEOUT_SECONDS
 from .orchestrator_state import (
     STAGE_CREATED,
     STAGE_DECISION_PENDING,
     STAGE_FOLLOWUP_PENDING,
+    STAGE_GATE_RERUN_NEEDED,
     deslop_is_ready,
     deslop_should_run,
+    mark_blocked,
     mark_deslop_done,
     mark_deslop_failed,
     mark_followup_review_pending,
+    mark_gate_step_pending,
     mark_review_step_pending,
     next_review_profile_step,
     review_profile_has_next_step,
@@ -31,6 +36,10 @@ from .workflow_state import current_head, diff_artifact, merge_base
 
 INITIAL_REVIEW_LANE = "review_t1"
 FOLLOWUP_REVIEW_LANE = "review-followup"
+GATE_LANES_BY_TASK_CLASS = {
+    "phase_gate": "review_t2",
+    "pr_gate": "review_t4",
+}
 
 
 @dataclass(frozen=True)
@@ -115,11 +124,30 @@ def _review_should_run(state: dict[str, Any]) -> bool:
     return pending_kind in (None, "resume-after-deslop", "run-review-step") and review_profile_has_next_step(state)
 
 
-def _next_review_step(state: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+def _step_kind(step: dict[str, Any]) -> str:
+    return str(step.get("kind") or "review").strip() or "review"
+
+
+def _next_profile_step(state: dict[str, Any]) -> tuple[int, dict[str, Any]]:
     step_index, step = next_review_profile_step(state)
-    for key in ("name", "count", "model", "reasoning_effort"):
+    if not str(step.get("name") or "").strip():
+        raise ValueError(f"state.review_plan.steps[{step_index}].name is required")
+    kind = _step_kind(step)
+    if kind == "gate":
+        gate = str(step.get("gate") or "").strip()
+        if gate not in GATE_LANES_BY_TASK_CLASS:
+            raise ValueError(
+                f"state.review_plan.steps[{step_index}].gate must be one of: {', '.join(GATE_LANES_BY_TASK_CLASS)}"
+            )
+        step["kind"] = kind
+        step["gate"] = gate
+        return step_index, step
+    if kind != "review":
+        raise ValueError(f"state.review_plan.steps[{step_index}].kind must be review or gate")
+    for key in ("count", "model", "reasoning_effort"):
         if not str(step.get(key) or "").strip():
             raise ValueError(f"state.review_plan.steps[{step_index}].{key} is required")
+    step["kind"] = kind
     step["count"] = int(step["count"])
     if int(step["count"]) <= 0:
         raise ValueError(f"state.review_plan.steps[{step_index}].count must be > 0")
@@ -161,6 +189,12 @@ def _attach_review_result(state: dict[str, Any], review_result: dict[str, object
         item["review_status"] = str(review_result.get("status") or "")
         item["review_blocked"] = bool(review_result.get("blocked"))
         output_refs = [str(ref) for ref in list(review_result.get("output_refs") or []) if str(ref).strip()]
+        if not output_refs:
+            output_refs = [
+                str(run.get("ref") or "")
+                for run in list(review_result.get("runs") or [])
+                if isinstance(run, dict) and str(run.get("ref") or "").strip()
+            ]
         if output_refs:
             item["output_refs"] = output_refs
         runs = [dict(run) for run in list(review_result.get("runs") or []) if isinstance(run, dict)]
@@ -171,6 +205,8 @@ def _attach_review_result(state: dict[str, Any], review_result: dict[str, object
             item["round_state_dir"] = round_state_dir
         if bool(review_result.get("grading_required")):
             item["grading_required"] = True
+        if bool(review_result.get("signoff_required")):
+            item["signoff_required"] = True
         break
     return state
 
@@ -183,8 +219,21 @@ def run_followup_review_step(**kwargs: Any) -> dict[str, object]:
     return run_orchestrator_followup_review_step(**kwargs)
 
 
-def _run_profile_review_once(state: dict[str, Any], *, state_dir: Path) -> OrchestratorRunnerResult:
-    step_index, step = _next_review_step(state)
+def run_gate_step(**kwargs: Any) -> tuple[dict[str, Any], int]:
+    return run_gate_round(**kwargs)
+
+
+def _run_profile_review_once(
+    state: dict[str, Any],
+    *,
+    state_dir: Path,
+    step_index: int | None = None,
+    step: dict[str, Any] | None = None,
+) -> OrchestratorRunnerResult:
+    if step_index is None or step is None:
+        step_index, step = _next_profile_step(state)
+    if _step_kind(step) != "review":
+        raise ValueError("profile step is not a review step")
     cwd = _identity_cwd(state)
     scope = _review_scope(state, cwd)
     review_result = run_review_step(
@@ -220,6 +269,111 @@ def _run_profile_review_once(state: dict[str, Any], *, state_dir: Path) -> Orche
         _attach_review_result(next_state, review_result),
         ran_step=True,
         step="review",
+    )
+
+
+def _gate_output_refs(runs: list[object]) -> list[str]:
+    return [
+        str(run.get("ref") or "")
+        for run in runs
+        if isinstance(run, dict) and str(run.get("ref") or "").strip()
+    ]
+
+
+def _gate_review_scope_and_prompt(*, state: dict[str, Any], cwd: Path) -> tuple[dict[str, object], str]:
+    request = build_local_review_request(
+        review_cwd=cwd,
+        base=_identity_text(state, "base"),
+        commit_values=None,
+        instruction_builder=build_phase_instructions,
+        custom_instructions=None,
+    )
+    return request.review_scope, request.prompt
+
+
+def _gate_rerun_step(state: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+    pending = dict(state.get("pending_action") or {})
+    gate = str(pending.get("gate") or "").strip()
+    if gate not in GATE_LANES_BY_TASK_CLASS:
+        raise ValueError("gate rerun requires a supported gate")
+    progress = dict(state.get("review_progress") or {})
+    step_index = int(pending.get("step_index") if pending.get("step_index") is not None else progress.get("next_step_index", 0))
+    return step_index, {
+        "kind": "gate",
+        "name": str(pending.get("step") or gate),
+        "gate": gate,
+    }
+
+
+def _run_profile_gate_once(
+    state: dict[str, Any],
+    *,
+    state_dir: Path,
+    step_index: int | None = None,
+    step: dict[str, Any] | None = None,
+) -> OrchestratorRunnerResult:
+    if step_index is None or step is None:
+        step_index, step = _next_profile_step(state)
+    if _step_kind(step) != "gate":
+        raise ValueError("profile step is not a gate step")
+    gate_task_class = str(step.get("gate") or "").strip()
+    lane = GATE_LANES_BY_TASK_CLASS.get(gate_task_class)
+    if lane is None:
+        raise ValueError(f"unsupported gate task class: {gate_task_class}")
+    cwd = _identity_cwd(state)
+    review_scope, prompt = _gate_review_scope_and_prompt(state=state, cwd=cwd)
+    payload, exit_code = run_gate_step(
+        gate_task_class=gate_task_class,
+        review_cwd=cwd,
+        roster_path=default_roster_path(),
+        state_dir=state_dir,
+        sqlite_path=Path.home() / ".codex" / "state_5.sqlite",
+        task_id=_task_id(state),
+        allow_dirty=False,
+        progress_interval_seconds=DEFAULT_PROGRESS_INTERVAL_SECONDS,
+        timeout_seconds=DEFAULT_TIMEOUT_SECONDS,
+        allow_unsafe_windows_wsl_fallback=False,
+        review_scope=review_scope,
+        prompt=prompt,
+    )
+    round_id = str(payload.get("round_id") or "").strip()
+    if not round_id:
+        raise ValueError("gate step did not return a round_id")
+    reviewed_head = str(review_scope.get("reviewed_head") or "").strip() or None
+    if str(payload.get("status") or "") != "signoff_pending":
+        return OrchestratorRunnerResult(
+            mark_blocked(
+                state,
+                reason=f"{lane} gate did not reach pending signoff (exit {exit_code})",
+                round_id=round_id,
+            ),
+            ran_step=True,
+            step="gate",
+        )
+    next_state = mark_gate_step_pending(
+        state,
+        round_id=round_id,
+        lane=lane,
+        gate=gate_task_class,
+        step_index=step_index,
+        step_name=str(step["name"]),
+        reviewed_head=reviewed_head,
+    )
+    gate_result = {
+        "round_id": round_id,
+        "lane": lane,
+        "kind": "gate",
+        "status": payload.get("status"),
+        "blocked": bool(payload.get("blocked")),
+        "reviewed_head": reviewed_head,
+        "output_refs": _gate_output_refs(list(payload.get("runs") or [])),
+        "runs": list(payload.get("runs") or []),
+        "signoff_required": bool(payload.get("signoff_required")),
+    }
+    return OrchestratorRunnerResult(
+        _attach_review_result(next_state, gate_result),
+        ran_step=True,
+        step="gate",
     )
 
 
@@ -321,9 +475,15 @@ def run_one_expensive_step(state: dict[str, Any], *, state_dir: Path | None = No
     if deslop_should_run(state):
         return _run_deslop_once(state)
     if _review_should_run(state):
-        return _run_profile_review_once(state, state_dir=resolved_state_dir)
+        step_index, step = _next_profile_step(state)
+        if _step_kind(step) == "gate":
+            return _run_profile_gate_once(state, state_dir=resolved_state_dir, step_index=step_index, step=step)
+        return _run_profile_review_once(state, state_dir=resolved_state_dir, step_index=step_index, step=step)
     if state.get("stage") == STAGE_FOLLOWUP_PENDING:
         return _run_followup_review_once(state, state_dir=resolved_state_dir)
+    if state.get("stage") == STAGE_GATE_RERUN_NEEDED:
+        step_index, step = _gate_rerun_step(state)
+        return _run_profile_gate_once(state, state_dir=resolved_state_dir, step_index=step_index, step=step)
     if state.get("stage") == STAGE_DECISION_PENDING:
         return OrchestratorRunnerResult(state, ran_step=False)
     return OrchestratorRunnerResult(state, ran_step=False)

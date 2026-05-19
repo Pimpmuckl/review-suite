@@ -23,7 +23,8 @@
           "deslop_enabled": true,
           "requires_grading": false,
           "steps": [
-            {"name": "precision", "count": 2, "model": "gpt-5.5", "reasoning_effort": "medium"}
+            {"name": "precision", "count": 2, "model": "gpt-5.5", "reasoning_effort": "medium"},
+            {"name": "local-signoff", "kind": "gate", "gate": "phase_gate"}
           ]
         },
         "normal": {
@@ -31,7 +32,8 @@
           "requires_grading": false,
           "steps": [
             {"name": "broad-discovery", "count": 4, "model": "gpt-5.4", "reasoning_effort": "medium"},
-            {"name": "precision-signoff", "count": 2, "model": "gpt-5.5", "reasoning_effort": "medium"}
+            {"name": "precision-signoff", "count": 2, "model": "gpt-5.5", "reasoning_effort": "medium"},
+            {"name": "local-signoff", "kind": "gate", "gate": "phase_gate"}
           ]
         },
         "deep": {
@@ -39,14 +41,16 @@
           "requires_grading": false,
           "steps": [
             {"name": "deep-discovery", "count": 2, "model": "gpt-5.4", "reasoning_effort": "xhigh"},
-            {"name": "deep-signoff", "count": 2, "model": "gpt-5.5", "reasoning_effort": "xhigh"}
+            {"name": "deep-signoff", "count": 2, "model": "gpt-5.5", "reasoning_effort": "xhigh"},
+            {"name": "local-signoff", "kind": "gate", "gate": "phase_gate"}
           ]
         },
         "emergency": {
           "deslop_enabled": false,
           "requires_grading": false,
           "steps": [
-            {"name": "urgent-precision", "count": 2, "model": "gpt-5.5", "reasoning_effort": "medium"}
+            {"name": "urgent-precision", "count": 2, "model": "gpt-5.5", "reasoning_effort": "medium"},
+            {"name": "local-signoff", "kind": "gate", "gate": "phase_gate"}
           ]
         }
       },
