@@ -300,6 +300,56 @@ def test_review_state_status_surfaces_orchestrator_progress(monkeypatch, tmp_pat
     assert "review_t1.py" not in str(emitted[0]["Action"])
 
 
+def test_review_state_status_ignores_stale_green_orchestrator_cycle(monkeypatch, tmp_path: Path) -> None:
+    emitted: list[dict[str, object]] = []
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    repo.mkdir()
+    _write_orchestrator_cycle(
+        state_dir,
+        "orc-stale-green.json",
+        {
+            "public_id": "rvw_stale",
+            "stage": "review-green",
+            "identity": {
+                "cwd": str(review_state.normalize_review_cwd_value(repo)),
+                "base": "main",
+                "branch": "feature/progress",
+                "head": "old-head",
+            },
+            "review_heads": {"last_reviewed_head": "old-head"},
+        },
+    )
+    monkeypatch.setattr(review_state, "resolve_repo_root", lambda cd: repo)
+    monkeypatch.setattr(review_state, "resolve_caller_id", lambda explicit: (None, None))
+    monkeypatch.setattr(review_state, "pending_gate_signoff_records", lambda **kwargs: [])
+    monkeypatch.setattr(
+        review_state,
+        "inspect_workflow_status",
+        lambda **kwargs: {
+            "recommendation": "coherence-review",
+            "reason": "diff_churn_exceeded",
+            "recommended_lane": "review_t1",
+            "branch": "feature/progress",
+            "head": "new-head",
+        },
+    )
+    monkeypatch.setattr(review_state, "emit_toon", lambda payload: emitted.append(payload))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["review_state.py", "status", "--base", "main", "--state-dir", str(state_dir)],
+    )
+
+    exit_code = review_state.main()
+
+    assert exit_code == 0
+    assert "review" not in emitted[0]
+    assert emitted[0]["recommendation"] == "coherence-review"
+    assert emitted[0]["reason"] == "diff_churn_exceeded"
+    assert "review_t1.py" in str(emitted[0]["Action"]["cmd"])
+
+
 def test_inspect_workflow_status_recommends_followup_after_t4_findings_amended_head(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"

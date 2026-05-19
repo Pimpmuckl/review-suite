@@ -28,6 +28,7 @@ GATE_FINDINGS_RERUN_REASON = {
     "review_t4": "t4_findings_followup_needs_signoff",
 }
 ORCHESTRATOR_HIDDEN_STAGES = {"aborted", "dismissed"}
+ORCHESTRATOR_HEAD_CURRENT_STAGES = {"review-green", "local-green-handoff"}
 VALIDATION_READY_STATUSES = {"passed", "waived", "classified"}
 
 
@@ -405,6 +406,23 @@ def _orchestrator_action(state: dict[str, object], public_id: str, *, state_dir:
     return {"cmd": _review_command(public_id, state_dir=state_dir)}
 
 
+def _orchestrator_review_head(state: dict[str, object]) -> str:
+    review_heads = dict(state.get("review_heads") or {})
+    for key in ("last_gate_clean_head", "last_followup_head", "last_reviewed_head", "last_fix_head", "head"):
+        value = str(review_heads.get(key) or "").strip()
+        if value:
+            return value
+    return str(dict(state.get("identity") or {}).get("head") or "").strip()
+
+
+def _orchestrator_cycle_is_current(state: dict[str, object], current_payload: dict[str, object]) -> bool:
+    if str(state.get("stage") or "") not in ORCHESTRATOR_HEAD_CURRENT_STAGES:
+        return True
+    current_head = str(current_payload.get("head") or "").strip()
+    reviewed_head = _orchestrator_review_head(state)
+    return not current_head or not reviewed_head or current_head == reviewed_head
+
+
 def _orchestrator_status_override(
     *,
     state_dir: Path,
@@ -425,6 +443,8 @@ def _orchestrator_status_override(
         if branch and cycle_branch and cycle_branch != branch:
             continue
         if str(state.get("stage") or "") in ORCHESTRATOR_HIDDEN_STAGES:
+            continue
+        if not _orchestrator_cycle_is_current(state, current_payload):
             continue
         if not str(state.get("public_id") or "").strip():
             continue
