@@ -27,10 +27,13 @@ from review_suite_local import (
     GRADE_BASIS_VALUES,
     RUN_LOG_FILENAME,
     TASK_CLASSES,
+    PUBLIC_REVIEWER_LABELS,
     _run_is_finalized,
     aggregate_records,
     append_record_if_new,
+    _base_branch_review_artifact,
     build_manual_review_prompt,
+    build_phase_instructions,
     build_record_from_grade,
     build_reroll_slot_payload,
     compact_benchmark_record,
@@ -46,6 +49,7 @@ from review_suite_local import (
     launch_round,
     load_operational_state,
     load_roster,
+    _manual_review_request,
     normalize_record_review_cwd_value,
     load_round,
     load_rubric,
@@ -56,12 +60,14 @@ from review_suite_local import (
     promote,
     public_round_payload,
     public_round_result,
+    public_reviewer_label,
     read_jsonl,
     round_needs_caller_grade,
     record_identity_key,
     resolve_caller_id,
     run_round,
     select_pair,
+    make_round_id,
     state_lock,
     ungraded_round_exposure_records,
     payload_has_blocked_runs,
@@ -752,6 +758,125 @@ def _review_output_refs(runs: list[dict[str, object]]) -> list[str]:
         if ref:
             refs.append(ref)
     return refs
+
+
+def _orchestrator_review_state_dir(state_dir: Path) -> Path:
+    return state_dir / "orchestrator" / "review-rounds"
+
+
+def _orchestrator_review_slots(count: int) -> list[str]:
+    labels = list(PUBLIC_REVIEWER_LABELS)
+    return [
+        labels[index] if index < len(labels) else public_reviewer_label(f"reviewer_{index + 1}")
+        for index in range(count)
+    ]
+
+
+def _orchestrator_phase_review_request(*, review_cwd: Path, base: str):
+    diff_text, review_scope, target_label = _base_branch_review_artifact(review_cwd=review_cwd, base=base)
+    request = _manual_review_request(
+        review_scope=review_scope,
+        target_label=target_label,
+        instructions=build_phase_instructions(target_label),
+        diff_text=diff_text,
+    )
+    if not request.prompt.strip():
+        raise ValueError("orchestrator review requires a non-empty phase-review prompt")
+    return request
+
+
+def run_orchestrator_review_step(
+    *,
+    lane: str,
+    step_name: str,
+    reviewer_count: int,
+    model: str,
+    reasoning_effort: str,
+    service_tier: str | None,
+    review_cwd: Path,
+    state_dir: Path,
+    sqlite_path: Path,
+    review_scope: dict[str, object],
+    task_id: str | None,
+    allow_dirty: bool,
+    progress_interval_seconds: int,
+    allow_unsafe_windows_wsl_fallback: bool,
+    grading_required: bool = False,
+) -> dict[str, object]:
+    if reviewer_count <= 0:
+        raise ValueError("reviewer_count must be > 0")
+    base = str(review_scope.get("base") or "").strip()
+    if not base:
+        raise ValueError("review_scope.base is required")
+    request = _orchestrator_phase_review_request(review_cwd=review_cwd, base=base)
+    variant_id = "-".join(part for part in [model, reasoning_effort, service_tier] if part)
+    variant = {
+        "id": variant_id,
+        "state": "active",
+        "model": model,
+        "reasoning_effort": reasoning_effort,
+        "task_classes": ["phase_review"],
+    }
+    if service_tier:
+        variant["service_tier"] = service_tier
+    round_state_dir = _orchestrator_review_state_dir(state_dir)
+    round_id = make_round_id("phase_review", review_cwd=review_cwd)
+    payload = {
+        "round_id": round_id,
+        "task_class": "phase_review",
+        "public_task": lane,
+        "orchestrator_step": step_name,
+        "grading_required": bool(grading_required),
+        "sampled_at": utc_now_iso(),
+        "review_cwd_normalized": normalize_review_cwd_value(review_cwd),
+        "review_scope": dict(request.review_scope),
+        "status": "sampled",
+        "runs": [
+            {
+                "slot": slot,
+                "variant_id": variant_id,
+                "model": model,
+                "reasoning_effort": reasoning_effort,
+            }
+            for slot in _orchestrator_review_slots(reviewer_count)
+        ],
+    }
+    write_round(round_state_dir, payload)
+    _print_round_banner(task_name=lane, round_id=round_id)
+    if includes_deep_review_effort(list(payload.get("runs") or [])):
+        print_deep_review_wait_note()
+    completed = run_round(
+        round_payload=payload,
+        roster={"settings": {}, "variants": [variant]},
+        state_dir=round_state_dir,
+        review_cwd=review_cwd,
+        prompt=request.prompt,
+        review_scope=request.review_scope,
+        sqlite_path=sqlite_path,
+        progress_interval_seconds=progress_interval_seconds,
+        allow_dirty=allow_dirty,
+        allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
+    )
+    completed["task_id_hint"] = task_id or round_id
+    completed["grading_required"] = bool(grading_required)
+    completed["public_task"] = lane
+    completed["orchestrator_step"] = step_name
+    write_round(round_state_dir, completed)
+    result = public_round_result(completed)
+    _print_findings(completed)
+    output_refs = _review_output_refs([run for run in list(completed.get("runs") or []) if isinstance(run, dict)])
+    return {
+        "round_id": round_id,
+        "lane": lane,
+        "kind": "review",
+        "status": result.get("status"),
+        "blocked": bool(result.get("blocked")),
+        "reviewed_head": str(request.review_scope.get("reviewed_head") or ""),
+        "output_refs": output_refs,
+        "runs": list(result.get("runs") or []),
+        "round_state_dir": str(round_state_dir),
+        "grading_required": bool(grading_required),
+    }
 
 
 def _record_anchor_warning(exc: Exception) -> None:

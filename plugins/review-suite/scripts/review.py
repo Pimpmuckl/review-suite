@@ -29,7 +29,6 @@ from review_suite_core.orchestrator_state import (
     STAGE_FOLLOWUP_PENDING,
     STAGE_REVIEW_GREEN,
     create_cycle,
-    deslop_is_ready,
     mark_decision_pending,
     mark_fix_detected,
     record_clean_decision,
@@ -40,7 +39,7 @@ from review_suite_core.orchestrator_state import (
 from review_suite_core.orchestrator_store import load_cycle_by_key, load_cycle_by_public_id, save_cycle
 
 
-INITIAL_LANE = "review"
+INITIAL_LANE = "review_t1"
 FOLLOWUP_LANE = "review-followup"
 
 
@@ -138,9 +137,7 @@ def _identity_head(state: dict[str, Any]) -> str | None:
 def _resume_progress(state: dict[str, Any]) -> dict[str, Any]:
     stage = state.get("stage")
     if stage == STAGE_CREATED:
-        if not deslop_is_ready(state):
-            return state
-        return _open_decision(state, lane=INITIAL_LANE, reviewed_head=_identity_head(state))
+        return state
     if stage == STAGE_FOLLOWUP_PENDING:
         lane = FOLLOWUP_LANE if stage == STAGE_FOLLOWUP_PENDING else INITIAL_LANE
         return _open_decision(state, lane=lane, reviewed_head=_identity_head(state))
@@ -180,11 +177,23 @@ def _create_or_resume_cycle(*, args: argparse.Namespace, state_dir: Path) -> dic
     if existing is not None:
         return existing
     state["grading"] = {"required": bool(resolution.requires_grading)}
+    state["review_plan"] = {
+        "steps": [
+            {
+                "name": step.name,
+                "count": step.count,
+                "model": step.model,
+                "reasoning_effort": step.reasoning_effort,
+                "service_tier": step.service_tier,
+            }
+            for step in resolution.steps
+        ],
+    }
     return state
 
 
-def _advance_without_decision(state: dict[str, Any]) -> dict[str, Any]:
-    result = run_one_expensive_step(state)
+def _advance_without_decision(state: dict[str, Any], *, state_dir: Path) -> dict[str, Any]:
+    result = run_one_expensive_step(state, state_dir=state_dir)
     if result.ran_step:
         return result.state
     return _resume_progress(state)
@@ -252,10 +261,10 @@ def main() -> int:
             raise ValueError("--decision requires --id")
         if args.id:
             state = load_cycle_by_public_id(state_dir, str(args.id))
-            state = _apply_decision(state, str(args.decision)) if args.decision else _advance_without_decision(state)
+            state = _apply_decision(state, str(args.decision)) if args.decision else _advance_without_decision(state, state_dir=state_dir)
         else:
             state = _create_or_resume_cycle(args=args, state_dir=state_dir)
-            state = _advance_without_decision(state)
+            state = _advance_without_decision(state, state_dir=state_dir)
         saved = save_cycle(state_dir, state)
         _render(saved)
         return 0

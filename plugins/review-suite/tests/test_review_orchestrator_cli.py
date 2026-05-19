@@ -13,6 +13,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import review
+import review_suite_arena
 from review_suite_core import orchestrator_runner
 
 
@@ -72,14 +73,127 @@ def _stub_deslop(monkeypatch: pytest.MonkeyPatch, *returncodes: int) -> list[lis
     return calls
 
 
+def _stub_review(monkeypatch: pytest.MonkeyPatch, *round_ids: str) -> list[dict[str, object]]:
+    calls: list[dict[str, object]] = []
+    ids = list(round_ids) or ["phase_review-round-1"]
+
+    def fake_run(**kwargs: object) -> dict[str, object]:
+        calls.append(dict(kwargs))
+        round_id = ids[min(len(calls) - 1, len(ids) - 1)]
+        scope = kwargs.get("review_scope")
+        reviewed_head = str(scope.get("reviewed_head") if isinstance(scope, dict) else "head-1")
+        return {
+            "round_id": round_id,
+            "lane": "review_t1",
+            "kind": "review",
+            "status": "completed",
+            "blocked": False,
+            "reviewed_head": reviewed_head,
+            "output_refs": [f"rollout://{round_id}/alpha"],
+            "runs": [
+                {
+                    "slot": "alpha",
+                    "status": "completed",
+                    "summary": "No findings.",
+                    "ref": f"rollout://{round_id}/alpha",
+                    "blocked": False,
+                    "block": None,
+                }
+            ],
+            "round_state_dir": "state/orchestrator/review-rounds",
+        }
+
+    monkeypatch.setattr(orchestrator_runner, "run_review_step", fake_run)
+    return calls
+
+
 def _cycle_payload(state_dir: Path, public_id: str) -> dict[str, object]:
     index = json.loads((state_dir / "orchestrator" / "index.json").read_text(encoding="utf-8"))
     cycle_key = index["ids"][public_id]
     return json.loads((state_dir / "orchestrator" / "cycles" / f"{cycle_key}.json").read_text(encoding="utf-8"))
 
 
+def test_orchestrator_review_helper_uses_phase_prompt_without_predecision_anchor(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/orchestrator-review")
+    head = _commit_file(repo, "app.txt", "feature\n", "feature")
+    captured: dict[str, object] = {}
+    anchor_calls: list[dict[str, object]] = []
+
+    def fake_run_round(
+        *,
+        round_payload: dict[str, object],
+        roster: dict[str, object],
+        state_dir: Path,
+        review_cwd: Path,
+        prompt: str,
+        review_scope: dict[str, object],
+        sqlite_path: Path,
+        progress_interval_seconds: int,
+        allow_dirty: bool,
+        allow_unsafe_windows_wsl_fallback: bool,
+    ) -> dict[str, object]:
+        captured["prompt"] = prompt
+        captured["review_scope"] = dict(review_scope)
+        return {
+            **round_payload,
+            "status": "completed",
+            "review_scope": dict(review_scope),
+            "runs": [
+                {
+                    "slot": "alpha",
+                    "review_status": "completed",
+                    "status_summary": "No findings.",
+                    "grade_blocked": False,
+                    "grade_block_reason": None,
+                    "reviewer_output": "No findings.",
+                    "reviewer_output_ref": "rollout://alpha",
+                }
+            ],
+        }
+
+    monkeypatch.setattr(review_suite_arena, "run_round", fake_run_round)
+    monkeypatch.setattr(review_suite_arena, "_print_round_banner", lambda **kwargs: None)
+    monkeypatch.setattr(review_suite_arena, "_print_findings", lambda result: False)
+    monkeypatch.setattr(review_suite_arena, "record_review_anchor", lambda **kwargs: anchor_calls.append(kwargs))
+
+    result = review_suite_arena.run_orchestrator_review_step(
+        lane="review_t1",
+        step_name="precision",
+        reviewer_count=1,
+        model="gpt-5.5",
+        reasoning_effort="medium",
+        service_tier=None,
+        review_cwd=repo,
+        state_dir=state_dir,
+        sqlite_path=tmp_path / "state.sqlite",
+        review_scope={"base": "main"},
+        task_id="feature/orchestrator-review",
+        allow_dirty=False,
+        progress_interval_seconds=1,
+        allow_unsafe_windows_wsl_fallback=False,
+    )
+
+    prompt = str(captured["prompt"])
+    assert prompt.strip()
+    assert "Review this implementation slice" in prompt
+    assert "Reviewer output is advisory risk input" in prompt
+    assert "=== BEGIN DIFF ===" in prompt
+    assert dict(captured["review_scope"])["manual_prompt_mode"] is True
+    assert result["reviewed_head"] == head
+    assert result["output_refs"] == ["rollout://alpha"]
+    assert anchor_calls == []
+
+
 def test_create_resume_and_id_reprint_use_one_pending_action(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     deslop_calls = _stub_deslop(monkeypatch)
+    review_calls = _stub_review(monkeypatch)
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
     _init_repo(repo)
@@ -113,18 +227,26 @@ def test_create_resume_and_id_reprint_use_one_pending_action(monkeypatch: pytest
     assert "--decision clean" in str(resumed["Action"]["cmd"])
     assert "--decision findings" in str(resumed["Action"]["alt"])
     assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 1
-    assert len(_cycle_payload(state_dir, public_id)["rounds"]) == 1
+    state = _cycle_payload(state_dir, public_id)
+    assert len(state["rounds"]) == 1
+    assert state["rounds"][0]["round_id"] == "phase_review-round-1"
+    assert state["rounds"][0]["lane"] == "review_t1"
+    assert state["rounds"][0]["review_status"] == "completed"
+    assert state["rounds"][0]["output_refs"] == ["rollout://phase_review-round-1/alpha"]
     assert len(deslop_calls) == 1
+    assert len(review_calls) == 1
 
     exit_code, by_id = _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
     assert exit_code == 0
     assert by_id["review"] == public_id
     assert by_id["Action"] == resumed["Action"]
     assert len(_cycle_payload(state_dir, public_id)["rounds"]) == 1
+    assert len(review_calls) == 1
 
 
 def test_findings_fix_progression_and_clean_decision(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _stub_deslop(monkeypatch)
+    _stub_review(monkeypatch)
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
     _init_repo(repo)
@@ -138,6 +260,9 @@ def test_findings_fix_progression_and_clean_decision(monkeypatch: pytest.MonkeyP
     )
     public_id = str(created["review"])
 
+    _, opened = _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+    assert opened["stage"] == "decision-pending"
+
     exit_code, findings = _run_review(monkeypatch, ["--id", public_id, "--decision", "findings", "--state-dir", str(state_dir)])
     assert exit_code == 0
     assert findings["stage"] == "fix-pending"
@@ -145,7 +270,7 @@ def test_findings_fix_progression_and_clean_decision(monkeypatch: pytest.MonkeyP
     assert f"--id {public_id}" in str(findings["Action"]["cmd"])
     assert "--decision" not in str(findings["Action"]["cmd"])
     state = _cycle_payload(state_dir, public_id)
-    assert state["active_findings"]["round_id"] == "round-1"
+    assert state["active_findings"]["round_id"] == "phase_review-round-1"
     assert len(state["decisions"]) == 1
 
     exit_code, reprint = _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
@@ -173,6 +298,7 @@ def test_findings_fix_progression_and_clean_decision(monkeypatch: pytest.MonkeyP
 
 def test_benchmark_selection_prints_grading_requirement(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _stub_deslop(monkeypatch)
+    _stub_review(monkeypatch)
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
     _init_repo(repo)
@@ -199,7 +325,9 @@ def test_benchmark_selection_prints_grading_requirement(monkeypatch: pytest.Monk
     assert payload["grading"] == "required"
 
 
-def test_emergency_mode_skips_deslop_and_opens_decision(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_emergency_mode_skips_deslop_and_runs_review(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    review_calls = _stub_review(monkeypatch)
+
     def fail_run(*, command: list[str], cwd: Path) -> subprocess.CompletedProcess:
         raise AssertionError("emergency mode must not run deslop")
 
@@ -217,10 +345,12 @@ def test_emergency_mode_skips_deslop_and_opens_decision(monkeypatch: pytest.Monk
     assert exit_code == 0
     assert payload["stage"] == "decision-pending"
     assert set(dict(payload["Action"])) == {"cmd", "alt"}
+    assert len(review_calls) == 1
 
 
-def test_deslop_failure_retries_before_fake_review(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_deslop_failure_retries_before_review(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     deslop_calls = _stub_deslop(monkeypatch, 9, 0)
+    review_calls = _stub_review(monkeypatch)
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
     _init_repo(repo)
@@ -252,3 +382,4 @@ def test_deslop_failure_retries_before_fake_review(monkeypatch: pytest.MonkeyPat
     assert exit_code == 0
     assert resumed["stage"] == "decision-pending"
     assert len(deslop_calls) == 2
+    assert len(review_calls) == 1

@@ -6,9 +6,24 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from review_suite_arena import run_orchestrator_review_step
+
 from .axi_output import format_command
-from .orchestrator_state import deslop_should_run, mark_deslop_done, mark_deslop_failed
+from .lens_runtime import DEFAULT_PROGRESS_INTERVAL_SECONDS
+from .orchestrator_state import (
+    STAGE_CREATED,
+    STAGE_DECISION_PENDING,
+    deslop_is_ready,
+    deslop_should_run,
+    mark_decision_pending,
+    mark_deslop_done,
+    mark_deslop_failed,
+)
 from .paths import cwd_path_from_normalized
+from .workflow_state import current_head, merge_base
+
+
+INITIAL_REVIEW_LANE = "review_t1"
 
 
 @dataclass(frozen=True)
@@ -84,7 +99,133 @@ def _run_deslop_once(state: dict[str, Any]) -> OrchestratorRunnerResult:
     )
 
 
-def run_one_expensive_step(state: dict[str, Any]) -> OrchestratorRunnerResult:
+def _review_should_run(state: dict[str, Any]) -> bool:
+    if state.get("stage") != STAGE_CREATED:
+        return False
+    if not deslop_is_ready(state):
+        return False
+    if list(state.get("rounds") or []):
+        return False
+    pending_kind = dict(state.get("pending_action") or {}).get("kind")
+    return pending_kind in (None, "resume-after-deslop")
+
+
+def _first_review_step(state: dict[str, Any]) -> dict[str, Any]:
+    plan = dict(state.get("review_plan") or {})
+    steps = [dict(item) for item in list(plan.get("steps") or []) if isinstance(item, dict)]
+    if not steps:
+        raise ValueError("state.review_plan.steps[0] is required before running review")
+    step = steps[0]
+    for key in ("name", "count", "model", "reasoning_effort"):
+        if not str(step.get(key) or "").strip():
+            raise ValueError(f"state.review_plan.steps[0].{key} is required")
+    step["count"] = int(step["count"])
+    if int(step["count"]) <= 0:
+        raise ValueError("state.review_plan.steps[0].count must be > 0")
+    return step
+
+
+def _identity_cwd(state: dict[str, Any]) -> Path:
+    return cwd_path_from_normalized(_identity_text(state, "cwd"))
+
+
+def _review_scope(state: dict[str, Any], cwd: Path) -> dict[str, object]:
+    base = _identity_text(state, "base")
+    try:
+        reviewed_head = current_head(cwd)
+    except ValueError:
+        reviewed_head = _identity_text(state, "head")
+    try:
+        merge_base_head = merge_base(cwd, base, "HEAD")
+    except ValueError:
+        merge_base_head = _identity_text(state, "merge_base")
+    return {
+        "base": base,
+        "merge_base": merge_base_head,
+        "reviewed_head": reviewed_head,
+        "target_label": f"base `{base}`",
+    }
+
+
+def _task_id(state: dict[str, Any]) -> str | None:
+    branch = str(dict(state.get("identity") or {}).get("branch") or "").strip()
+    return branch or None
+
+
+def _attach_review_result(state: dict[str, Any], review_result: dict[str, object]) -> dict[str, Any]:
+    round_id = str(review_result.get("round_id") or "").strip()
+    for item in list(state.get("rounds") or []):
+        if not isinstance(item, dict) or str(item.get("round_id") or "") != round_id:
+            continue
+        item["review_status"] = str(review_result.get("status") or "")
+        item["review_blocked"] = bool(review_result.get("blocked"))
+        output_refs = [str(ref) for ref in list(review_result.get("output_refs") or []) if str(ref).strip()]
+        if output_refs:
+            item["output_refs"] = output_refs
+        runs = [dict(run) for run in list(review_result.get("runs") or []) if isinstance(run, dict)]
+        if runs:
+            item["runs"] = runs
+        round_state_dir = str(review_result.get("round_state_dir") or "").strip()
+        if round_state_dir:
+            item["round_state_dir"] = round_state_dir
+        if bool(review_result.get("grading_required")):
+            item["grading_required"] = True
+        break
+    return state
+
+
+def run_review_step(**kwargs: Any) -> dict[str, object]:
+    return run_orchestrator_review_step(**kwargs)
+
+
+def _run_initial_review_once(state: dict[str, Any], *, state_dir: Path) -> OrchestratorRunnerResult:
+    step = _first_review_step(state)
+    cwd = _identity_cwd(state)
+    scope = _review_scope(state, cwd)
+    review_result = run_review_step(
+        lane=INITIAL_REVIEW_LANE,
+        step_name=str(step["name"]),
+        reviewer_count=int(step["count"]),
+        model=str(step["model"]),
+        reasoning_effort=str(step["reasoning_effort"]),
+        service_tier=str(step.get("service_tier") or "").strip() or None,
+        review_cwd=cwd,
+        state_dir=state_dir,
+        sqlite_path=Path.home() / ".codex" / "state_5.sqlite",
+        review_scope=scope,
+        task_id=_task_id(state),
+        allow_dirty=False,
+        progress_interval_seconds=DEFAULT_PROGRESS_INTERVAL_SECONDS,
+        allow_unsafe_windows_wsl_fallback=False,
+        grading_required=bool(dict(state.get("grading") or {}).get("required")),
+    )
+    round_id = str(review_result.get("round_id") or "").strip()
+    if not round_id:
+        raise ValueError("review step did not return a round_id")
+    reviewed_head = str(review_result.get("reviewed_head") or scope.get("reviewed_head") or "").strip() or None
+    next_state = mark_decision_pending(
+        state,
+        round_id=round_id,
+        lane=INITIAL_REVIEW_LANE,
+        reviewed_head=reviewed_head,
+        pending_action={
+            "kind": "decision",
+            "round_id": round_id,
+            "lane": INITIAL_REVIEW_LANE,
+        },
+    )
+    return OrchestratorRunnerResult(
+        _attach_review_result(next_state, review_result),
+        ran_step=True,
+        step="review",
+    )
+
+
+def run_one_expensive_step(state: dict[str, Any], *, state_dir: Path | None = None) -> OrchestratorRunnerResult:
     if deslop_should_run(state):
         return _run_deslop_once(state)
+    if _review_should_run(state):
+        return _run_initial_review_once(state, state_dir=state_dir or Path.home() / ".codex" / "state" / "review-suite")
+    if state.get("stage") == STAGE_DECISION_PENDING:
+        return OrchestratorRunnerResult(state, ran_step=False)
     return OrchestratorRunnerResult(state, ran_step=False)
