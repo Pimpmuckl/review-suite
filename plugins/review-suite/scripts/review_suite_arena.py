@@ -905,6 +905,7 @@ def _run_orchestrator_manual_review_step(
     completed["public_task"] = lane
     completed["orchestrator_step"] = step_name
     write_round(round_state_dir, completed)
+    refresh_review_cost_report_best_effort(state_dir=state_dir, review_cwd=review_cwd)
     result = public_round_result(completed)
     _print_findings(completed)
     output_refs = _review_output_refs([run for run in list(completed.get("runs") or []) if isinstance(run, dict)])
@@ -1786,7 +1787,7 @@ def cmd_close_gate(args: argparse.Namespace) -> int:
 
 
 def _cost_row_payload(row) -> dict[str, object]:
-    return {
+    payload = {
         "repo": row.repo,
         "folder": row.folder,
         "branch": row.branch,
@@ -1803,6 +1804,10 @@ def _cost_row_payload(row) -> dict[str, object]:
         "tokens": row.tokens,
         "cost_usd": row.cost_usd,
     }
+    followup_sessions = row.lane_sessions.get("review_followup", 0)
+    if followup_sessions:
+        payload["fu_sessions"] = followup_sessions
+    return payload
 
 
 def cmd_costs(args: argparse.Namespace) -> int:

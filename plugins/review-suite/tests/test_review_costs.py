@@ -76,7 +76,7 @@ def test_cached_row_with_folder_repo_folds_wt_suffix() -> None:
             "implementation_tokens": 0,
             "implementation_cost_usd": 0.0,
             "latest_review": "2026-04-27T00:00:00Z",
-            "lane_sessions": {"review_t1": 0, "review_t2": 0, "review_t3": 1, "review_t4": 0},
+            "lane_sessions": {"review_t1": 0, "review_t2": 0, "review_t3": 1, "review_t4": 0, "review_followup": 0},
             "review_seconds": 60,
             "tokens": 1000,
             "cost_usd": 0.01,
@@ -90,6 +90,16 @@ def test_cached_row_with_folder_repo_folds_wt_suffix() -> None:
 
 def _write_round(state_dir: Path, payload: dict[str, object]) -> None:
     rounds = state_dir / "rounds"
+    rounds.mkdir(parents=True, exist_ok=True)
+    if payload.get("status") == "completed":
+        for run in payload.get("runs", []):
+            if isinstance(run, dict):
+                run.setdefault("review_status", "completed")
+    (rounds / f"{payload['round_id']}.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _write_orchestrator_round(state_dir: Path, payload: dict[str, object]) -> None:
+    rounds = state_dir / "orchestrator" / "review-rounds" / "rounds"
     rounds.mkdir(parents=True, exist_ok=True)
     if payload.get("status") == "completed":
         for run in payload.get("runs", []):
@@ -305,6 +315,7 @@ def test_collect_review_cost_rows_groups_t1_to_t4_by_worktree(monkeypatch, tmp_p
         "review_t2": 3,
         "review_t3": 1,
         "review_t4": 2,
+        "review_followup": 0,
     }
     assert row.review_seconds == 570
     assert row.tokens == 2456
@@ -344,6 +355,79 @@ def test_collect_review_cost_rows_includes_completed_ungraded_local_rounds(monke
     assert len(rows) == 1
     assert rows[0].lane_sessions["review_t1"] == 1
     assert rows[0].tokens == 120
+
+
+def test_collect_review_cost_rows_includes_orchestrator_rounds(monkeypatch, tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.setattr(
+        "review_costs._metadata_for_cwd",
+        lambda value: {
+            "repo": "repo",
+            "folder": "repo",
+            "branch": "feat/current",
+            "pr_number": "-",
+        },
+    )
+    _write_orchestrator_round(
+        state_dir,
+        {
+            "round_id": "orc-review",
+            "task_class": "phase_review",
+            "public_task": "review_t1",
+            "task_id_hint": "feat/current",
+            "status": "completed",
+            "sampled_at": "2026-04-27T10:00:00Z",
+            "review_completed_at": "2026-04-27T10:02:00Z",
+            "review_cwd_normalized": str(repo),
+            "runs": [
+                {
+                    "slot": "alpha",
+                    "model": "gpt-5.4",
+                    "reasoning_effort": "medium",
+                    "usage": {"input_tokens": 100, "cached_input_tokens": 80, "output_tokens": 20},
+                    "cost_usd": None,
+                },
+                {
+                    "slot": "bravo",
+                    "variant_id": "gpt-5.5-medium",
+                    "usage": {"input_tokens": 40, "output_tokens": 10},
+                    "cost_usd": None,
+                },
+            ],
+        },
+    )
+    _write_orchestrator_round(
+        state_dir,
+        {
+            "round_id": "orc-followup",
+            "task_class": "phase_review",
+            "public_task": "review-followup",
+            "task_id_hint": "feat/current",
+            "status": "completed",
+            "sampled_at": "2026-04-27T10:03:00Z",
+            "review_completed_at": "2026-04-27T10:04:00Z",
+            "review_cwd_normalized": str(repo),
+            "runs": [
+                {
+                    "slot": "alpha",
+                    "variant_id": "gpt-5.5-medium-fast",
+                    "usage": {"input_tokens": 20, "output_tokens": 5},
+                    "cost_usd": None,
+                }
+            ],
+        },
+    )
+
+    rows = collect_review_cost_rows(state_dir=state_dir, review_cwd=repo, codex_home=tmp_path / "codex-home")
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.lane_sessions["review_t1"] == 2
+    assert row.lane_sessions["review_followup"] == 1
+    assert row.tokens == 195
+    assert row.cost_usd == 0.00112
 
 
 def test_render_review_cost_markdown_groups_by_repo(monkeypatch, tmp_path: Path) -> None:
@@ -389,8 +473,8 @@ def test_render_review_cost_markdown_groups_by_repo(monkeypatch, tmp_path: Path)
     markdown = render_review_cost_markdown(collect_review_cost_rows(state_dir=state_dir, review_cwd=repo, codex_home=codex_home))
 
     assert "# sample-api" in markdown
-    assert "| Date | Folder | Branch | PR | Worker Model | Impl Tokens | Impl Cost | T1 | T2 | T3 | T4 | Review Time | Review Tokens | Review Cost | Total Cost |" in markdown
-    assert "| 2026-04-27 | sample-api-wt-alpha | feat/cost-ledger | 123 | gpt-5.4 medium | 1k | $0.00 | 1 | 0 | 0 | 0 | 1m 00s | 120 | $0.00 | $0.01 |" in markdown
+    assert "| Date | Folder | Branch | PR | Worker Model | Impl Tokens | Impl Cost | T1 | T2 | T3 | T4 | FU | Review Time | Review Tokens | Review Cost | Total Cost |" in markdown
+    assert "| 2026-04-27 | sample-api-wt-alpha | feat/cost-ledger | 123 | gpt-5.4 medium | 1k | $0.00 | 1 | 0 | 0 | 0 | 0 | 1m 00s | 120 | $0.00 | $0.01 |" in markdown
 
 
 def test_format_compact_number_keeps_cells_short() -> None:
@@ -450,7 +534,7 @@ def test_update_review_cost_row_cache_replaces_pr_number_changes(tmp_path: Path)
         implementation_cost_usd=0.0,
         caller_threads=(),
         latest_review="2026-04-27T10:00:00Z",
-        lane_sessions={"review_t1": 1, "review_t2": 0, "review_t3": 0, "review_t4": 0},
+        lane_sessions={"review_t1": 1, "review_t2": 0, "review_t3": 0, "review_t4": 0, "review_followup": 0},
         review_seconds=60,
         tokens=100,
         cost_usd=0.01,
@@ -465,7 +549,7 @@ def test_update_review_cost_row_cache_replaces_pr_number_changes(tmp_path: Path)
         implementation_cost_usd=67.0,
         caller_threads=("caller",),
         latest_review="2026-04-27T10:00:00Z",
-        lane_sessions={"review_t1": 1, "review_t2": 0, "review_t3": 0, "review_t4": 0},
+        lane_sessions={"review_t1": 1, "review_t2": 0, "review_t3": 0, "review_t4": 0, "review_followup": 0},
         review_seconds=60,
         tokens=100,
         cost_usd=0.01,
@@ -528,7 +612,7 @@ def test_collect_review_cost_rows_includes_implementation_only_worktree(monkeypa
     assert row.worker_model == "gpt-5.5 medium"
     assert row.implementation_tokens == 2000
     assert row.tokens == 0
-    assert row.lane_sessions == {"review_t1": 0, "review_t2": 0, "review_t3": 0, "review_t4": 0}
+    assert row.lane_sessions == {"review_t1": 0, "review_t2": 0, "review_t3": 0, "review_t4": 0, "review_followup": 0}
 
 
 def test_collect_review_cost_rows_excludes_registered_wrapper_sessions(monkeypatch, tmp_path: Path) -> None:
@@ -598,7 +682,7 @@ def test_collect_review_cost_rows_includes_wrapper_caller_threads(monkeypatch, t
 
     assert len(rows) == 1
     assert rows[0].caller_threads == ("019dd132-4116-71f3-b013-beaa9e5e95bd",)
-    assert rows[0].lane_sessions == {"review_t1": 0, "review_t2": 0, "review_t3": 0, "review_t4": 0}
+    assert rows[0].lane_sessions == {"review_t1": 0, "review_t2": 0, "review_t3": 0, "review_t4": 0, "review_followup": 0}
 
 
 def test_collect_review_cost_rows_attributes_implementation_by_caller_thread(monkeypatch, tmp_path: Path) -> None:

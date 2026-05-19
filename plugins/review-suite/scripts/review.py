@@ -409,18 +409,12 @@ def _validation_blockers(state: dict[str, Any]) -> list[str]:
 def _github_handoff_action(state: dict[str, Any], *, state_dir: Path) -> dict[str, Any]:
     public_id = str(state.get("public_id") or "").strip()
     action: dict[str, Any] = {
-        "kind": "github-handoff",
-        "lane": "review-github",
         "cmd": _github_review_action_command(public_id),
         "after": "PR create/update",
-        "github_review": "not-run",
     }
     blockers = _validation_blockers(state)
     if blockers:
-        action["validation_ready"] = False
         action["blocked_by"] = blockers
-    else:
-        action["validation_ready"] = True
     return action
 
 
@@ -443,13 +437,8 @@ def _action_payload(state: dict[str, Any], *, state_dir: Path) -> dict[str, Any]
 
 
 def _render(state: dict[str, Any], *, state_dir: Path) -> None:
-    mode = dict(state.get("mode") or {})
-    selection = dict(state.get("selection") or {})
     payload: dict[str, Any] = {
         "review": state.get("public_id"),
-        "stage": state.get("stage"),
-        "mode": mode.get("effective") or mode.get("requested"),
-        "selection": selection.get("effective") or selection.get("requested"),
     }
     grading = dict(state.get("grading") or {})
     if grading.get("required"):
