@@ -96,6 +96,10 @@ def _print_step_output(*, label: str, body: str, status: str = "completed") -> b
     return True
 
 
+def _process_output(proc: subprocess.CompletedProcess) -> str:
+    return str(proc.stdout or "").strip() or str(proc.stderr or "").strip()
+
+
 def _run_deslop_once(state: dict[str, Any]) -> OrchestratorRunnerResult:
     command = deslop_command(state)
     command_text = format_command(command)
@@ -120,7 +124,7 @@ def _run_deslop_once(state: dict[str, Any]) -> OrchestratorRunnerResult:
     _print_step_output(
         label="review-deslop",
         status="failed",
-        body=str(proc.stdout or "").strip() or f"review-deslop failed with exit {int(proc.returncode)}",
+        body=_process_output(proc) or f"review-deslop failed with exit {int(proc.returncode)}",
     )
     return OrchestratorRunnerResult(
         mark_deslop_failed(

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -26,6 +27,8 @@ GATE_FINDINGS_RERUN_REASON = {
     "review_t2": "t2_findings_followup_needs_signoff",
     "review_t4": "t4_findings_followup_needs_signoff",
 }
+ORCHESTRATOR_HIDDEN_STAGES = {"aborted", "dismissed"}
+VALIDATION_READY_STATUSES = {"passed", "waived", "classified"}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -277,7 +280,7 @@ def _public_status_action(action: dict[str, object]) -> dict[str, object]:
 
 def _public_status_payload(payload: dict[str, object]) -> dict[str, object]:
     public: dict[str, object] = {}
-    for key in ("recommendation", "reason"):
+    for key in ("review", "progress", "recommendation", "reason"):
         value = payload.get(key)
         if value not in (None, "", [], {}):
             public[key] = value
@@ -300,6 +303,134 @@ def _public_status_payload(payload: dict[str, object]) -> dict[str, object]:
         public["note"] = str(payload.get("note") or "").strip()
 
     return public or payload
+
+
+def _review_command(public_id: str, *extra: str) -> str:
+    return format_command([sys.executable, Path(__file__).resolve().with_name("review.py").as_posix(), "--id", public_id, *extra])
+
+
+def _orchestrator_cycles(state_dir: Path) -> list[dict[str, object]]:
+    cycles: list[dict[str, object]] = []
+    for path in sorted((state_dir / "orchestrator" / "cycles").glob("*.json")):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(payload, dict):
+            try:
+                payload["_state_file_mtime"] = path.stat().st_mtime
+            except OSError:
+                payload["_state_file_mtime"] = 0.0
+            cycles.append(payload)
+    return cycles
+
+
+def _review_step_position(state: dict[str, object], step_index: int) -> tuple[int | None, int | None]:
+    steps = [item for item in list(dict(state.get("review_plan") or {}).get("steps") or []) if isinstance(item, dict)]
+    review_indices = [
+        index
+        for index, item in enumerate(steps)
+        if str(item.get("kind") or "review").strip() == "review"
+    ]
+    if step_index not in review_indices:
+        return None, None
+    return review_indices.index(step_index) + 1, len(review_indices)
+
+
+def _orchestrator_progress_label(state: dict[str, object]) -> str | None:
+    candidates: list[dict[str, object]] = []
+    pending = dict(state.get("pending_action") or {})
+    if pending:
+        candidates.append(pending)
+    current_step = dict(dict(state.get("review_progress") or {}).get("current_step") or {})
+    if current_step:
+        candidates.append(current_step)
+    for item in candidates:
+        try:
+            step_index = int(item.get("step_index") if item.get("step_index") is not None else item.get("index"))
+        except (TypeError, ValueError):
+            continue
+        step_name = str(item.get("step") or item.get("name") or "").strip()
+        lane = str(item.get("lane") or "review_t1").strip()
+        if lane != "review_t1" or not step_name:
+            continue
+        position, total = _review_step_position(state, step_index)
+        if position and total:
+            return f"review {position}/{total} {step_name}"
+    return None
+
+
+def _orchestrator_action(state: dict[str, object], public_id: str) -> dict[str, object]:
+    stage = str(state.get("stage") or "").strip()
+    if stage == "decision-pending":
+        return {
+            "cmd": _review_command(public_id, "--decision", "clean"),
+            "alt": _review_command(public_id, "--decision", "findings"),
+        }
+    if stage == "fix-pending":
+        return {
+            "cmd": _review_command(public_id),
+            "note": "Fix valid findings, then rerun this command.",
+        }
+    if stage in {"review-green", "local-green-handoff"}:
+        action: dict[str, object] = {
+            "cmd": _review_command(public_id, "--github-review"),
+            "after": "PR create/update",
+        }
+        blockers = []
+        validation = dict(state.get("validation") or {})
+        for key in ("full_suite", "ci"):
+            value = str(validation.get(key) or "unknown").strip() or "unknown"
+            if value not in VALIDATION_READY_STATUSES:
+                blockers.append(f"{key}:{value}")
+        if blockers:
+            action["blocked_by"] = blockers
+        return action
+    return {"cmd": _review_command(public_id)}
+
+
+def _orchestrator_status_override(
+    *,
+    state_dir: Path,
+    review_cwd: Path,
+    base: str,
+    current_payload: dict[str, object],
+) -> dict[str, object] | None:
+    normalized_cwd = str(normalize_review_cwd_value(review_cwd) or "")
+    branch = str(current_payload.get("branch") or "").strip()
+    candidates: list[dict[str, object]] = []
+    for state in _orchestrator_cycles(state_dir):
+        identity = dict(state.get("identity") or {})
+        if str(identity.get("cwd") or "") != normalized_cwd:
+            continue
+        if str(identity.get("base") or "") != str(base or "").strip():
+            continue
+        cycle_branch = str(identity.get("branch") or "").strip()
+        if branch and cycle_branch and cycle_branch != branch:
+            continue
+        if str(state.get("stage") or "") in ORCHESTRATOR_HIDDEN_STAGES:
+            continue
+        if not str(state.get("public_id") or "").strip():
+            continue
+        candidates.append(state)
+    if not candidates:
+        return None
+    state = sorted(
+        candidates,
+        key=lambda item: (
+            float(item.get("_state_file_mtime") or 0.0),
+            str(item.get("updated_at") or item.get("created_at") or item.get("public_id") or ""),
+        ),
+    )[-1]
+    public_id = str(state.get("public_id") or "").strip()
+    payload: dict[str, object] = {
+        "review": public_id,
+        "Action": _orchestrator_action(state, public_id),
+    }
+    progress = _orchestrator_progress_label(state)
+    if progress:
+        payload["progress"] = progress
+    return payload
 
 
 def _status_action(payload: dict[str, object], *, review_cwd: Path, base: str, state_dir: Path) -> dict[str, object] | None:
@@ -426,31 +557,40 @@ def cmd_status(args: argparse.Namespace) -> int:
         review_cwd=review_cwd,
         base=str(args.base),
     )
-    blocking_override = _caller_round_override(
+    orchestrator_override = _orchestrator_status_override(
         state_dir=state_dir,
         review_cwd=review_cwd,
-        explicit_caller_id=getattr(args, "caller_id", None),
+        base=str(args.base),
+        current_payload=payload,
     )
-    if blocking_override is not None:
-        payload.update(blocking_override)
+    if orchestrator_override is not None:
+        payload = orchestrator_override
     else:
-        signoff_override = _gate_signoff_override(
+        blocking_override = _caller_round_override(
             state_dir=state_dir,
             review_cwd=review_cwd,
-            base=str(args.base),
-            current_payload=payload,
+            explicit_caller_id=getattr(args, "caller_id", None),
         )
-        if signoff_override is not None:
-            payload.update(signoff_override)
+        if blocking_override is not None:
+            payload.update(blocking_override)
         else:
-            gate_findings_override = _gate_findings_rerun_override(
+            signoff_override = _gate_signoff_override(
                 state_dir=state_dir,
                 review_cwd=review_cwd,
                 base=str(args.base),
                 current_payload=payload,
             )
-            if gate_findings_override is not None:
-                payload.update(gate_findings_override)
+            if signoff_override is not None:
+                payload.update(signoff_override)
+            else:
+                gate_findings_override = _gate_findings_rerun_override(
+                    state_dir=state_dir,
+                    review_cwd=review_cwd,
+                    base=str(args.base),
+                    current_payload=payload,
+                )
+                if gate_findings_override is not None:
+                    payload.update(gate_findings_override)
     action = _status_action(payload, review_cwd=review_cwd, base=str(args.base), state_dir=state_dir)
     if action is not None:
         payload["Action"] = action

@@ -34,6 +34,7 @@ PUBLIC_TASK_TO_LANE = {
     "review_t3": "review_t3",
     "review_t4": "review_t4",
     "review-followup": "review_followup",
+    "review_followup": "review_followup",
 }
 DEFAULT_COST_REPORT_FILENAME = "review_cost_ledger.md"
 DEFAULT_COST_CACHE_DIRNAME = "review_cost_rows"

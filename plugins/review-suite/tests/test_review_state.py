@@ -62,6 +62,12 @@ def _write_gate_signoff(state_dir: Path, payload: dict[str, object]) -> None:
         handle.write(json.dumps(payload) + "\n")
 
 
+def _write_orchestrator_cycle(state_dir: Path, name: str, payload: dict[str, object]) -> None:
+    path = state_dir / "orchestrator" / "cycles" / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
 def test_inspect_workflow_status_without_anchor_recommends_full_review(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _init_repo(repo)
@@ -229,6 +235,67 @@ def test_review_state_status_verbose_keeps_router_details(monkeypatch, tmp_path:
     assert emitted[0]["last_gate_findings_round_id"] == "gate-findings-1"
     assert emitted[0]["Action"]["lane"] == "gate-findings"
     assert emitted[0]["Action"]["round_id"] == "gate-findings-1"
+
+
+def test_review_state_status_surfaces_orchestrator_progress(monkeypatch, tmp_path: Path) -> None:
+    emitted: list[dict[str, object]] = []
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    repo.mkdir()
+    _write_orchestrator_cycle(
+        state_dir,
+        "orc-progress.json",
+        {
+            "public_id": "rvw_progress",
+            "stage": "decision-pending",
+            "identity": {
+                "cwd": str(review_state.normalize_review_cwd_value(repo)),
+                "base": "main",
+                "branch": "feature/progress",
+            },
+            "pending_action": {
+                "kind": "decision",
+                "lane": "review_t1",
+                "round_id": "round-progress",
+                "step": "broad-discovery",
+                "step_index": 1,
+            },
+            "review_plan": {
+                "steps": [
+                    {"name": "deslop", "kind": "deslop"},
+                    {"name": "broad-discovery", "kind": "review"},
+                    {"name": "precision-signoff", "kind": "review"},
+                ],
+            },
+        },
+    )
+    monkeypatch.setattr(review_state, "resolve_repo_root", lambda cd: repo)
+    monkeypatch.setattr(
+        review_state,
+        "inspect_workflow_status",
+        lambda **kwargs: {
+            "recommendation": "coherence-review",
+            "reason": "diff_churn_exceeded",
+            "branch": "feature/progress",
+        },
+    )
+    monkeypatch.setattr(review_state, "emit_toon", lambda payload: emitted.append(payload))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["review_state.py", "status", "--base", "main", "--state-dir", str(state_dir)],
+    )
+
+    exit_code = review_state.main()
+
+    assert exit_code == 0
+    assert emitted[0]["review"] == "rvw_progress"
+    assert emitted[0]["progress"] == "review 1/2 broad-discovery"
+    assert "recommendation" not in emitted[0]
+    assert "reason" not in emitted[0]
+    assert "--id rvw_progress --decision clean" in str(emitted[0]["Action"]["cmd"])
+    assert "--id rvw_progress --decision findings" in str(emitted[0]["Action"]["alt"])
+    assert "review_t1.py" not in str(emitted[0]["Action"])
 
 
 def test_inspect_workflow_status_recommends_followup_after_t4_findings_amended_head(tmp_path: Path) -> None:

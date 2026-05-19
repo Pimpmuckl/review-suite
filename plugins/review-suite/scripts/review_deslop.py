@@ -75,13 +75,21 @@ def build_prompt(*, base: str | None, commit: str | None, commit_end: str | None
     )
 
 
-def emit_output_only(*, tool_name: str, result: dict[str, str | int | None]) -> int:
+def _result_returncode(result: dict[str, object]) -> int:
+    value = result.get("returncode")
+    if value is None:
+        return 1
+    return int(value)
+
+
+def emit_output_only(*, tool_name: str, result: dict[str, object]) -> int:
+    returncode = _result_returncode(result)
     body = str(result.get("final_message") or "").strip()
-    if not body and int(result["returncode"]) != 0:
+    if not body and returncode != 0:
         body = f"{tool_name} run timed out" if result.get("timed_out") else f"{tool_name} run failed"
     if body:
         write_text(body)
-    return int(result["returncode"])
+    return returncode
 
 
 def main() -> int:

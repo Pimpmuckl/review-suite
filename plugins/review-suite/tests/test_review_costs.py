@@ -18,6 +18,7 @@ from review_costs import (
     _cost_row_from_payload,
     _metadata_for_cwd,
     _read_rollout_model_metadata,
+    _record_lane,
     _repo_from_worktree_folder,
     _thread_rows,
     collect_review_cost_rows,
@@ -52,6 +53,11 @@ def test_repo_from_worktree_folder_applies_explicit_overrides() -> None:
         _repo_from_worktree_folder("sample-stack-allow-chat-skipped-default")
         == "sample-stack"
     )
+
+
+def test_record_lane_accepts_followup_spellings() -> None:
+    assert _record_lane({"public_task": "review-followup", "task_class": "phase_review"}) == "review_followup"
+    assert _record_lane({"public_task": "review_followup", "task_class": "phase_review"}) == "review_followup"
 
 
 def test_metadata_for_missing_wsl_worktree_folds_into_parent_repo() -> None:

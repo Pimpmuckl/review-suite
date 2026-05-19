@@ -318,12 +318,14 @@ def test_runner_skips_emergency_deslop(monkeypatch, tmp_path: Path) -> None:
 
 def test_runner_marks_failed_deslop_retryable_and_retries_from_retry_stage(monkeypatch, tmp_path: Path) -> None:
     calls = 0
+    output: list[str] = []
 
     def fake_run(*, command: list[str], cwd: Path) -> subprocess.CompletedProcess:
         nonlocal calls
         calls += 1
-        return subprocess.CompletedProcess(command, 9 if calls == 1 else 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(command, 9 if calls == 1 else 0, stdout="", stderr="deslop stderr details" if calls == 1 else "")
 
+    monkeypatch.setattr(orchestrator_runner, "write_text", lambda text: output.append(str(text)))
     monkeypatch.setattr(orchestrator_runner, "run_deslop_subprocess", fake_run)
 
     failed = orchestrator_runner.run_one_expensive_step(_cycle(tmp_path))
@@ -335,6 +337,7 @@ def test_runner_marks_failed_deslop_retryable_and_retries_from_retry_stage(monke
     assert failed.state["deslop"]["returncode"] == 9
     assert failed.state["recovery"]["status"] == STAGE_RETRY_REQUESTED
     assert failed.state["recovery"]["retry_count"] == 1
+    assert "deslop stderr details" in output
 
     retried = orchestrator_runner.run_one_expensive_step(failed.state)
 
