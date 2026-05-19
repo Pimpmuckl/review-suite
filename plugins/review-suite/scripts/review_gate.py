@@ -542,6 +542,8 @@ def _gate_fallback_variants(
             continue
         if arena_task_class not in list(fallback.get("task_classes") or []):
             continue
+        if fallback_variant_id in cooling:
+            continue
         fallbacks.append(fallback)
     if not fallbacks:
         fallbacks = [
@@ -579,9 +581,10 @@ def _inline_gate_fallback_variant(
     return None
 
 
-def _has_prior_gate_record(*, state_dir: Path, gate_task_class: str, review_cwd: Path, task_id: str) -> bool:
+def _prior_gate_record_count(*, state_dir: Path, gate_task_class: str, review_cwd: Path, task_id: str) -> int:
     normalized_cwd = normalize_review_cwd_value(review_cwd)
     decisions = gate_signoff_decisions_by_round(state_dir)
+    count = 0
     for record in read_jsonl(_gate_runs_path(state_dir)):
         if str(record.get("task_class") or "") != gate_task_class:
             continue
@@ -591,24 +594,34 @@ def _has_prior_gate_record(*, state_dir: Path, gate_task_class: str, review_cwd:
             continue
         if gate_record_status(dict(record), decisions.get(str(record.get("round_id") or ""))) in {"blocked", "unknown"}:
             continue
-        return True
-    return False
+        count += 1
+    return count
+
+
+def _gate_phase(*, gate_task_class: str, state_dir: Path, review_cwd: Path | None, task_id: str | None) -> str:
+    if review_cwd is None or not task_id:
+        return "discovery"
+    configured_gate = gate_config(gate_task_class, state_dir=state_dir)
+    if (
+        _prior_gate_record_count(
+            state_dir=state_dir,
+            gate_task_class=gate_task_class,
+            review_cwd=review_cwd,
+            task_id=task_id,
+        )
+        < configured_gate.discovery_loops
+    ):
+        return "discovery"
+    return "signoff"
 
 
 def _gate_reviewer_count(*, gate_task_class: str, state_dir: Path | None = None, review_cwd: Path | None = None, task_id: str | None = None) -> int:
     configured_gate = gate_config(gate_task_class, state_dir=state_dir)
-    default_count = configured_gate.default_reviewer_count
-    initial_count = configured_gate.initial_reviewer_count or default_count
-    if initial_count == default_count or state_dir is None or review_cwd is None or not task_id:
-        return initial_count
-    if _has_prior_gate_record(
-        state_dir=state_dir,
-        gate_task_class=gate_task_class,
-        review_cwd=review_cwd,
-        task_id=task_id,
-    ):
-        return default_count
-    return initial_count
+    if state_dir is None:
+        return configured_gate.discovery_reviewer_count
+    if _gate_phase(gate_task_class=gate_task_class, state_dir=state_dir, review_cwd=review_cwd, task_id=task_id) == "discovery":
+        return configured_gate.discovery_reviewer_count
+    return configured_gate.signoff_reviewer_count
 
 
 def _gate_max_active_reviewers(gate_task_class: str, target_count: int, *, state_dir: Path | None = None) -> int:
@@ -637,15 +650,21 @@ def _multi_pass_mode(prefix: str, count: int) -> str:
     return f"{prefix}_double_pass" if count == 2 else f"{prefix}_{count}_pass"
 
 
-def _gate_configured_primary_variants(
+def _gate_configured_phase_variants(
     *,
     indexed: dict[str, dict[str, Any]],
     gate_task_class: str,
     arena_task_class: str,
     cooling: dict[str, dict[str, Any]],
     state_dir: Path | None = None,
+    phase: str = "discovery",
 ) -> tuple[tuple[str, ...], list[dict[str, Any]]]:
-    primary_ids = gate_config(gate_task_class, state_dir=state_dir).primary_variant_ids
+    configured_gate = gate_config(gate_task_class, state_dir=state_dir)
+    primary_ids = (
+        (configured_gate.discovery_variant_id,)
+        if phase == "discovery"
+        else (configured_gate.signoff_variant_id,)
+    )
     variants: list[dict[str, Any]] = []
     for variant_id in primary_ids:
         variant = indexed.get(variant_id)
@@ -668,9 +687,23 @@ def _select_gate_variants(
     gate_task_class: str,
     champion_override: str | None = None,
     reviewer_count: int | None = None,
+    review_cwd: Path | None = None,
+    task_id: str | None = None,
 ) -> GateSelection:
     arena_task_class = ARENA_TASK_BY_GATE[gate_task_class]
-    reviewer_count = max(1, int(reviewer_count or _gate_reviewer_count(gate_task_class=gate_task_class, state_dir=state_dir)))
+    reviewer_count = max(
+        1,
+        int(
+            reviewer_count
+            or _gate_reviewer_count(
+                gate_task_class=gate_task_class,
+                state_dir=state_dir,
+                review_cwd=review_cwd,
+                task_id=task_id,
+            )
+        ),
+    )
+    phase = _gate_phase(gate_task_class=gate_task_class, state_dir=state_dir, review_cwd=review_cwd, task_id=task_id)
     operational_state = load_operational_state(state_dir / OPERATIONAL_STATE_FILENAME)
     task_state = dict(operational_state["task_classes"][arena_task_class] or {})
     champion_ids = _task_champion_ids(task_state)
@@ -693,21 +726,22 @@ def _select_gate_variants(
             variants=_repeat_gate_variant(override, reviewer_count),
             champion_ids=(champion_override_id,),
         )
-    configured_primary_ids, configured_primary_variants = _gate_configured_primary_variants(
+    configured_phase_ids, configured_phase_variants = _gate_configured_phase_variants(
         indexed=indexed,
         gate_task_class=gate_task_class,
         arena_task_class=arena_task_class,
         cooling=cooling,
         state_dir=state_dir,
+        phase=phase,
     )
-    if configured_primary_variants:
-        primary = configured_primary_variants[0]
+    if configured_phase_variants:
+        primary = configured_phase_variants[0]
         return GateSelection(
             gate_task_class=gate_task_class,
             arena_task_class=arena_task_class,
-            mode=_multi_pass_mode("configured_primary", reviewer_count),
+            mode=_multi_pass_mode(f"configured_{phase}", reviewer_count),
             variants=_repeat_gate_variant(primary, reviewer_count),
-            champion_ids=configured_primary_ids,
+            champion_ids=configured_phase_ids,
         )
     if not champion_ids:
         fallbacks = _gate_fallback_variants(
@@ -973,9 +1007,8 @@ def aggregate_gate_records(*, state_dir: Path, operational_state: dict[str, Any]
                 cost_usd = run.get("cost_usd")
                 if isinstance(cost_usd, (int, float)):
                     bucket["cost_values"].append(float(cost_usd))
-        champions = list(gate_config(gate_task_class, state_dir=state_dir).primary_variant_ids) or list(
-            _task_champion_ids(dict(operational_state["task_classes"][arena_task_class] or {}))
-        )
+        configured_gate = gate_config(gate_task_class, state_dir=state_dir)
+        champions = [configured_gate.signoff_variant_id]
         for variant_id in champions:
             metrics.setdefault(
                 variant_id,
@@ -1162,6 +1195,8 @@ def run_gate_round(
             state_dir=state_dir,
             gate_task_class=gate_task_class,
             champion_override=champion_override,
+            review_cwd=review_cwd,
+            task_id=resolved_task_id,
             reviewer_count=_gate_reviewer_count(
                 gate_task_class=gate_task_class,
                 state_dir=state_dir,

@@ -60,8 +60,12 @@ if (-not (Test-ReviewSuiteRoot -Path $target)) {
 }
 
 $resolvedTarget = (Resolve-Path -LiteralPath $target).Path
-$relativeToCache = [System.IO.Path]::GetRelativePath($cacheRoot.Path, $resolvedTarget)
-if ($relativeToCache.StartsWith("..")) {
+$cacheRootPath = $cacheRoot.Path.TrimEnd("\", "/")
+$resolvedTargetPath = $resolvedTarget.TrimEnd("\", "/")
+$insideCache = $resolvedTargetPath.Equals($cacheRootPath, [System.StringComparison]::OrdinalIgnoreCase) -or
+    $resolvedTargetPath.StartsWith("$cacheRootPath\", [System.StringComparison]::OrdinalIgnoreCase) -or
+    $resolvedTargetPath.StartsWith("$cacheRootPath/", [System.StringComparison]::OrdinalIgnoreCase)
+if (-not $insideCache) {
     throw "Refusing to sync outside Codex plugin cache: $resolvedTarget"
 }
 

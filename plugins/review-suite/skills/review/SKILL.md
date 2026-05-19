@@ -17,6 +17,7 @@ Rules:
 - Non-emergency runs deslop once.
 - Read `Output:`, then run one emitted `Action.cmd`.
 - For local review decisions, use only `--id <id>` and `--decision clean|findings` when asked.
+- After an id exists, do not repeat `--mode`, `--cd`, or `--base`.
 - Classify reviewer output before coding valid findings.
 - Fix valid findings, then run emitted `review.py --id <id>`.
 - When HEAD changed, `review.py --id <id>` runs follow-up.

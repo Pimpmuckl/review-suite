@@ -21,6 +21,7 @@ Rules:
 - Start with `--mode brief|normal|deep|emergency`.
 - Non-emergency runs deslop once, then one review profile step per invocation.
 - For local review decisions, follow emitted `Action.cmd` with only `--id <id>` and `--decision clean|findings`.
+- After an id exists, do not repeat `--mode`, `--cd`, or `--base`.
 - Classify reviewer output before coding valid findings.
 - Fix valid findings, then run emitted `review.py --id <id>`.
 - When HEAD changed, `review.py --id <id>` runs follow-up.

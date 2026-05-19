@@ -28,13 +28,18 @@ def test_default_stable_profiles_cover_all_modes(tmp_path: Path) -> None:
     assert config["orchestrator"]["calibration"]["auto_promotion_enabled"] is False
     assert profiles["stable"]["brief"].steps[0].count == 2
     assert profiles["stable"]["brief"].steps[0].model == "gpt-5.5"
+    assert profiles["stable"]["brief"].steps[0].reasoning_effort == "medium"
+    assert profiles["stable"]["brief"].deslop_enabled is False
+    assert profiles["stable"]["brief"].steps[0].rerun_on_findings is True
     assert [step.model for step in profiles["stable"]["normal"].steps if step.kind == "review"] == ["gpt-5.4", "gpt-5.5"]
     assert [step.count for step in profiles["stable"]["normal"].steps if step.kind == "review"] == [4, 2]
-    assert {step.reasoning_effort for step in profiles["stable"]["deep"].steps if step.kind == "review"} == {"xhigh"}
+    assert [step.model for step in profiles["stable"]["deep"].steps if step.kind == "review"] == ["gpt-5.4", "gpt-5.4", "gpt-5.5"]
+    assert [step.count for step in profiles["stable"]["deep"].steps if step.kind == "review"] == [4, 2, 2]
+    assert [step.reasoning_effort for step in profiles["stable"]["deep"].steps if step.kind == "review"] == ["medium", "xhigh", "xhigh"]
     for mode in ("brief", "normal", "deep", "emergency"):
         step = profiles["stable"][mode].steps[-1]
-        assert step.kind == "gate"
-        assert step.gate == "phase_gate"
+        assert step.kind == "review"
+        assert step.rerun_on_findings is True
     assert profiles["stable"]["emergency"].deslop_enabled is False
 
 
@@ -47,6 +52,62 @@ def test_profile_step_kind_defaults_to_review(tmp_path: Path) -> None:
     profiles = load_orchestrator_profiles(config)
 
     assert profiles["stable"]["brief"].steps[0].kind == "review"
+
+
+def test_stable_model_defaults_drive_profile_steps(tmp_path: Path) -> None:
+    config = deepcopy(load_config(tmp_path / "state"))
+    config["orchestrator"]["stable_defaults"].update(
+        {
+            "discovery_brief_model": "gpt-5.5-medium",
+            "discovery_deep_model": "gpt-5.5-xhigh",
+            "signoff_brief_model": "gpt-5.4-high",
+            "signoff_deep_model": "gpt-5.4-xhigh",
+        }
+    )
+
+    profiles = load_orchestrator_profiles(config)
+
+    normal = profiles["stable"]["normal"].steps
+    deep = profiles["stable"]["deep"].steps
+    assert [(step.model, step.reasoning_effort) for step in normal] == [
+        ("gpt-5.5", "medium"),
+        ("gpt-5.4", "high"),
+    ]
+    assert [(step.model, step.reasoning_effort) for step in deep] == [
+        ("gpt-5.5", "medium"),
+        ("gpt-5.5", "xhigh"),
+        ("gpt-5.4", "xhigh"),
+    ]
+
+
+def test_stable_discovery_loops_repeat_discovery_block(tmp_path: Path) -> None:
+    config = deepcopy(load_config(tmp_path / "state"))
+    config["orchestrator"]["stable_defaults"]["discovery_loops"] = 2
+
+    profiles = load_orchestrator_profiles(config)
+
+    assert [step.name for step in profiles["stable"]["deep"].steps] == [
+        "broad-discovery-1",
+        "deep-discovery-1",
+        "broad-discovery-2",
+        "deep-discovery-2",
+        "deep-signoff",
+    ]
+    assert [step.rerun_on_findings for step in profiles["stable"]["deep"].steps] == [
+        False,
+        False,
+        False,
+        False,
+        True,
+    ]
+
+
+def test_stable_model_refs_require_model_effort_labels(tmp_path: Path) -> None:
+    config = deepcopy(load_config(tmp_path / "state"))
+    config["orchestrator"]["stable_defaults"]["signoff_brief_model"] = "gpt-5.5"
+
+    with pytest.raises(ValueError, match="orchestrator.stable_defaults.signoff_brief_model"):
+        load_orchestrator_profiles(config)
 
 
 @pytest.mark.parametrize("mode", ["brief", "normal", "deep", "emergency"])

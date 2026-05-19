@@ -11,6 +11,7 @@ DEFAULT_CONFIG_FILENAME = "default_config.json"
 USER_CONFIG_FILENAME = "config.json"
 SUPPORTED_REASONING_EFFORTS = {"low", "medium", "high", "xhigh"}
 SUPPORTED_SERVICE_TIERS = {"fast", "flex"}
+SUPPORTED_ORCHESTRATOR_SELECTIONS = {"auto", "stable", "benchmark"}
 
 
 @dataclass(frozen=True)
@@ -22,10 +23,12 @@ class LensModelConfig:
 
 @dataclass(frozen=True)
 class GateConfig:
-    primary_variant_ids: tuple[str, ...]
+    discovery_variant_id: str
+    discovery_reviewer_count: int
+    signoff_variant_id: str
+    signoff_reviewer_count: int
+    discovery_loops: int
     backup_variant_ids: tuple[str, ...]
-    default_reviewer_count: int
-    initial_reviewer_count: int | None
     max_active_reviewers: int
 
 
@@ -97,10 +100,50 @@ def _positive_int(value: Any, *, field: str) -> int:
     return number
 
 
-def _optional_positive_int(value: Any, *, field: str) -> int | None:
-    if value is None:
-        return None
-    return _positive_int(value, field=field)
+def _non_empty_text(value: Any, *, field: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        raise ValueError(f"{field} is required")
+    return text
+
+
+def _parse_model_label(value: Any, *, field: str) -> str:
+    label = _non_empty_text(value, field=field)
+    with_tier = label.rsplit("-", 2)
+    if len(with_tier) == 3 and with_tier[1] in SUPPORTED_REASONING_EFFORTS and with_tier[2] in SUPPORTED_SERVICE_TIERS:
+        if not with_tier[0].strip():
+            raise ValueError(f"{field} must include a model name")
+        return label
+    without_tier = label.rsplit("-", 1)
+    if len(without_tier) == 2 and without_tier[1] in SUPPORTED_REASONING_EFFORTS:
+        if not without_tier[0].strip():
+            raise ValueError(f"{field} must include a model name")
+        return label
+    efforts = ", ".join(sorted(SUPPORTED_REASONING_EFFORTS))
+    raise ValueError(f"{field} must look like model-effort where effort is one of: {efforts}")
+
+
+def _orchestrator_defaults(config: dict[str, Any]) -> dict[str, Any]:
+    orchestrator = config.get("orchestrator")
+    if not isinstance(orchestrator, dict):
+        raise ValueError("orchestrator config must be an object")
+    defaults = orchestrator.get("stable_defaults") or {}
+    if not isinstance(defaults, dict):
+        raise ValueError("orchestrator.stable_defaults must be an object")
+    return defaults
+
+
+def _stable_model_ref(config: dict[str, Any], ref: Any, *, field: str) -> str:
+    ref_name = _non_empty_text(ref, field=field)
+    return _parse_model_label(
+        _orchestrator_defaults(config).get(ref_name),
+        field=f"orchestrator.stable_defaults.{ref_name}",
+    )
+
+
+def _stable_positive_int_ref(config: dict[str, Any], ref: Any, *, field: str) -> int:
+    ref_name = _non_empty_text(ref, field=field)
+    return _positive_int(_orchestrator_defaults(config).get(ref_name), field=f"orchestrator.stable_defaults.{ref_name}")
 
 
 def _validate_lens_config(config: dict[str, Any]) -> None:
@@ -128,12 +171,24 @@ def _validate_gate_config(config: dict[str, Any]) -> None:
         gate = gates.get(gate_name)
         if not isinstance(gate, dict):
             raise ValueError(f"gates.{gate_name} config must be an object")
-        if not _string_list(gate.get("primary_variant_ids"), field=f"gates.{gate_name}.primary_variant_ids"):
-            raise ValueError(f"gates.{gate_name}.primary_variant_ids must contain at least one variant id")
+        _stable_model_ref(config, gate.get("discovery_model_ref"), field=f"gates.{gate_name}.discovery_model_ref")
+        _positive_int(gate.get("discovery_reviewer_count"), field=f"gates.{gate_name}.discovery_reviewer_count")
+        _stable_model_ref(config, gate.get("signoff_model_ref"), field=f"gates.{gate_name}.signoff_model_ref")
+        _positive_int(gate.get("signoff_reviewer_count"), field=f"gates.{gate_name}.signoff_reviewer_count")
+        _stable_positive_int_ref(config, gate.get("discovery_loops_ref"), field=f"gates.{gate_name}.discovery_loops_ref")
         _string_list(gate.get("backup_variant_ids"), field=f"gates.{gate_name}.backup_variant_ids")
-        _positive_int(gate.get("default_reviewer_count"), field=f"gates.{gate_name}.default_reviewer_count")
-        _optional_positive_int(gate.get("initial_reviewer_count"), field=f"gates.{gate_name}.initial_reviewer_count")
         _positive_int(gate.get("max_active_reviewers"), field=f"gates.{gate_name}.max_active_reviewers")
+
+
+def _validate_orchestrator_config(config: dict[str, Any]) -> None:
+    orchestrator = config.get("orchestrator")
+    if not isinstance(orchestrator, dict):
+        raise ValueError("orchestrator config must be an object")
+    selection = str(orchestrator.get("selection") or "auto").strip()
+    if selection not in SUPPORTED_ORCHESTRATOR_SELECTIONS:
+        allowed = ", ".join(sorted(SUPPORTED_ORCHESTRATOR_SELECTIONS))
+        raise ValueError(f"orchestrator.selection must be one of: {allowed}")
+    _orchestrator_defaults(config)
 
 
 def _validate_config(config: dict[str, Any]) -> None:
@@ -144,6 +199,7 @@ def _validate_config(config: dict[str, Any]) -> None:
         raise ValueError("arena_external_publish_enabled is not supported in the public review-suite plugin")
     _validate_lens_config(config)
     _validate_gate_config(config)
+    _validate_orchestrator_config(config)
 
 
 def lens_model_config(tool_name: str, *, state_dir: Path | None = None) -> LensModelConfig:
@@ -168,16 +224,30 @@ def gate_config(gate_task_class: str, *, state_dir: Path | None = None) -> GateC
     if not gate:
         raise ValueError(f"missing gate config for {gate_task_class}")
     return GateConfig(
-        primary_variant_ids=_string_list(gate.get("primary_variant_ids"), field=f"gates.{gate_task_class}.primary_variant_ids"),
+        discovery_variant_id=_stable_model_ref(
+            config,
+            gate.get("discovery_model_ref"),
+            field=f"gates.{gate_task_class}.discovery_model_ref",
+        ),
+        discovery_reviewer_count=_positive_int(
+            gate.get("discovery_reviewer_count"),
+            field=f"gates.{gate_task_class}.discovery_reviewer_count",
+        ),
+        signoff_variant_id=_stable_model_ref(
+            config,
+            gate.get("signoff_model_ref"),
+            field=f"gates.{gate_task_class}.signoff_model_ref",
+        ),
+        signoff_reviewer_count=_positive_int(
+            gate.get("signoff_reviewer_count"),
+            field=f"gates.{gate_task_class}.signoff_reviewer_count",
+        ),
+        discovery_loops=_stable_positive_int_ref(
+            config,
+            gate.get("discovery_loops_ref"),
+            field=f"gates.{gate_task_class}.discovery_loops_ref",
+        ),
         backup_variant_ids=_string_list(gate.get("backup_variant_ids"), field=f"gates.{gate_task_class}.backup_variant_ids"),
-        default_reviewer_count=_positive_int(
-            gate.get("default_reviewer_count"),
-            field=f"gates.{gate_task_class}.default_reviewer_count",
-        ),
-        initial_reviewer_count=_optional_positive_int(
-            gate.get("initial_reviewer_count"),
-            field=f"gates.{gate_task_class}.initial_reviewer_count",
-        ),
         max_active_reviewers=_positive_int(
             gate.get("max_active_reviewers"),
             field=f"gates.{gate_task_class}.max_active_reviewers",

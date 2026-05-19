@@ -17,43 +17,48 @@
     "enabled": true
   },
   "orchestrator": {
+    "selection": "auto",
     "calibration": {
       "auto_promotion_enabled": false
+    },
+    "stable_defaults": {
+      "discovery_brief_model": "gpt-5.4-medium",
+      "discovery_deep_model": "gpt-5.4-xhigh",
+      "discovery_loops": 1,
+      "signoff_brief_model": "gpt-5.5-medium",
+      "signoff_deep_model": "gpt-5.5-xhigh"
     },
     "profiles": {
       "stable": {
         "brief": {
-          "deslop_enabled": true,
+          "deslop_enabled": false,
           "requires_grading": false,
           "steps": [
-            {"name": "precision", "count": 2, "model": "gpt-5.5", "reasoning_effort": "medium"},
-            {"name": "local-signoff", "kind": "gate", "gate": "phase_gate"}
+            {"name": "precision-signoff", "count": 2, "model_ref": "signoff_brief_model", "rerun_on_findings": true}
           ]
         },
         "normal": {
           "deslop_enabled": true,
           "requires_grading": false,
           "steps": [
-            {"name": "broad-discovery", "count": 4, "model": "gpt-5.4", "reasoning_effort": "medium"},
-            {"name": "precision-signoff", "count": 2, "model": "gpt-5.5", "reasoning_effort": "medium"},
-            {"name": "local-signoff", "kind": "gate", "gate": "phase_gate"}
+            {"name": "broad-discovery", "count": 4, "model_ref": "discovery_brief_model", "loop_ref": "discovery_loops"},
+            {"name": "precision-signoff", "count": 2, "model_ref": "signoff_brief_model", "rerun_on_findings": true}
           ]
         },
         "deep": {
           "deslop_enabled": true,
           "requires_grading": false,
           "steps": [
-            {"name": "deep-discovery", "count": 2, "model": "gpt-5.4", "reasoning_effort": "xhigh"},
-            {"name": "deep-signoff", "count": 2, "model": "gpt-5.5", "reasoning_effort": "xhigh"},
-            {"name": "local-signoff", "kind": "gate", "gate": "phase_gate"}
+            {"name": "broad-discovery", "count": 4, "model_ref": "discovery_brief_model", "loop_ref": "discovery_loops"},
+            {"name": "deep-discovery", "count": 2, "model_ref": "discovery_deep_model", "loop_ref": "discovery_loops"},
+            {"name": "deep-signoff", "count": 2, "model_ref": "signoff_deep_model", "rerun_on_findings": true}
           ]
         },
         "emergency": {
           "deslop_enabled": false,
           "requires_grading": false,
           "steps": [
-            {"name": "urgent-precision", "count": 2, "model": "gpt-5.5", "reasoning_effort": "medium"},
-            {"name": "local-signoff", "kind": "gate", "gate": "phase_gate"}
+            {"name": "urgent-signoff", "count": 2, "model_ref": "signoff_brief_model", "rerun_on_findings": true}
           ]
         }
       },
@@ -91,16 +96,21 @@
   },
   "gates": {
     "phase_gate": {
-      "primary_variant_ids": ["gpt-5.4-medium"],
+      "discovery_model_ref": "discovery_brief_model",
+      "discovery_reviewer_count": 4,
+      "signoff_model_ref": "signoff_brief_model",
+      "signoff_reviewer_count": 2,
+      "discovery_loops_ref": "discovery_loops",
       "backup_variant_ids": ["gpt-5.5-medium", "gpt-5.4-medium", "gpt-5.4-high"],
-      "default_reviewer_count": 2,
-      "initial_reviewer_count": 4,
       "max_active_reviewers": 4
     },
     "pr_gate": {
-      "primary_variant_ids": ["gpt-5.5-xhigh"],
+      "discovery_model_ref": "discovery_deep_model",
+      "discovery_reviewer_count": 2,
+      "signoff_model_ref": "signoff_deep_model",
+      "signoff_reviewer_count": 2,
+      "discovery_loops_ref": "discovery_loops",
       "backup_variant_ids": ["gpt-5.5-xhigh", "gpt-5.4-xhigh", "gpt-5.4-high"],
-      "default_reviewer_count": 2,
       "max_active_reviewers": 2
     }
   }

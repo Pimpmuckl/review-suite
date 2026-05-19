@@ -299,6 +299,66 @@ def test_followup_clean_completes_source_profile_step_and_continues(tmp_path: Pa
     ]
 
 
+def test_followup_clean_reruns_sticky_signoff_step(tmp_path: Path) -> None:
+    state = _cycle(tmp_path)
+    state["review_plan"] = {
+        "steps": [
+            {
+                "name": "precision-signoff",
+                "count": 1,
+                "model": "gpt-5.5",
+                "reasoning_effort": "medium",
+                "rerun_on_findings": True,
+            },
+        ]
+    }
+    pending = mark_review_step_pending(
+        state,
+        round_id="signoff-1",
+        lane="review_t1",
+        step_index=0,
+        step_name="precision-signoff",
+        reviewed_head="head-1",
+    )
+    findings = record_findings_decision(pending, round_id="signoff-1", lane="review_t1", reviewed_head="head-1")
+    fixed = mark_fix_detected(findings, head="head-2")
+    followup_pending = mark_followup_review_pending(
+        fixed,
+        round_id="followup-1",
+        reviewed_head="head-2",
+        source_round_id="signoff-1",
+    )
+    clean = record_followup_clean(followup_pending, round_id="followup-1", reviewed_head="head-2")
+
+    assert clean["stage"] == STAGE_CREATED
+    assert clean["active_findings"] is None
+    assert clean["validation"]["review_green"] == "unknown"
+    assert clean["pending_action"] == {"kind": "run-review-step", "step_index": 0, "step": "precision-signoff"}
+    assert clean["review_progress"]["next_step_index"] == 0
+    assert clean["review_progress"]["completed_steps"] == []
+
+    rerun_pending = mark_review_step_pending(
+        clean,
+        round_id="signoff-2",
+        lane="review_t1",
+        step_index=0,
+        step_name="precision-signoff",
+        reviewed_head="head-2",
+    )
+    green = record_clean_decision(rerun_pending, round_id="signoff-2", lane="review_t1", reviewed_head="head-2")
+
+    assert green["stage"] == STAGE_REVIEW_GREEN
+    assert green["review_progress"]["completed_steps"] == [
+        {
+            "index": 0,
+            "name": "precision-signoff",
+            "round_id": "signoff-2",
+            "lane": "review_t1",
+            "reviewed_head": "head-2",
+        }
+    ]
+
+
 def test_gate_findings_require_fix_followup_clean_and_same_gate_rerun(tmp_path: Path) -> None:
     state = _cycle(tmp_path)
     pending = mark_decision_pending(state, round_id="gate-1", lane="review_t2", reviewed_head="head-1")

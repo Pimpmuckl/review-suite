@@ -311,6 +311,13 @@ def _review_step_name(state: dict[str, Any], step_index: int) -> str | None:
     return _optional_text(steps[step_index].get("name"))
 
 
+def _review_step_rerun_on_findings(state: dict[str, Any], step_index: int) -> bool:
+    steps = _review_plan_steps(state)
+    if step_index < 0 or step_index >= len(steps):
+        return False
+    return bool(steps[step_index].get("rerun_on_findings"))
+
+
 def _profile_step_kind(step: dict[str, Any]) -> str:
     return str(step.get("kind") or "review").strip() or "review"
 
@@ -332,6 +339,12 @@ def _next_profile_step_action(state: dict[str, Any]) -> dict[str, Any]:
     if gate:
         action["gate"] = gate
     return action
+
+
+def _rewind_profile_step_action(state: dict[str, Any], profile_step: dict[str, Any]) -> dict[str, Any]:
+    index = _nonnegative_int(profile_step.get("index"), field="profile_step.index")
+    _set_review_progress(state, next_step_index=index, current_step=None)
+    return _next_profile_step_action(state)
 
 
 def _set_review_progress(
@@ -399,9 +412,15 @@ def mark_review_step_pending(
         "round_id": _required_text(round_id, field="round_id"),
         "lane": _required_text(lane, field="lane"),
     }
+    if _review_step_rerun_on_findings(next_state, index):
+        profile_step["rerun_on_findings"] = True
     for item in list(next_state.get("rounds") or []):
         if isinstance(item, dict) and item.get("round_id") == round_id:
-            item["profile_step"] = {"index": index, "name": name}
+            item["profile_step"] = {
+                key: profile_step[key]
+                for key in ("index", "name", "rerun_on_findings")
+                if key in profile_step
+            }
             break
     _set_review_progress(next_state, next_step_index=index, current_step=profile_step)
     return next_state
@@ -486,6 +505,8 @@ def _profile_step_for_round(state: dict[str, Any], round_id: str) -> dict[str, A
                 "round_id": round_id,
                 "lane": item.get("lane"),
             }
+            if bool(profile_step.get("rerun_on_findings")):
+                payload["rerun_on_findings"] = True
             if profile_step.get("gate"):
                 payload["kind"] = "gate"
                 payload["gate"] = profile_step.get("gate")
@@ -552,6 +573,16 @@ def _complete_profile_step(state: dict[str, Any], *, round_id: str, lane: str, r
         lane=lane,
         reviewed_head=reviewed_head,
     )
+
+
+def _profile_step_reruns_after_findings(state: dict[str, Any], profile_step: dict[str, Any]) -> bool:
+    if bool(profile_step.get("rerun_on_findings")):
+        return True
+    try:
+        index = _nonnegative_int(profile_step.get("index"), field="profile_step.index")
+    except ValueError:
+        return False
+    return _review_step_rerun_on_findings(state, index)
 
 
 def deslop_is_ready(state: dict[str, Any]) -> bool:
@@ -820,9 +851,14 @@ def record_followup_clean(
         return next_state
     next_state["active_findings"] = None
     profile_round_id = _profile_round_id_for_findings(next_state, active)
+    profile_step = _profile_step_for_round(next_state, profile_round_id) if profile_round_id else None
+    if profile_step and _profile_step_reruns_after_findings(next_state, profile_step):
+        _set_review_green(next_state, "unknown")
+        _set_stage(next_state, STAGE_CREATED, _rewind_profile_step_action(next_state, profile_step))
+        return next_state
     completed_profile_step = False
     if profile_round_id:
-        profile_step = _profile_step_for_round(next_state, profile_round_id) or {}
+        profile_step = profile_step or _profile_step_for_round(next_state, profile_round_id) or {}
         completed_profile_step = _complete_profile_step(
             next_state,
             round_id=profile_round_id,

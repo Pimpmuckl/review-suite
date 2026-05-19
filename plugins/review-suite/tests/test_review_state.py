@@ -855,6 +855,61 @@ def test_inspect_workflow_status_clean_t4_resets_followup_cycle_pressure(tmp_pat
     assert "followup_anchor_count_since_full_review" not in payload
 
 
+def test_inspect_workflow_status_github_review_resets_followup_cycle_pressure(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "base.txt", "base\n", "initial")
+    _git(repo, "checkout", "-b", "feature/post-github")
+    checkpoint_head = _commit_file(repo, "app.txt", "checkpoint\n", "checkpoint")
+    merge_base_at_checkpoint = _git(repo, "merge-base", "main", "HEAD")
+    record_review_anchor(
+        state_dir=state_dir,
+        review_cwd=repo,
+        lane="review_t4",
+        base="main",
+        reviewed_head=checkpoint_head,
+        review_scope={"base": "main", "reviewed_head": checkpoint_head, "merge_base": merge_base_at_checkpoint},
+    )
+
+    previous_head = checkpoint_head
+    for index in range(1, 4):
+        next_head = _commit_file(repo, "app.txt", f"followup {index}\n", f"followup {index}")
+        record_review_anchor(
+            state_dir=state_dir,
+            review_cwd=repo,
+            lane="review-followup",
+            base="main",
+            reviewed_head=next_head,
+            review_scope={
+                "commit": previous_head,
+                "commit_end": next_head,
+                "manual_prompt_mode": True,
+                "merge_base": merge_base_at_checkpoint,
+            },
+        )
+        previous_head = next_head
+    record_review_anchor(
+        state_dir=state_dir,
+        review_cwd=repo,
+        lane="review-github",
+        base="main",
+        reviewed_head=previous_head,
+        review_scope={"base": "main", "reviewed_head": previous_head, "merge_base": merge_base_at_checkpoint},
+    )
+    _commit_file(repo, "app.txt", "github fix\n", "fix github finding")
+
+    payload = inspect_workflow_status(
+        state_dir=state_dir,
+        review_cwd=repo,
+        base="main",
+    )
+
+    assert payload["recommendation"] == "review-followup"
+    assert payload["reason"] == "small_delta_after_review"
+    assert "followup_anchor_count_since_full_review" not in payload
+
+
 def test_inspect_workflow_status_routes_post_t4_findings_back_to_t4(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"

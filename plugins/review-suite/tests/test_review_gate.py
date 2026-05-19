@@ -190,7 +190,7 @@ def test_select_gate_variants_prefers_non_cooling_champions(tmp_path: Path) -> N
     assert [variant["id"] for variant in selection.variants] == ["b", "c", "b", "c"]
 
 
-def test_select_gate_variants_uses_fallback_when_all_champions_are_cooling(tmp_path: Path) -> None:
+def test_select_gate_variants_uses_pr_gate_discovery_variant_before_champions(tmp_path: Path) -> None:
     state_dir = tmp_path / "state"
     _write_json(
         state_dir / "operational_state.json",
@@ -223,12 +223,12 @@ def test_select_gate_variants_uses_fallback_when_all_champions_are_cooling(tmp_p
 
     selection = _select_gate_variants(roster=roster, state_dir=state_dir, gate_task_class="pr_gate")
 
-    assert selection.mode == "cooldown_backup_double_pass"
+    assert selection.mode == "configured_discovery_double_pass"
     assert [variant["id"] for variant in selection.variants] == ["gpt-5.4-xhigh", "gpt-5.4-xhigh"]
-    assert selection.champion_ids == ("gpt-5.5-xhigh",)
+    assert selection.champion_ids == ("gpt-5.4-xhigh",)
 
 
-def test_select_gate_variants_uses_configured_primary_without_champions(tmp_path: Path) -> None:
+def test_select_gate_variants_uses_configured_discovery_without_champions(tmp_path: Path) -> None:
     state_dir = tmp_path / "state"
     _write_json(
         state_dir / "operational_state.json",
@@ -264,7 +264,7 @@ def test_select_gate_variants_uses_configured_primary_without_champions(tmp_path
 
     selection = _select_gate_variants(roster=roster, state_dir=state_dir, gate_task_class="phase_gate")
 
-    assert selection.mode == "configured_primary_4_pass"
+    assert selection.mode == "configured_discovery_4_pass"
     assert [variant["id"] for variant in selection.variants] == [
         "gpt-5.4-medium",
         "gpt-5.4-medium",
@@ -273,7 +273,7 @@ def test_select_gate_variants_uses_configured_primary_without_champions(tmp_path
     ]
 
 
-def test_phase_gate_reviewer_count_uses_quad_only_for_first_scaffold_run(tmp_path: Path) -> None:
+def test_phase_gate_reviewer_count_switches_from_discovery_to_signoff(tmp_path: Path) -> None:
     state_dir = tmp_path / "state"
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -372,7 +372,120 @@ def test_phase_gate_reviewer_count_uses_quad_only_for_first_scaffold_run(tmp_pat
     assert _gate_reviewer_count(gate_task_class="pr_gate", state_dir=state_dir, review_cwd=repo, task_id=task_id) == 2
 
 
-def test_select_gate_variants_champion_override_wins_over_configured_primary(tmp_path: Path) -> None:
+def test_phase_gate_discovery_loops_are_configurable(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    task_id = "feature/two-discovery-loops"
+    (state_dir / "config.json").parent.mkdir(parents=True, exist_ok=True)
+    (state_dir / "config.json").write_text(
+        json.dumps({"orchestrator": {"stable_defaults": {"discovery_loops": 2}}}),
+        encoding="utf-8",
+    )
+    (state_dir / "gate_runs.jsonl").write_text(
+        json.dumps(
+            {
+                "task_class": "phase_gate",
+                "task_id": task_id,
+                "review_cwd_normalized": str(repo.resolve()),
+                "signoff_status": "pending",
+                "runs": [{"review_status": "completed", "grade_blocked": False}],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert _gate_reviewer_count(gate_task_class="phase_gate", state_dir=state_dir, review_cwd=repo, task_id=task_id) == 4
+
+    with (state_dir / "gate_runs.jsonl").open("a", encoding="utf-8") as handle:
+        handle.write(
+            json.dumps(
+                {
+                    "task_class": "phase_gate",
+                    "task_id": task_id,
+                    "review_cwd_normalized": str(repo.resolve()),
+                    "signoff_status": "pending",
+                    "runs": [{"review_status": "completed", "grade_blocked": False}],
+                }
+            )
+            + "\n"
+        )
+
+    assert _gate_reviewer_count(gate_task_class="phase_gate", state_dir=state_dir, review_cwd=repo, task_id=task_id) == 2
+
+
+def test_pr_gate_uses_configured_discovery_then_signoff_variant(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    task_id = "feature/pr-gate"
+    _write_json(
+        state_dir / "operational_state.json",
+        {
+            "generated_at": "2026-04-24T00:00:00Z",
+            "task_classes": {
+                "phase_review": {
+                    "champion_variant_ids": [],
+                    "cooldowns": {},
+                    "probation_variant_ids": [],
+                    "stable_variant_ids": [],
+                    "mode": "scramble",
+                },
+                "pr_review": {
+                    "champion_variant_ids": [],
+                    "cooldowns": {},
+                    "probation_variant_ids": [],
+                    "stable_variant_ids": [],
+                    "mode": "scramble",
+                },
+            },
+        },
+    )
+    roster = {
+        "variants": [
+            {"id": "gpt-5.5-xhigh", "state": "active", "task_classes": ["pr_review"]},
+            {"id": "gpt-5.4-xhigh", "state": "active", "task_classes": ["pr_review"]},
+        ]
+    }
+
+    first = _select_gate_variants(
+        roster=roster,
+        state_dir=state_dir,
+        gate_task_class="pr_gate",
+        review_cwd=repo,
+        task_id=task_id,
+    )
+
+    assert first.mode == "configured_discovery_double_pass"
+    assert [variant["id"] for variant in first.variants] == ["gpt-5.4-xhigh", "gpt-5.4-xhigh"]
+
+    (state_dir / "gate_runs.jsonl").write_text(
+        json.dumps(
+            {
+                "task_class": "pr_gate",
+                "task_id": task_id,
+                "review_cwd_normalized": str(repo.resolve()),
+                "signoff_status": "pending",
+                "runs": [{"review_status": "completed", "grade_blocked": False}],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    subsequent = _select_gate_variants(
+        roster=roster,
+        state_dir=state_dir,
+        gate_task_class="pr_gate",
+        review_cwd=repo,
+        task_id=task_id,
+    )
+
+    assert subsequent.mode == "configured_signoff_double_pass"
+    assert [variant["id"] for variant in subsequent.variants] == ["gpt-5.5-xhigh", "gpt-5.5-xhigh"]
+
+
+def test_select_gate_variants_champion_override_wins_over_configured_gate_variant(tmp_path: Path) -> None:
     state_dir = tmp_path / "state"
     _write_json(
         state_dir / "operational_state.json",
@@ -541,7 +654,7 @@ def test_select_gate_variants_excludes_probation_from_supplied_roster_fallback(t
     assert [variant["id"] for variant in selection.variants] == ["fallback", "fallback", "fallback", "fallback"]
 
 
-def test_select_gate_variants_uses_provisional_backup_for_pr_gate_without_champions(tmp_path: Path) -> None:
+def test_select_gate_variants_uses_pr_gate_configured_discovery_without_champions(tmp_path: Path) -> None:
     state_dir = tmp_path / "state"
     _write_json(
         state_dir / "operational_state.json",
@@ -577,7 +690,7 @@ def test_select_gate_variants_uses_provisional_backup_for_pr_gate_without_champi
 
     selection = _select_gate_variants(roster=roster, state_dir=state_dir, gate_task_class="pr_gate")
 
-    assert selection.mode == "provisional_backup_double_pass"
+    assert selection.mode == "configured_discovery_double_pass"
     assert [variant["id"] for variant in selection.variants] == ["gpt-5.4-xhigh", "gpt-5.4-xhigh"]
 
 
@@ -791,11 +904,11 @@ def test_aggregate_gate_records_reports_gate_primary_for_gate_champions(tmp_path
 
     summary = aggregate_gate_records(state_dir=state_dir, operational_state=operational_state)
 
-    assert summary["task_classes"]["phase_gate"]["champions"] == ["gpt-5.4-medium"]
+    assert summary["task_classes"]["phase_gate"]["champions"] == ["gpt-5.5-medium"]
     assert summary["task_classes"]["phase_gate"]["leaderboard"] == [
         {
-            "variant_id": "gpt-5.4-medium",
-            "variant_label": "gpt-5.4-medium",
+            "variant_id": "gpt-5.5-medium",
+            "variant_label": "gpt-5.5-medium",
             "runs": 0,
             "blocker_pct": None,
             "median_elapsed_seconds": None,

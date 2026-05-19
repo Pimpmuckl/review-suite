@@ -856,7 +856,7 @@ def latest_followup_pressure_checkpoint_anchor(state: dict[str, Any] | None) -> 
         return None
     anchors = [item for item in list(state.get("anchors") or []) if isinstance(item, dict)]
     for anchor in reversed(anchors):
-        if str(anchor.get("lane") or "") in {"review_t1", "review_t2", "review_t3", "review_t4"}:
+        if str(anchor.get("lane") or "") in {"review_t1", "review_t2", "review_t3", "review_t4", "review-github"}:
             return anchor
     return None
 

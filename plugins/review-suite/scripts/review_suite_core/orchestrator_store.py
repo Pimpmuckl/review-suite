@@ -9,6 +9,7 @@ from typing import Any
 
 
 ORCHESTRATOR_INDEX_SCHEMA_VERSION = 1
+STATE_DIR_LOCATOR_SCHEMA_VERSION = 1
 
 
 def orchestrator_dir(state_dir: Path) -> Path:
@@ -21,6 +22,10 @@ def cycles_dir(state_dir: Path) -> Path:
 
 def index_path(state_dir: Path) -> Path:
     return orchestrator_dir(state_dir) / "index.json"
+
+
+def state_dir_locator_path(state_dir: Path) -> Path:
+    return orchestrator_dir(state_dir) / "state_dirs.json"
 
 
 def cycle_path(state_dir: Path, cycle_key: str) -> Path:
@@ -69,6 +74,62 @@ def load_index(state_dir: Path) -> dict[str, Any]:
 
 def _write_index(state_dir: Path, index: dict[str, Any]) -> None:
     _atomic_write_json(index_path(state_dir), index)
+
+
+def _empty_state_dir_locator() -> dict[str, Any]:
+    return {
+        "schema_version": STATE_DIR_LOCATOR_SCHEMA_VERSION,
+        "ids": {},
+        "cycle_keys": {},
+    }
+
+
+def load_state_dir_locator(state_dir: Path) -> dict[str, Any]:
+    raw = _read_json(state_dir_locator_path(state_dir))
+    if not raw:
+        return _empty_state_dir_locator()
+    ids = raw.get("ids") if isinstance(raw.get("ids"), dict) else {}
+    cycle_keys = raw.get("cycle_keys") if isinstance(raw.get("cycle_keys"), dict) else {}
+    return {
+        "schema_version": STATE_DIR_LOCATOR_SCHEMA_VERSION,
+        "ids": {str(key): str(value) for key, value in ids.items()},
+        "cycle_keys": {str(key): str(value) for key, value in cycle_keys.items()},
+    }
+
+
+def _write_state_dir_locator(state_dir: Path, locator: dict[str, Any]) -> None:
+    _atomic_write_json(state_dir_locator_path(state_dir), locator)
+
+
+def _normalized_state_dir(state_dir: Path) -> str:
+    return str(state_dir.resolve(strict=False))
+
+
+def register_cycle_state_dir(
+    *,
+    locator_state_dir: Path,
+    state_dir: Path,
+    public_id: str,
+    cycle_key: str,
+) -> None:
+    review_id = str(public_id or "").strip()
+    key = str(cycle_key or "").strip()
+    if not review_id or not key:
+        return
+    locator = load_state_dir_locator(locator_state_dir)
+    normalized = _normalized_state_dir(state_dir)
+    locator["ids"][review_id] = normalized
+    locator["cycle_keys"][key] = normalized
+    _write_state_dir_locator(locator_state_dir, locator)
+
+
+def state_dir_for_public_id(locator_state_dir: Path, public_id: str) -> Path | None:
+    review_id = str(public_id or "").strip()
+    if not review_id:
+        return None
+    locator = load_state_dir_locator(locator_state_dir)
+    value = str(locator["ids"].get(review_id) or "").strip()
+    return Path(value) if value else None
 
 
 def _public_id_candidates(cycle_key: str) -> list[str]:

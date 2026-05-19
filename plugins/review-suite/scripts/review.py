@@ -45,7 +45,13 @@ from review_suite_core.orchestrator_state import (
     record_followup_findings,
     record_validation_statuses,
 )
-from review_suite_core.orchestrator_store import load_cycle_by_key, load_cycle_by_public_id, save_cycle
+from review_suite_core.orchestrator_store import (
+    load_cycle_by_key,
+    load_cycle_by_public_id,
+    register_cycle_state_dir,
+    save_cycle,
+    state_dir_for_public_id,
+)
 
 
 FOLLOWUP_LANE = "review-followup"
@@ -58,9 +64,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = AxiArgumentParser(description="Run the review-suite orchestrator shell.")
     parser.add_argument("--id")
     parser.add_argument("--mode", choices=SUPPORTED_MODES)
-    parser.add_argument("--selection", choices=SUPPORTED_SELECTIONS, default="auto")
     parser.add_argument("--cd")
-    parser.add_argument("--base", default="main")
+    parser.add_argument("--base")
     parser.add_argument("--decision", choices=(DECISION_CLEAN, DECISION_FINDINGS))
     parser.add_argument("--github-review", action="store_true")
     parser.add_argument("--github-force", action="store_true")
@@ -79,8 +84,89 @@ def _review_command(public_id: str, *extra: str) -> str:
     return format_command([sys.executable, str(Path(__file__).resolve()), "--id", public_id, *extra])
 
 
-def _github_review_action_command(public_id: str, *, state_dir: Path) -> str:
-    return _review_command(public_id, "--github-review", "--state-dir", str(state_dir))
+def _github_review_action_command(public_id: str) -> str:
+    return _review_command(public_id, "--github-review")
+
+
+def _configured_selection(config: dict[str, Any]) -> str:
+    selection = str(((config.get("orchestrator") or {}).get("selection") or "auto")).strip()
+    if selection not in SUPPORTED_SELECTIONS:
+        allowed = ", ".join(SUPPORTED_SELECTIONS)
+        raise ValueError(f"orchestrator.selection must be one of: {allowed}")
+    return selection
+
+
+def _path_key(path: Path) -> str:
+    key = str(path.resolve(strict=False))
+    return key.lower() if sys.platform == "win32" else key
+
+
+def _append_unique_path(paths: list[Path], path: Path | None) -> None:
+    if path is None:
+        return
+    key = _path_key(path)
+    if all(_path_key(item) != key for item in paths):
+        paths.append(path)
+
+
+def _legacy_state_dir_candidates() -> list[Path]:
+    root = Path.home() / ".codex" / "review-suite-state"
+    if not root.exists():
+        return []
+    try:
+        return [item for item in sorted(root.iterdir()) if item.is_dir()]
+    except OSError:
+        return []
+
+
+def _cycle_candidates(initial_state_dir: Path, public_id: str) -> list[Path]:
+    candidates: list[Path] = []
+    default_dir = Path(default_state_dir())
+    _append_unique_path(candidates, initial_state_dir)
+    _append_unique_path(candidates, state_dir_for_public_id(default_dir, public_id))
+    _append_unique_path(candidates, default_dir)
+    for candidate in _legacy_state_dir_candidates():
+        _append_unique_path(candidates, candidate)
+    return candidates
+
+
+def _load_cycle_and_state_dir(initial_state_dir: Path, public_id: str) -> tuple[Path, dict[str, Any]]:
+    for candidate in _cycle_candidates(initial_state_dir, public_id):
+        try:
+            return candidate, load_cycle_by_public_id(candidate, public_id)
+        except ValueError:
+            continue
+    raise ValueError(f"unknown review cycle id: {public_id}")
+
+
+def _register_saved_cycle(state_dir: Path, state: dict[str, Any]) -> None:
+    register_cycle_state_dir(
+        locator_state_dir=Path(default_state_dir()),
+        state_dir=state_dir,
+        public_id=str(state.get("public_id") or ""),
+        cycle_key=str(state.get("cycle_key") or ""),
+    )
+
+
+def _base_arg(args: argparse.Namespace) -> str:
+    return str(args.base or "main")
+
+
+def _reject_id_creation_args(args: argparse.Namespace, state: dict[str, Any]) -> None:
+    sent = [name for name in ("mode", "cd", "base") if getattr(args, name) is not None]
+    if not sent:
+        return
+    mode = dict(state.get("mode") or {})
+    identity = dict(state.get("identity") or {})
+    context = []
+    locked_mode = str(mode.get("effective") or mode.get("requested") or "").strip()
+    if locked_mode:
+        context.append(f"mode {locked_mode}")
+    cwd = str(identity.get("cwd") or "").strip()
+    if cwd:
+        context.append(cwd)
+    suffix = f"; this id is locked to {' at '.join(context)}" if context else ""
+    raise ValueError(f"--id already selects review context; remove --{', --'.join(sent)}{suffix}")
 
 
 def _round_by_id(state: dict[str, Any], round_id: str) -> dict[str, Any]:
@@ -213,11 +299,13 @@ def _create_or_resume_cycle(*, args: argparse.Namespace, state_dir: Path) -> dic
     review_root = resolve_repo_root(args.cd)
     head = current_head(review_root)
     branch = current_branch(review_root)
-    merge_base_head = merge_base(review_root, str(args.base), "HEAD")
-    resolution = resolve_orchestrator_profile(load_config(state_dir), mode=str(args.mode), selection=str(args.selection))
+    base = _base_arg(args)
+    merge_base_head = merge_base(review_root, base, "HEAD")
+    config = load_config(state_dir)
+    resolution = resolve_orchestrator_profile(config, mode=str(args.mode), selection=_configured_selection(config))
     state = create_cycle(
         cwd=review_root,
-        base=str(args.base),
+        base=base,
         branch=branch,
         head=head,
         merge_base=merge_base_head,
@@ -249,6 +337,8 @@ def _create_or_resume_cycle(*, args: argparse.Namespace, state_dir: Path) -> dic
                 "service_tier": step.service_tier,
             }
         )
+        if step.rerun_on_findings:
+            payload["rerun_on_findings"] = True
         return payload
 
     state["review_plan"] = {
@@ -321,7 +411,7 @@ def _github_handoff_action(state: dict[str, Any], *, state_dir: Path) -> dict[st
     action: dict[str, Any] = {
         "kind": "github-handoff",
         "lane": "review-github",
-        "cmd": _github_review_action_command(public_id, state_dir=state_dir),
+        "cmd": _github_review_action_command(public_id),
         "after": "PR create/update",
         "github_review": "not-run",
     }
@@ -417,7 +507,8 @@ def main() -> int:
         if has_validation_status and not args.id:
             raise ValueError("validation status flags require --id")
         if args.id:
-            state = load_cycle_by_public_id(state_dir, str(args.id))
+            state_dir, state = _load_cycle_and_state_dir(state_dir, str(args.id))
+            _reject_id_creation_args(args, state)
             if args.github_review:
                 return _run_github_review(state, state_dir=state_dir, force=bool(args.github_force))
             if args.decision:
@@ -430,6 +521,7 @@ def main() -> int:
             state = _create_or_resume_cycle(args=args, state_dir=state_dir)
             state = _advance_without_decision(state, state_dir=state_dir)
         saved = save_cycle(state_dir, state)
+        _register_saved_cycle(state_dir, saved)
         _render(saved, state_dir=state_dir)
         return 0
     except ValueError as exc:

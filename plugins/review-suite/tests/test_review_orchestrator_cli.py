@@ -18,6 +18,11 @@ import review_suite_arena
 from review_suite_core import orchestrator_runner
 
 
+@pytest.fixture(autouse=True)
+def _isolate_default_state_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(review, "default_state_dir", lambda: tmp_path / "default-state")
+
+
 def _git(repo: Path, *args: str) -> str:
     proc = subprocess.run(
         ["git", *args],
@@ -217,8 +222,8 @@ def _assert_github_handoff(action: object, *, public_id: str, state_dir: Path, b
     cmd = str(payload["cmd"])
     assert f"--id {public_id}" in cmd
     assert "--github-review" in cmd
-    assert "--state-dir" in cmd
-    assert str(state_dir) in cmd
+    assert "--state-dir" not in cmd
+    assert str(state_dir) not in cmd
     assert "--github-force" not in cmd
     if blocked_by:
         assert payload["validation_ready"] is False
@@ -309,7 +314,6 @@ def test_orchestrator_review_helper_uses_phase_prompt_without_predecision_anchor
 def test_create_resume_and_id_reprint_use_one_pending_action(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     deslop_calls = _stub_deslop(monkeypatch)
     review_calls = _stub_review(monkeypatch, "phase_review-round-1", "phase_review-round-2")
-    gate_calls = _stub_gate(monkeypatch, "phase_gate-round-1")
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
     _init_repo(repo)
@@ -331,6 +335,8 @@ def test_create_resume_and_id_reprint_use_one_pending_action(monkeypatch: pytest
     assert f"--id {public_id}" in str(payload["Action"]["cmd"])
     assert "--decision" not in str(payload["Action"]["cmd"])
     assert len(deslop_calls) == 1
+    locator = json.loads((tmp_path / "default-state" / "orchestrator" / "state_dirs.json").read_text(encoding="utf-8"))
+    assert locator["ids"][public_id] == str(state_dir.resolve())
     state = _cycle_payload(state_dir, public_id)
     assert state["selection"] == {
         "requested": "auto",
@@ -358,14 +364,14 @@ def test_create_resume_and_id_reprint_use_one_pending_action(monkeypatch: pytest
     assert len(deslop_calls) == 1
     assert len(review_calls) == 1
 
-    exit_code, by_id = _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+    exit_code, by_id = _run_review(monkeypatch, ["--id", public_id])
     assert exit_code == 0
     assert by_id["review"] == public_id
     assert by_id["Action"] == resumed["Action"]
     assert len(_cycle_payload(state_dir, public_id)["rounds"]) == 1
     assert len(review_calls) == 1
 
-    exit_code, first_clean = _run_review(monkeypatch, ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)])
+    exit_code, first_clean = _run_review(monkeypatch, ["--id", public_id, "--decision", "clean"])
     assert exit_code == 0
     assert first_clean["review"] == public_id
     assert first_clean["stage"] == "created"
@@ -397,38 +403,6 @@ def test_create_resume_and_id_reprint_use_one_pending_action(monkeypatch: pytest
     assert len(state["rounds"]) == 2
     assert state["rounds"][1]["round_id"] == "phase_review-round-2"
 
-    exit_code, gate_queued = _run_review(monkeypatch, ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)])
-    assert exit_code == 0
-    assert gate_queued["stage"] == "created"
-    assert f"--id {public_id}" in str(gate_queued["Action"]["cmd"])
-    assert "--decision" not in str(gate_queued["Action"]["cmd"])
-    state = _cycle_payload(state_dir, public_id)
-    assert state["pending_action"] == {
-        "kind": "run-review-step",
-        "step_index": 2,
-        "step": "local-signoff",
-        "step_kind": "gate",
-        "gate": "phase_gate",
-    }
-    assert [item["round_id"] for item in state["review_progress"]["completed_steps"]] == [
-        "phase_review-round-1",
-        "phase_review-round-2",
-    ]
-    assert len(gate_calls) == 0
-
-    exit_code, gate_step = _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
-    assert exit_code == 0
-    assert gate_step["stage"] == "decision-pending"
-    assert "--decision clean" in str(gate_step["Action"]["cmd"])
-    assert len(gate_calls) == 1
-    assert gate_calls[0]["gate_task_class"] == "phase_gate"
-    state = _cycle_payload(state_dir, public_id)
-    assert len(state["rounds"]) == 3
-    assert state["rounds"][2]["round_id"] == "phase_gate-round-1"
-    assert state["rounds"][2]["kind"] == "gate"
-    assert state["rounds"][2]["gate"] == "phase_gate"
-    assert state["rounds"][2]["signoff_required"] is True
-
     exit_code, final_clean = _run_review(monkeypatch, ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)])
     assert exit_code == 0
     assert final_clean["stage"] == "review-green"
@@ -444,12 +418,8 @@ def test_create_resume_and_id_reprint_use_one_pending_action(monkeypatch: pytest
     assert [item["round_id"] for item in state["review_progress"]["completed_steps"]] == [
         "phase_review-round-1",
         "phase_review-round-2",
-        "phase_gate-round-1",
     ]
-    decisions = _gate_signoff_decisions(state_dir)
-    assert [(item["round_id"], item["verdict"], item["workflow_anchor_recorded"]) for item in decisions] == [
-        ("phase_gate-round-1", "clean", True)
-    ]
+    assert _gate_signoff_decisions(state_dir) == []
 
     exit_code, pending_validation = _run_review(
         monkeypatch,
@@ -501,7 +471,59 @@ def test_create_resume_and_id_reprint_use_one_pending_action(monkeypatch: pytest
     assert state["validation"]["ci"] == "classified"
     assert len(deslop_calls) == 1
     assert len(review_calls) == 2
-    assert len(gate_calls) == 1
+
+
+def test_review_orchestrator_help_hides_internal_selection() -> None:
+    help_text = review.build_parser().format_help()
+
+    assert "--mode" in help_text
+    assert "--selection" not in help_text
+    assert "--state-dir" not in help_text
+
+
+def test_id_rejects_creation_context_flags(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _stub_deslop(monkeypatch)
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+
+    _, created = _run_review(
+        monkeypatch,
+        ["--mode", "normal", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)],
+    )
+    errors: list[tuple[str, dict[str, object]]] = []
+
+    def fake_error(message: str, **kwargs: object) -> int:
+        errors.append((message, dict(kwargs)))
+        return 2
+
+    monkeypatch.setattr(review, "emit_error", fake_error)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "review.py",
+            "--id",
+            str(created["review"]),
+            "--mode",
+            "deep",
+            "--cd",
+            str(repo),
+            "--base",
+            "main",
+        ],
+    )
+
+    exit_code = review.main()
+
+    assert exit_code == 2
+    assert len(errors) == 1
+    message = errors[0][0]
+    assert "--id already selects review context" in message
+    assert "remove --mode, --cd, --base" in message
+    assert "mode normal" in message
+    assert str(repo.resolve()) in message
 
 
 def test_github_review_rejects_cycle_before_local_green(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -538,9 +560,8 @@ def test_github_review_rejects_cycle_before_local_green(monkeypatch: pytest.Monk
     ]
 
 
-def test_github_review_runs_existing_lane_with_state_dir_and_force(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_github_review_runs_existing_lane_with_resolved_state_dir_and_force(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     review_calls = _stub_review(monkeypatch)
-    gate_calls = _stub_gate(monkeypatch, "phase_gate-emergency-1")
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
     _init_repo(repo)
@@ -551,8 +572,6 @@ def test_github_review_runs_existing_lane_with_state_dir_and_force(monkeypatch: 
         ["--mode", "emergency", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)],
     )
     public_id = str(opened["review"])
-    _run_review(monkeypatch, ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)])
-    _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
     _, clean = _run_review(monkeypatch, ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)])
     assert clean["stage"] == "review-green"
 
@@ -566,7 +585,7 @@ def test_github_review_runs_existing_lane_with_state_dir_and_force(monkeypatch: 
     monkeypatch.setattr(
         sys,
         "argv",
-        ["review.py", "--id", public_id, "--github-review", "--github-force", "--state-dir", str(state_dir)],
+        ["review.py", "--id", public_id, "--github-review", "--github-force"],
     )
 
     exit_code = review.main()
@@ -585,14 +604,12 @@ def test_github_review_runs_existing_lane_with_state_dir_and_force(monkeypatch: 
         ]
     ]
     assert len(review_calls) == 1
-    assert len(gate_calls) == 1
 
 
 def test_findings_fix_progression_and_clean_decision(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _stub_deslop(monkeypatch)
     review_calls = _stub_review(monkeypatch, "phase_review-round-1", "phase_review-round-2")
     followup_calls = _stub_followup(monkeypatch, "followup-round-1")
-    gate_calls = _stub_gate(monkeypatch, "phase_gate-round-1")
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
     _init_repo(repo)
@@ -669,25 +686,6 @@ def test_findings_fix_progression_and_clean_decision(monkeypatch: pytest.MonkeyP
     assert len(review_calls) == 2
     assert review_calls[1]["step_name"] == "precision-signoff"
 
-    exit_code, gate_queued = _run_review(monkeypatch, ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)])
-    assert exit_code == 0
-    assert gate_queued["stage"] == "created"
-    assert f"--id {public_id}" in str(gate_queued["Action"]["cmd"])
-    state = _cycle_payload(state_dir, public_id)
-    assert state["pending_action"] == {
-        "kind": "run-review-step",
-        "step_index": 2,
-        "step": "local-signoff",
-        "step_kind": "gate",
-        "gate": "phase_gate",
-    }
-    assert len(gate_calls) == 0
-
-    exit_code, gate_step = _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
-    assert exit_code == 0
-    assert gate_step["stage"] == "decision-pending"
-    assert len(gate_calls) == 1
-
     exit_code, final_clean = _run_review(monkeypatch, ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)])
     assert exit_code == 0
     assert final_clean["stage"] == "review-green"
@@ -703,9 +701,64 @@ def test_findings_fix_progression_and_clean_decision(monkeypatch: pytest.MonkeyP
     assert [item["round_id"] for item in state["review_progress"]["completed_steps"]] == [
         "phase_review-round-1",
         "phase_review-round-2",
-        "phase_gate-round-1",
     ]
-    assert _gate_signoff_decisions(state_dir)[0]["verdict"] == "clean"
+    assert _gate_signoff_decisions(state_dir) == []
+
+
+def test_signoff_findings_require_direct_clean_rerun(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _stub_deslop(monkeypatch)
+    review_calls = _stub_review(monkeypatch, "phase_review-round-1", "phase_review-round-2", "phase_review-round-3")
+    followup_calls = _stub_followup(monkeypatch, "followup-round-1")
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/signoff-rerun")
+    _commit_file(repo, "app.txt", "feature\n", "feature")
+
+    _, created = _run_review(
+        monkeypatch,
+        ["--mode", "normal", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)],
+    )
+    public_id = str(created["review"])
+    _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+    _run_review(monkeypatch, ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)])
+    _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+
+    exit_code, findings = _run_review(monkeypatch, ["--id", public_id, "--decision", "findings", "--state-dir", str(state_dir)])
+
+    assert exit_code == 0
+    assert findings["stage"] == "fix-pending"
+    assert len(review_calls) == 2
+    assert review_calls[1]["step_name"] == "precision-signoff"
+
+    _commit_file(repo, "app.txt", "fixed\n", "fix signoff finding")
+    _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+    exit_code, rerun_ready = _run_review(monkeypatch, ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)])
+
+    assert exit_code == 0
+    assert rerun_ready["stage"] == "created"
+    state = _cycle_payload(state_dir, public_id)
+    assert state["pending_action"] == {"kind": "run-review-step", "step_index": 1, "step": "precision-signoff"}
+    assert [item["round_id"] for item in state["review_progress"]["completed_steps"]] == ["phase_review-round-1"]
+    assert len(followup_calls) == 1
+
+    exit_code, signoff_rerun = _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+
+    assert exit_code == 0
+    assert signoff_rerun["stage"] == "decision-pending"
+    assert len(review_calls) == 3
+    assert review_calls[2]["step_name"] == "precision-signoff"
+
+    exit_code, green = _run_review(monkeypatch, ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)])
+
+    assert exit_code == 0
+    assert green["stage"] == "review-green"
+    state = _cycle_payload(state_dir, public_id)
+    assert [item["round_id"] for item in state["review_progress"]["completed_steps"]] == [
+        "phase_review-round-1",
+        "phase_review-round-3",
+    ]
 
 
 def test_gate_findings_flow_requires_followup_and_same_gate_rerun(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -715,6 +768,11 @@ def test_gate_findings_flow_requires_followup_and_same_gate_rerun(monkeypatch: p
     gate_calls = _stub_gate(monkeypatch, "phase_gate-round-1", "phase_gate-round-2")
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
+    config = deepcopy(review.load_config(state_dir))
+    config["orchestrator"]["profiles"]["stable"]["normal"]["steps"].append(
+        {"name": "local-signoff", "kind": "gate", "gate": "phase_gate"}
+    )
+    monkeypatch.setattr(review, "load_config", lambda state_dir: config)
     _init_repo(repo)
     _commit_file(repo, "app.txt", "base\n", "base")
     _git(repo, "checkout", "-b", "feature/gate-findings")
@@ -856,14 +914,15 @@ def test_benchmark_selection_prints_grading_requirement(monkeypatch: pytest.Monk
     state_dir = tmp_path / "state"
     _init_repo(repo)
     _commit_file(repo, "app.txt", "base\n", "base")
+    config = deepcopy(review.load_config(state_dir))
+    config["orchestrator"]["selection"] = "benchmark"
+    monkeypatch.setattr(review, "load_config", lambda state_dir: config)
 
     exit_code, payload = _run_review(
         monkeypatch,
         [
             "--mode",
             "normal",
-            "--selection",
-            "benchmark",
             "--cd",
             str(repo),
             "--base",
@@ -902,8 +961,6 @@ def test_auto_selection_fallback_to_benchmark_persists_reason(monkeypatch: pytes
         [
             "--mode",
             "normal",
-            "--selection",
-            "auto",
             "--cd",
             str(repo),
             "--base",
@@ -927,7 +984,6 @@ def test_auto_selection_fallback_to_benchmark_persists_reason(monkeypatch: pytes
 
 def test_emergency_mode_skips_deslop_and_runs_review(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     review_calls = _stub_review(monkeypatch)
-    gate_calls = _stub_gate(monkeypatch, "phase_gate-emergency-1")
 
     def fail_run(*, command: list[str], cwd: Path) -> subprocess.CompletedProcess:
         raise AssertionError("emergency mode must not run deslop")
@@ -949,17 +1005,6 @@ def test_emergency_mode_skips_deslop_and_runs_review(monkeypatch: pytest.MonkeyP
     assert len(review_calls) == 1
     public_id = str(payload["review"])
 
-    exit_code, gate_queued = _run_review(monkeypatch, ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)])
-
-    assert exit_code == 0
-    assert gate_queued["stage"] == "created"
-    assert len(gate_calls) == 0
-
-    exit_code, gate_step = _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
-    assert exit_code == 0
-    assert gate_step["stage"] == "decision-pending"
-    assert len(gate_calls) == 1
-
     exit_code, clean = _run_review(monkeypatch, ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)])
     assert exit_code == 0
     assert clean["stage"] == "review-green"
@@ -970,7 +1015,7 @@ def test_emergency_mode_skips_deslop_and_runs_review(monkeypatch: pytest.MonkeyP
         blocked_by=["full_suite:unknown", "ci:unknown"],
     )
     assert len(review_calls) == 1
-    assert _gate_signoff_decisions(state_dir)[0]["round_id"] == "phase_gate-emergency-1"
+    assert _gate_signoff_decisions(state_dir) == []
 
 
 def test_deslop_failure_retries_before_review(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
