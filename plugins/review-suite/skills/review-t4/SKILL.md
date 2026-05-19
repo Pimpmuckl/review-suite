@@ -22,5 +22,7 @@ Rules:
 - Do not step down to T3 after T4. Use `review-state`.
 - Code only valid findings. Verify locally and check adjacent code.
 - Add regression tests for bugs found.
-- Launch after focused review-relevant validation is green; track full-suite/CI separately.
+- Launch after focused review-relevant validation is green.
+- Do not wait on slow full-suite/CI before dispatch; run it after dispatch and resolve relevant failures before PR-final/merge-ready.
+- Do not call PR-final/merge-ready while full-suite/CI is pending or unknown.
 - Move on only after both reviewers are effectively green and the gate is closed `clean`.

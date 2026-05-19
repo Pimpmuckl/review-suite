@@ -23,5 +23,7 @@ Rules:
 - Code only valid findings. Verify locally and check adjacent code.
 - Add regression tests for bugs found.
 - Use `review-followup` after fixing valid findings unless `review-state` routes wider.
-- Launch after focused review-relevant validation is green; track full-suite/CI separately.
+- Launch after focused review-relevant validation is green.
+- Do not wait on slow full-suite/CI before dispatch; run it after dispatch and resolve relevant failures before PR-final/merge-ready.
+- Do not call PR-final/merge-ready while full-suite/CI is pending or unknown.
 - Use tie only when reviews are materially indistinguishable.

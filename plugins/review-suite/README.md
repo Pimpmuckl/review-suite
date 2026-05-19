@@ -19,7 +19,9 @@ Local and GitHub review lanes for Codex work.
 - Use the narrowest lane.
 - Use `review-state status` after T2/T3/T4 or when unsure.
 - Code only valid findings.
-- Track full-suite/CI as `pending`, `passed`, `failed`, or `waived/classified`.
+- Run focused review-relevant validation before dispatch.
+- Do not wait on slow full-suite/CI before dispatch; start it after the review round and track it as `pending`, `passed`, `failed`, or `waived/classified`.
+- Do not call PR-final/merge-ready while full-suite/CI is pending or unknown; investigate and fix relevant failures first.
 - Completion lines are status-only.
 - Current runs print reviewer text in the final `Output:` block.
 - Use `show-round` / `show-last` only to revisit stored output.

@@ -28,5 +28,7 @@ Rules:
 - Use `show-round` / `show-last` only to revisit stored output.
 - Do not inspect raw review-suite state JSON or rollout logs.
 - Code only valid findings. Escalate unclear product decisions or conflicts with explicit direction.
-- Launch review after focused, review-relevant validation is green. Track full-suite/CI separately as `pending`, `passed`, `failed`, or `waived/classified`.
+- Run focused review-relevant validation before dispatch.
+- Do not wait on slow full-suite/CI before dispatch; start it after the review round and track it as `pending`, `passed`, `failed`, or `waived/classified`.
+- Do not call PR-final/merge-ready while full-suite/CI is pending or unknown; investigate and fix relevant failures first.
 - Do not tune model, reasoning, polling, progress, or timeout settings.
