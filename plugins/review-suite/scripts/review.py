@@ -19,6 +19,7 @@ from review_suite_core import (
 )
 from review_suite_core.config import default_state_dir, load_config
 from review_suite_core.orchestrator_profiles import SUPPORTED_MODES, SUPPORTED_SELECTIONS, resolve_orchestrator_profile
+from review_suite_core.orchestrator_runner import run_one_expensive_step
 from review_suite_core.orchestrator_state import (
     DECISION_CLEAN,
     DECISION_FINDINGS,
@@ -28,6 +29,7 @@ from review_suite_core.orchestrator_state import (
     STAGE_FOLLOWUP_PENDING,
     STAGE_REVIEW_GREEN,
     create_cycle,
+    deslop_is_ready,
     mark_decision_pending,
     mark_fix_detected,
     record_clean_decision,
@@ -135,7 +137,11 @@ def _identity_head(state: dict[str, Any]) -> str | None:
 
 def _resume_progress(state: dict[str, Any]) -> dict[str, Any]:
     stage = state.get("stage")
-    if stage in {STAGE_CREATED, STAGE_FOLLOWUP_PENDING}:
+    if stage == STAGE_CREATED:
+        if not deslop_is_ready(state):
+            return state
+        return _open_decision(state, lane=INITIAL_LANE, reviewed_head=_identity_head(state))
+    if stage == STAGE_FOLLOWUP_PENDING:
         lane = FOLLOWUP_LANE if stage == STAGE_FOLLOWUP_PENDING else INITIAL_LANE
         return _open_decision(state, lane=lane, reviewed_head=_identity_head(state))
     if stage != STAGE_FIX_PENDING:
@@ -168,12 +174,20 @@ def _create_or_resume_cycle(*, args: argparse.Namespace, state_dir: Path) -> dic
         effective_mode=resolution.effective_mode,
         selection=resolution.requested_selection,
         effective_selection=resolution.effective_selection,
+        deslop_enabled=resolution.profile.deslop_enabled,
     )
     existing = load_cycle_by_key(state_dir, str(state["cycle_key"]))
     if existing is not None:
-        return _resume_progress(existing)
+        return existing
     state["grading"] = {"required": bool(resolution.requires_grading)}
-    return _open_decision(state, lane=INITIAL_LANE, reviewed_head=head)
+    return state
+
+
+def _advance_without_decision(state: dict[str, Any]) -> dict[str, Any]:
+    result = run_one_expensive_step(state)
+    if result.ran_step:
+        return result.state
+    return _resume_progress(state)
 
 
 def _apply_decision(state: dict[str, Any], decision: str) -> dict[str, Any]:
@@ -238,9 +252,10 @@ def main() -> int:
             raise ValueError("--decision requires --id")
         if args.id:
             state = load_cycle_by_public_id(state_dir, str(args.id))
-            state = _apply_decision(state, str(args.decision)) if args.decision else _resume_progress(state)
+            state = _apply_decision(state, str(args.decision)) if args.decision else _advance_without_decision(state)
         else:
             state = _create_or_resume_cycle(args=args, state_dir=state_dir)
+            state = _advance_without_decision(state)
         saved = save_cycle(state_dir, state)
         _render(saved)
         return 0

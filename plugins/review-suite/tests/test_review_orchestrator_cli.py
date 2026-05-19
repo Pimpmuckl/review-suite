@@ -13,6 +13,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import review
+from review_suite_core import orchestrator_runner
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -58,6 +59,19 @@ def _run_review(monkeypatch: pytest.MonkeyPatch, args: list[str]) -> tuple[int, 
     return exit_code, emitted[0]
 
 
+def _stub_deslop(monkeypatch: pytest.MonkeyPatch, *returncodes: int) -> list[list[str]]:
+    calls: list[list[str]] = []
+    codes = list(returncodes) or [0]
+
+    def fake_run(*, command: list[str], cwd: Path) -> subprocess.CompletedProcess:
+        calls.append(command)
+        index = min(len(calls) - 1, len(codes) - 1)
+        return subprocess.CompletedProcess(command, codes[index], stdout="", stderr="")
+
+    monkeypatch.setattr(orchestrator_runner, "run_deslop_subprocess", fake_run)
+    return calls
+
+
 def _cycle_payload(state_dir: Path, public_id: str) -> dict[str, object]:
     index = json.loads((state_dir / "orchestrator" / "index.json").read_text(encoding="utf-8"))
     cycle_key = index["ids"][public_id]
@@ -65,6 +79,7 @@ def _cycle_payload(state_dir: Path, public_id: str) -> dict[str, object]:
 
 
 def test_create_resume_and_id_reprint_use_one_pending_action(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    deslop_calls = _stub_deslop(monkeypatch)
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
     _init_repo(repo)
@@ -78,30 +93,38 @@ def test_create_resume_and_id_reprint_use_one_pending_action(monkeypatch: pytest
 
     assert exit_code == 0
     assert public_id.startswith("rvw_")
-    assert payload["stage"] == "decision-pending"
+    assert payload["stage"] == "created"
     assert payload["mode"] == "normal"
     assert payload["selection"] == "stable"
     assert "grading" not in payload
-    assert set(dict(payload["Action"])) == {"cmd", "alt"}
+    assert set(dict(payload["Action"])) == {"cmd"}
     assert f"--id {public_id}" in str(payload["Action"]["cmd"])
-    assert "--decision clean" in str(payload["Action"]["cmd"])
-    assert "--decision findings" in str(payload["Action"]["alt"])
+    assert "--decision" not in str(payload["Action"]["cmd"])
+    assert len(deslop_calls) == 1
+    state = _cycle_payload(state_dir, public_id)
+    assert state["deslop"]["status"] == "done"
+    assert state["rounds"] == []
 
     exit_code, resumed = _run_review(monkeypatch, args)
     assert exit_code == 0
     assert resumed["review"] == public_id
-    assert resumed["Action"] == payload["Action"]
+    assert resumed["stage"] == "decision-pending"
+    assert set(dict(resumed["Action"])) == {"cmd", "alt"}
+    assert "--decision clean" in str(resumed["Action"]["cmd"])
+    assert "--decision findings" in str(resumed["Action"]["alt"])
     assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 1
     assert len(_cycle_payload(state_dir, public_id)["rounds"]) == 1
+    assert len(deslop_calls) == 1
 
     exit_code, by_id = _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
     assert exit_code == 0
     assert by_id["review"] == public_id
-    assert by_id["Action"] == payload["Action"]
+    assert by_id["Action"] == resumed["Action"]
     assert len(_cycle_payload(state_dir, public_id)["rounds"]) == 1
 
 
 def test_findings_fix_progression_and_clean_decision(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _stub_deslop(monkeypatch)
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
     _init_repo(repo)
@@ -149,6 +172,7 @@ def test_findings_fix_progression_and_clean_decision(monkeypatch: pytest.MonkeyP
 
 
 def test_benchmark_selection_prints_grading_requirement(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _stub_deslop(monkeypatch)
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
     _init_repo(repo)
@@ -173,3 +197,58 @@ def test_benchmark_selection_prints_grading_requirement(monkeypatch: pytest.Monk
     assert exit_code == 0
     assert payload["selection"] == "benchmark"
     assert payload["grading"] == "required"
+
+
+def test_emergency_mode_skips_deslop_and_opens_decision(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    def fail_run(*, command: list[str], cwd: Path) -> subprocess.CompletedProcess:
+        raise AssertionError("emergency mode must not run deslop")
+
+    monkeypatch.setattr(orchestrator_runner, "run_deslop_subprocess", fail_run)
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+
+    exit_code, payload = _run_review(
+        monkeypatch,
+        ["--mode", "emergency", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)],
+    )
+
+    assert exit_code == 0
+    assert payload["stage"] == "decision-pending"
+    assert set(dict(payload["Action"])) == {"cmd", "alt"}
+
+
+def test_deslop_failure_retries_before_fake_review(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    deslop_calls = _stub_deslop(monkeypatch, 9, 0)
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/deslop-retry")
+    _commit_file(repo, "app.txt", "feature\n", "feature")
+
+    exit_code, failed = _run_review(
+        monkeypatch,
+        ["--mode", "normal", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)],
+    )
+    public_id = str(failed["review"])
+
+    assert exit_code == 0
+    assert failed["stage"] == "retry-requested"
+    assert f"--id {public_id}" in str(failed["Action"]["cmd"])
+    state = _cycle_payload(state_dir, public_id)
+    assert state["deslop"]["status"] == "failed"
+    assert state["recovery"]["status"] == "retry-requested"
+    assert state["rounds"] == []
+
+    exit_code, retried = _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+    assert exit_code == 0
+    assert retried["stage"] == "created"
+    assert len(deslop_calls) == 2
+    assert _cycle_payload(state_dir, public_id)["deslop"]["status"] == "done"
+
+    exit_code, resumed = _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+    assert exit_code == 0
+    assert resumed["stage"] == "decision-pending"
+    assert len(deslop_calls) == 2

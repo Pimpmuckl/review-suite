@@ -30,6 +30,11 @@ DECISION_CLEAN = "clean"
 DECISION_FINDINGS = "findings"
 DECISION_COMMANDS = {DECISION_CLEAN, DECISION_FINDINGS}
 
+DESLOP_STATUS_TRACKED = "tracked"
+DESLOP_STATUS_DONE = "done"
+DESLOP_STATUS_FAILED = "failed"
+DESLOP_STATUS_SKIPPED_EMERGENCY = "skipped-emergency"
+
 GATE_LANES = {"review_t2", "review_t4"}
 NO_WORK_STAGES = {
     STAGE_DECISION_PENDING,
@@ -115,13 +120,14 @@ def create_cycle(
     effective_mode: str | None = None,
     selection: str = "auto",
     effective_selection: str | None = None,
+    deslop_enabled: bool | None = None,
 ) -> dict[str, Any]:
     identity = normalize_cycle_identity(cwd=cwd, base=base, branch=branch, head=head, merge_base=merge_base)
     requested = _normalize_mode(requested_mode, field="requested_mode")
     effective = _normalize_mode(effective_mode or requested, field="effective_mode")
     requested_selection = _normalize_selection(selection, field="selection")
     resolved_selection = _normalize_selection(effective_selection or requested_selection, field="effective_selection")
-    deslop_tracked = effective != "emergency"
+    deslop_tracked = bool(deslop_enabled) if deslop_enabled is not None else effective != "emergency"
     return {
         "schema_version": ORCHESTRATOR_STATE_SCHEMA_VERSION,
         "cycle_key": cycle_key(cwd=cwd, base=base, branch=branch, head=head, merge_base=merge_base),
@@ -138,7 +144,7 @@ def create_cycle(
         "pending_action": None,
         "deslop": {
             "tracked": deslop_tracked,
-            "status": "tracked" if deslop_tracked else "skipped-emergency",
+            "status": DESLOP_STATUS_TRACKED if deslop_tracked else DESLOP_STATUS_SKIPPED_EMERGENCY,
         },
         "review_heads": {
             "head": identity["head"],
@@ -262,6 +268,62 @@ def _upsert_decision(
 def _set_stage(state: dict[str, Any], stage: str, pending_action: dict[str, Any] | None = None) -> None:
     state["stage"] = stage
     state["pending_action"] = _compact(deepcopy(pending_action or {})) or None
+
+
+def deslop_is_ready(state: dict[str, Any]) -> bool:
+    deslop = dict(state.get("deslop") or {})
+    if not bool(deslop.get("tracked")):
+        return True
+    return str(deslop.get("status") or "") == DESLOP_STATUS_DONE
+
+
+def deslop_should_run(state: dict[str, Any]) -> bool:
+    deslop = dict(state.get("deslop") or {})
+    if not bool(deslop.get("tracked")):
+        return False
+    if state.get("stage") not in {STAGE_CREATED, STAGE_RETRY_REQUESTED}:
+        return False
+    if dict(state.get("pending_action") or {}).get("kind") not in (None, "run-deslop", "resume-after-deslop"):
+        return False
+    return str(deslop.get("status") or "") in {DESLOP_STATUS_TRACKED, DESLOP_STATUS_FAILED}
+
+
+def mark_deslop_done(state: dict[str, Any], *, command: str) -> dict[str, Any]:
+    next_state = _copy_state(state)
+    next_state["deslop"] = {
+        **dict(next_state.get("deslop") or {}),
+        "tracked": True,
+        "status": DESLOP_STATUS_DONE,
+        "command": _required_text(command, field="command"),
+        "returncode": 0,
+    }
+    recovery = dict(next_state.get("recovery") or {})
+    next_state["recovery"] = {
+        "status": "none",
+        "retry_count": int(recovery.get("retry_count") or 0),
+    }
+    _set_stage(next_state, STAGE_CREATED, {"kind": "resume-after-deslop"})
+    return next_state
+
+
+def mark_deslop_failed(state: dict[str, Any], *, command: str, returncode: int | None, reason: str) -> dict[str, Any]:
+    next_state = _copy_state(state)
+    next_state["deslop"] = {
+        **dict(next_state.get("deslop") or {}),
+        "tracked": True,
+        "status": DESLOP_STATUS_FAILED,
+        "command": _required_text(command, field="command"),
+        "returncode": returncode,
+    }
+    recovery = dict(next_state.get("recovery") or {})
+    next_state["recovery"] = {
+        **recovery,
+        "status": STAGE_RETRY_REQUESTED,
+        "reason": _required_text(reason, field="reason"),
+        "retry_count": int(recovery.get("retry_count") or 0) + 1,
+    }
+    _set_stage(next_state, STAGE_RETRY_REQUESTED, {"kind": "run-deslop"})
+    return next_state
 
 
 def _set_review_green(state: dict[str, Any], value: str) -> None:
