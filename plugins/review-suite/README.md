@@ -4,6 +4,7 @@ Local and GitHub review lanes for Codex work.
 
 ## Lanes
 
+- `review`: default local orchestrator.
 - `review-plan`: review a written plan.
 - `review-deslop`: simplify a completed slice.
 - `review-state`: choose the next review action.
@@ -16,9 +17,18 @@ Local and GitHub review lanes for Codex work.
 
 ## Rules
 
-- Use the narrowest lane.
+- Use `review.py` unless the user asks for a specialist lane.
+- Start with `--mode brief|normal|deep|emergency`.
+- Non-emergency runs deslop once, then one review profile step per invocation.
+- Follow emitted `Action.cmd` with only `--id <id>` and `--decision clean|findings` when asked.
+- Classify reviewer output before coding valid findings.
+- Fix valid findings, then run emitted `review.py --id <id>`.
+- When HEAD changed, `review.py --id <id>` runs follow-up.
+- Clean follow-up resumes profile progression.
+- Final clean reaches `review-green`.
+- GitHub review is standalone.
+- T1/T2/T3/T4 are expert/debug/benchmark escape hatches.
 - Use `review-state status` after T2/T3/T4 or when unsure.
-- Code only valid findings.
 - Run focused review-relevant validation before dispatch.
 - Do not wait on slow full-suite/CI before dispatch; start it after the review round and track it as `pending`, `passed`, `failed`, or `waived/classified`.
 - Do not call PR-final/merge-ready while full-suite/CI is pending or unknown; investigate and fix relevant failures first.
@@ -31,6 +41,7 @@ Local and GitHub review lanes for Codex work.
 ## Commands
 
 ```powershell
+<python> <review-suite-plugin-root>/scripts/review.py --mode brief|normal|deep|emergency --cd <repo-root> --base main
 <python> <review-suite-plugin-root>/scripts/review_state.py status --base main --cd <repo-root>
 <python> <review-suite-plugin-root>/scripts/review_t1.py --base main --cd <repo-root>
 <python> <review-suite-plugin-root>/scripts/review_t2.py --base main --cd <repo-root>

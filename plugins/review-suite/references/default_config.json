@@ -16,6 +16,72 @@
   "arena": {
     "enabled": true
   },
+  "orchestrator": {
+    "profiles": {
+      "stable": {
+        "brief": {
+          "deslop_enabled": true,
+          "requires_grading": false,
+          "steps": [
+            {"name": "precision", "count": 2, "model": "gpt-5.5", "reasoning_effort": "medium"}
+          ]
+        },
+        "normal": {
+          "deslop_enabled": true,
+          "requires_grading": false,
+          "steps": [
+            {"name": "broad-discovery", "count": 4, "model": "gpt-5.4", "reasoning_effort": "medium"},
+            {"name": "precision-signoff", "count": 2, "model": "gpt-5.5", "reasoning_effort": "medium"}
+          ]
+        },
+        "deep": {
+          "deslop_enabled": true,
+          "requires_grading": false,
+          "steps": [
+            {"name": "deep-discovery", "count": 2, "model": "gpt-5.4", "reasoning_effort": "xhigh"},
+            {"name": "deep-signoff", "count": 2, "model": "gpt-5.5", "reasoning_effort": "xhigh"}
+          ]
+        },
+        "emergency": {
+          "deslop_enabled": false,
+          "requires_grading": false,
+          "steps": [
+            {"name": "urgent-precision", "count": 2, "model": "gpt-5.5", "reasoning_effort": "medium"}
+          ]
+        }
+      },
+      "benchmark": {
+        "brief": {
+          "deslop_enabled": true,
+          "requires_grading": true,
+          "steps": [
+            {"name": "benchmark", "count": 1, "model": "gpt-5.5", "reasoning_effort": "medium"}
+          ]
+        },
+        "normal": {
+          "deslop_enabled": true,
+          "requires_grading": true,
+          "steps": [
+            {"name": "benchmark", "count": 1, "model": "gpt-5.5", "reasoning_effort": "medium"}
+          ]
+        },
+        "deep": {
+          "deslop_enabled": true,
+          "requires_grading": true,
+          "steps": [
+            {"name": "benchmark", "count": 1, "model": "gpt-5.5", "reasoning_effort": "xhigh"}
+          ]
+        },
+        "emergency": {
+          "deslop_enabled": false,
+          "requires_grading": true,
+          "steps": [
+            {"name": "benchmark", "count": 1, "model": "gpt-5.5", "reasoning_effort": "medium"}
+          ]
+        }
+      }
+    }
+  },
   "gates": {
     "phase_gate": {
       "primary_variant_ids": ["gpt-5.4-medium"],
