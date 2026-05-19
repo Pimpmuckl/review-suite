@@ -172,6 +172,7 @@ def test_runner_executes_one_deslop_step_and_marks_done(monkeypatch, tmp_path: P
     assert len(calls) == 1
     command, cwd = calls[0]
     assert Path(command[1]).name == "review_deslop.py"
+    assert "--output-only" in command
     assert command[-2:] == ["--base", "main"]
     assert cwd == tmp_path / "repo"
 

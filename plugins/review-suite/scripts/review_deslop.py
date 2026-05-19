@@ -16,6 +16,7 @@ from review_suite_core import (
     resolve_repo_root,
     run_codex,
     use_unsafe_windows_wsl_fallback,
+    write_text,
 )
 
 
@@ -26,6 +27,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--commit", nargs="+")
     parser.add_argument("--focus")
     parser.add_argument("--wsl", action="store_true")
+    parser.add_argument("--output-only", action="store_true", help=argparse.SUPPRESS)
     return parser
 
 
@@ -73,6 +75,15 @@ def build_prompt(*, base: str | None, commit: str | None, commit_end: str | None
     )
 
 
+def emit_output_only(*, tool_name: str, result: dict[str, str | int | None]) -> int:
+    body = str(result.get("final_message") or "").strip()
+    if not body and int(result["returncode"]) != 0:
+        body = f"{tool_name} run timed out" if result.get("timed_out") else f"{tool_name} run failed"
+    if body:
+        write_text(body)
+    return int(result["returncode"])
+
+
 def main() -> int:
     parser = build_parser()
     try:
@@ -104,6 +115,8 @@ def main() -> int:
             timeout_seconds=DEFAULT_TIMEOUT_SECONDS,
             allow_unsafe_windows_wsl_fallback=bool(args.wsl),
         )
+        if args.output_only:
+            return emit_output_only(tool_name="review-deslop", result=result)
         return emit_result(
             tool_name="review-deslop",
             result=result,

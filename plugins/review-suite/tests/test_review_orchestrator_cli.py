@@ -481,6 +481,113 @@ def test_review_orchestrator_help_hides_internal_selection() -> None:
     assert "--state-dir" not in help_text
 
 
+def test_deslop_step_prints_output_once(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(*, command: list[str], cwd: Path) -> subprocess.CompletedProcess:
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="Remove redundant helper.\n", stderr="")
+
+    monkeypatch.setattr(orchestrator_runner, "run_deslop_subprocess", fake_run)
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+
+    exit_code, payload = _run_review(
+        monkeypatch,
+        ["--mode", "normal", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)],
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert payload["stage"] == "created"
+    assert captured.out.count("Output:") == 1
+    assert "review-deslop:" in captured.out
+    assert "Remove redundant helper." in captured.out
+    assert "--output-only" in calls[0]
+
+
+def test_deslop_failure_prints_output_once(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def fake_run(*, command: list[str], cwd: Path) -> subprocess.CompletedProcess:
+        return subprocess.CompletedProcess(command, 9, stdout="Could not complete deslop.\n", stderr="")
+
+    monkeypatch.setattr(orchestrator_runner, "run_deslop_subprocess", fake_run)
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+
+    exit_code, payload = _run_review(
+        monkeypatch,
+        ["--mode", "normal", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)],
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert payload["stage"] == "retry-requested"
+    assert captured.out.count("Output:") == 1
+    assert "review-deslop [failed]:" in captured.out
+    assert "Could not complete deslop." in captured.out
+
+
+def test_review_step_output_is_not_reprinted_by_review_py(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    review_calls: list[dict[str, object]] = []
+
+    def fake_run(**kwargs: object) -> dict[str, object]:
+        review_calls.append(dict(kwargs))
+        print("Output:\nalpha:\nReviewer body.")
+        return {
+            "round_id": "phase_review-round-1",
+            "lane": "review_t1",
+            "kind": "review",
+            "status": "completed",
+            "blocked": False,
+            "reviewed_head": "head-1",
+            "output_refs": ["rollout://phase_review-round-1/alpha"],
+            "runs": [
+                {
+                    "slot": "alpha",
+                    "status": "completed",
+                    "summary": "Reviewer body.",
+                    "ref": "rollout://phase_review-round-1/alpha",
+                    "blocked": False,
+                    "block": None,
+                }
+            ],
+        }
+
+    monkeypatch.setattr(orchestrator_runner, "run_review_step", fake_run)
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+
+    exit_code, payload = _run_review(
+        monkeypatch,
+        ["--mode", "emergency", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)],
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert payload["stage"] == "decision-pending"
+    assert captured.out.count("Output:") == 1
+    assert "Reviewer body." in captured.out
+    assert len(review_calls) == 1
+
+
 def test_id_rejects_creation_context_flags(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _stub_deslop(monkeypatch)
     repo = tmp_path / "repo"

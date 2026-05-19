@@ -11,7 +11,7 @@ from review_followup import build_followup_prompt
 from review_suite_arena import run_orchestrator_followup_review_step, run_orchestrator_review_step
 from review_suite_local import build_local_review_request, build_phase_instructions, default_roster_path
 
-from .axi_output import format_command
+from .axi_output import format_command, write_text
 from .config import lens_model_config
 from .lens_runtime import DEFAULT_PROGRESS_INTERVAL_SECONDS, DEFAULT_TIMEOUT_SECONDS
 from .orchestrator_state import (
@@ -65,6 +65,7 @@ def deslop_command(state: dict[str, Any]) -> list[str]:
     return [
         sys.executable,
         str(_script_path("review_deslop.py")),
+        "--output-only",
         "--cd",
         str(cwd),
         "--base",
@@ -84,6 +85,17 @@ def run_deslop_subprocess(*, command: list[str], cwd: Path) -> subprocess.Comple
     )
 
 
+def _print_step_output(*, label: str, body: str, status: str = "completed") -> bool:
+    text = body.strip()
+    if not text:
+        return False
+    heading = f"{label}:" if status == "completed" else f"{label} [{status}]:"
+    write_text("Output:")
+    write_text(heading)
+    write_text(text)
+    return True
+
+
 def _run_deslop_once(state: dict[str, Any]) -> OrchestratorRunnerResult:
     command = deslop_command(state)
     command_text = format_command(command)
@@ -91,6 +103,7 @@ def _run_deslop_once(state: dict[str, Any]) -> OrchestratorRunnerResult:
     try:
         proc = run_deslop_subprocess(command=command, cwd=cwd)
     except OSError as exc:
+        _print_step_output(label="review-deslop", status="failed", body=f"review-deslop failed: {exc}")
         return OrchestratorRunnerResult(
             mark_deslop_failed(
                 state,
@@ -102,7 +115,13 @@ def _run_deslop_once(state: dict[str, Any]) -> OrchestratorRunnerResult:
             step="deslop",
         )
     if int(proc.returncode) == 0:
+        _print_step_output(label="review-deslop", body=str(proc.stdout or ""))
         return OrchestratorRunnerResult(mark_deslop_done(state, command=command_text), ran_step=True, step="deslop")
+    _print_step_output(
+        label="review-deslop",
+        status="failed",
+        body=str(proc.stdout or "").strip() or f"review-deslop failed with exit {int(proc.returncode)}",
+    )
     return OrchestratorRunnerResult(
         mark_deslop_failed(
             state,
