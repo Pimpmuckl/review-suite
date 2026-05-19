@@ -3,12 +3,10 @@
 Review Suite is a Codex plugin for stateful review workflows:
 
 - plan review
-- post-implementation simplification review
-- fix follow-up review
-- default stateful local review orchestration
-- specialist local review and signoff lanes
+- deslop review
+- local review orchestration
+- review progress/status checks
 - anchored GitHub `@codex review` polling
-- local review state and cost reporting
 
 ## Install
 
@@ -34,56 +32,40 @@ codex plugin marketplace upgrade review-suite
 
 ## Quick Start
 
-Use `$review` for local review, `$review-suite` when unsure which lane fits, and `$review-github` for PR-scoped GitHub review.
+Use `$review` for local review, `$review-state` to inspect progress, and `$review-github` for PR-scoped GitHub review.
 
 Default local runs print reviewer text once in `Output:`, then one `Action.cmd`.
 
+Modes:
+
+- `brief`: tiny same-seam fix, docs/wording, focused regression proves it
+- `normal`: normal backend/runtime seam with no durable lifecycle or data-ownership change
+- `deep`: leases, retries, queues, terminal state, schema/data ownership, or security
+- `emergency`: blocked stack/local run; fix now and soak after
+
 ## Configuration
 
-Default configuration lives in the plugin at:
+Default configuration:
 
 ```text
 plugins/review-suite/references/default_config.json
 ```
 
-Users can override it with:
+User override:
 
 ```text
 ~/.codex/state/review-suite/config.json
 ```
 
-Typical overrides:
-
-```json
-{
-  "lens": {
-    "default": {
-      "model": "gpt-5.5",
-      "reasoning_effort": "medium"
-    }
-  },
-  "gates": {
-    "phase_gate": {
-      "primary_variant_ids": ["gpt-5.4-medium"]
-    },
-    "pr_gate": {
-      "primary_variant_ids": ["gpt-5.5-xhigh"]
-    }
-  }
-}
-```
-
-T2/T4 also support `--champion-override <variant-id>` for explicit operator overrides.
-
 ## Privacy And Network
 
-Review Suite keeps arena state local. T1/T3 grading, local leaderboards, gate cooldowns, and cost ledgers are written under the local review-suite state directory.
+Review Suite keeps review state and cost ledgers under the local review-suite state directory.
 
 The plugin does not publish arena telemetry to any external arena service or analytics endpoint.
 
 Network behavior:
 
-- local review lanes launch Codex CLI review sessions
+- local review workflows launch Codex CLI review sessions
 - `review-github` uses `gh` to post and poll `@codex review`
 - no other external publishing is part of the public plugin
 

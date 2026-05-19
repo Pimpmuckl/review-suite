@@ -20,7 +20,7 @@
   "interface": {
     "displayName": "Review Suite",
     "shortDescription": "Stateful review workflows",
-    "longDescription": "Use Review Suite for the default local review orchestrator, plan review, deslop, follow-up, specialist local lanes, and GitHub review.",
+    "longDescription": "Use Review Suite for the default local review orchestrator, plan review, one-off deslop, review status, and GitHub review.",
     "developerName": "Jonathan",
     "category": "Coding",
     "capabilities": [
@@ -31,7 +31,7 @@
     "privacyPolicyURL": "https://github.com/Pimpmuckl/review-suite",
     "termsOfServiceURL": "https://github.com/Pimpmuckl/review-suite",
     "defaultPrompt": [
-      "Use review for the default local review orchestrator; use specialist lanes only when requested."
+      "Use review for local review; use review-state for progress; use review-github for PR review."
     ],
     "brandColor": "#0F766E",
     "composerIcon": "./assets/colosseum.png",

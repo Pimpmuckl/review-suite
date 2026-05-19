@@ -1,11 +1,11 @@
 ---
 name: review-deslop
-description: "Simplify a completed implementation slice before or between review passes."
+description: "Run an explicit one-off simplification review for a completed implementation slice."
 ---
 
 # Review Deslop
 
-Use for one cleanup pass after implementation.
+Use only for an explicit cleanup pass. Normal `review` runs manage their own deslop step.
 
 ```powershell
 <python> <review-suite-plugin-root>/scripts/review_deslop.py --base main --cd <repo-root>

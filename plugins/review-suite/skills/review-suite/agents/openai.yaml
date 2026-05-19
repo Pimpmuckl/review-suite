@@ -1,7 +1,0 @@
-interface:
-  display_name: "Review Suite"
-  short_description: "Route review work to the right lane"
-  icon_small: "./assets/colosseum.png"
-  icon_large: "./assets/colosseum.png"
-  brand_color: "#0F766E"
-  default_prompt: "Use $review-suite to route review work to the right lane."
