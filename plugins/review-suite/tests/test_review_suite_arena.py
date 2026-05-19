@@ -108,9 +108,9 @@ def test_blocking_round_error_uses_compact_action_for_completed_round() -> None:
     assert str(error) == "pending round blocks review_t1: round-123"
     assert "grade_command" not in str(error)
     assert "dismiss_command" not in str(error)
+    assert set(error.action_payload) == {"cmd", "dismiss_cmd"}
     assert "grade --winner WINNER" in str(error.action_payload["cmd"])
     assert "dismiss-round" in str(error.action_payload["dismiss_cmd"])
-    assert error.action_payload["note"] == "grade before starting another arena lane"
 
 
 def test_blocking_round_error_uses_compact_action_for_running_round() -> None:
@@ -124,9 +124,9 @@ def test_blocking_round_error_uses_compact_action_for_running_round() -> None:
     )
 
     assert str(error) == "pending round blocks review_t3: round-456 (running)"
+    assert set(error.action_payload) == {"dismiss_cmd"}
     assert "cmd" not in error.action_payload
     assert "dismiss-round" in str(error.action_payload["dismiss_cmd"])
-    assert error.action_payload["note"] == "wait for completion before starting another arena lane"
 
 
 def test_print_findings_uses_recovered_full_body(capsys) -> None:
@@ -503,7 +503,7 @@ def test_completed_round_payload_uses_reroll_command_key() -> None:
     assert payload["blocked"] is True
 
 
-def test_completed_round_payload_success_only_emits_grade_action() -> None:
+def test_completed_round_payload_success_only_emits_grade_command() -> None:
     payload = _completed_round_payload(
         round_result={
             "blocked": False,
@@ -520,8 +520,7 @@ def test_completed_round_payload_success_only_emits_grade_action() -> None:
     )
 
     assert payload["Action"]["cmd"] == "grade-cmd"
-    assert payload["Action"]["winner"] == ["alpha", "bravo", "tie"]
-    assert "valid_findings_vs_none" in payload["Action"]["basis"]
+    assert set(payload["Action"]) == {"cmd"}
     assert "runs" not in payload
 
 
@@ -720,8 +719,7 @@ def test_run_benchmarked_round_noninteractive_uses_toon_actions_without_stderr_n
     assert "--task-id" not in emitted[-1]["Action"]["cmd"]
     assert "--basis BASIS" in emitted[-1]["Action"]["cmd"]
     assert "--refresh-report" not in emitted[-1]["Action"]["cmd"]
-    assert emitted[-1]["Action"]["winner"] == ["alpha", "bravo", "tie"]
-    assert "tie_clean" in emitted[-1]["Action"]["basis"]
+    assert set(emitted[-1]["Action"]) == {"cmd"}
 
 
 def test_run_benchmarked_round_warns_for_deep_review_without_model_names(monkeypatch, tmp_path, capsys) -> None:

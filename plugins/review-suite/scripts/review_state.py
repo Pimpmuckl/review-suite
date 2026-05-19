@@ -10,13 +10,10 @@ from review_suite_core import AxiArgumentParser, emit_error, emit_toon, format_c
 from review_gate import gate_signoff_action_payload, gate_signoff_decisions_by_round, pending_gate_signoff_records
 from review_suite_local import (
     default_state_dir,
-    find_blocking_rounds_for_caller,
     normalize_record_review_cwd_value,
     normalize_review_cwd_value,
     public_task_name,
     read_jsonl,
-    resolve_caller_id,
-    round_needs_caller_grade,
 )
 
 GATE_TASK_TO_REVIEW_LANE = {
@@ -41,7 +38,6 @@ def build_parser() -> argparse.ArgumentParser:
     status.add_argument("--base", default="main")
     status.add_argument("--wsl", action="store_true", help=argparse.SUPPRESS)
     status.add_argument("--state-dir", default=str(default_state_dir()), help=argparse.SUPPRESS)
-    status.add_argument("--caller-id", help=argparse.SUPPRESS)
     status.add_argument("--verbose", action="store_true", help="Print the full routing snapshot.")
     return parser
 
@@ -64,39 +60,6 @@ def _reject_review_state_unc_wsl(cd: str | None) -> None:
     )
 
 
-def _arena_grade_command(*, round_id: str | None = None, task_id: str | None = None) -> str:
-    parts = [
-        sys.executable,
-        Path(__file__).resolve().with_name("review_suite_arena.py").as_posix(),
-        "grade",
-    ]
-    if round_id:
-        parts.extend(["--round-id", round_id])
-    if task_id:
-        parts.extend(["--task-id", task_id])
-    parts.extend(
-        [
-            "--winner",
-            "WINNER",
-            "--basis",
-            "BASIS",
-        ]
-    )
-    return format_command(parts)
-
-
-def _arena_dismiss_command(*, round_id: str) -> str:
-    return format_command(
-        [
-            sys.executable,
-            Path(__file__).resolve().with_name("review_suite_arena.py").as_posix(),
-            "dismiss-round",
-            "--round-id",
-            round_id,
-        ]
-    )
-
-
 def _arena_show_round_command(*, round_id: str) -> str:
     return format_command(
         [
@@ -109,53 +72,23 @@ def _arena_show_round_command(*, round_id: str) -> str:
     )
 
 
-def _caller_round_override(
-    *,
-    state_dir: Path,
-    review_cwd: Path,
-    explicit_caller_id: str | None,
-) -> dict[str, object] | None:
-    caller_id, caller_id_source = resolve_caller_id(explicit_caller_id)
-    if not caller_id:
-        return None
-    blocking = find_blocking_rounds_for_caller(
-        state_dir=state_dir,
-        caller_id=caller_id,
-        review_cwd=review_cwd,
+def _review_mode_for_lane(lane: str) -> str:
+    return "deep" if lane in {"review_t3", "review_t4"} else "normal"
+
+
+def _start_review_command(*, review_cwd: Path, base: str, mode: str) -> str:
+    return format_command(
+        [
+            sys.executable,
+            Path(__file__).resolve().with_name("review.py").as_posix(),
+            "--mode",
+            mode,
+            "--cd",
+            str(review_cwd),
+            "--base",
+            base,
+        ]
     )
-    if not blocking:
-        return None
-    latest = blocking[-1]
-    round_id = str(latest.get("round_id") or "").strip()
-    status = str(latest.get("status") or "unknown").strip() or "unknown"
-    task_class = str(latest.get("task_class") or "").strip()
-    payload: dict[str, object] = {
-        "pending_round_id": round_id,
-        "pending_round_status": status,
-    }
-    if task_class:
-        payload["pending_round_task"] = public_task_name(task_class)
-    task_id_hint = str(latest.get("task_id_hint") or round_id).strip() or round_id
-    if round_needs_caller_grade(latest):
-        payload.update(
-            {
-                "recommendation": "needs-grade",
-                "reason": "pending_caller_grade",
-                "note": "A completed arena round for this caller must be graded before another arena lane starts.",
-                "pending_round_task_id_hint": task_id_hint,
-            }
-        )
-    else:
-        payload.update(
-            {
-                "recommendation": "wait-round",
-                "reason": "caller_round_in_progress",
-                "note": "A round for this caller is still sampled or running. Wait for completion before starting another arena lane.",
-            }
-        )
-    if caller_id_source:
-        payload["caller_id_source"] = caller_id_source
-    return payload
 
 
 def _gate_signoff_override(
@@ -489,31 +422,6 @@ def _status_action(payload: dict[str, object], *, review_cwd: Path, base: str, s
             review_cwd=review_cwd,
             round_id=round_id,
         )
-    if recommendation == "needs-grade":
-        round_id = str(payload.get("pending_round_id") or "").strip()
-        if not round_id:
-            return None
-        return _with_action_context(
-            {
-                "lane": "arena-grade",
-                "cmd": _arena_grade_command(),
-                "dismiss_cmd": _arena_dismiss_command(round_id=round_id),
-            },
-            review_cwd=review_cwd,
-            round_id=round_id,
-        )
-    if recommendation == "wait-round":
-        round_id = str(payload.get("pending_round_id") or "").strip()
-        if not round_id:
-            return None
-        return _with_action_context(
-            {
-                "lane": "wait-round",
-                "dismiss_cmd": _arena_dismiss_command(round_id=round_id),
-            },
-            review_cwd=review_cwd,
-            round_id=round_id,
-        )
     if recommendation == "review-followup":
         since_head = str(payload.get("last_reviewed_head") or "").strip()
         if not since_head:
@@ -549,19 +457,10 @@ def _status_action(payload: dict[str, object], *, review_cwd: Path, base: str, s
         "review_t3",
         "review_t4",
     }:
-        command = [
-            sys.executable,
-            Path(__file__).resolve().with_name(f"{recommended_lane}.py").as_posix(),
-            "--base",
-            base,
-        ]
-        if bool(payload.get("worktree_dirty")):
-            command.append("--allow-dirty")
         return _with_action_context(
             {
                 "lane": recommended_lane,
-                "cmd": format_command(command),
-                "note": "Run this full-diff lane for the current review stage before more narrow follow-up.",
+                "cmd": _start_review_command(review_cwd=review_cwd, base=base, mode=_review_mode_for_lane(recommended_lane)),
             },
             review_cwd=review_cwd,
         )
@@ -569,7 +468,7 @@ def _status_action(payload: dict[str, object], *, review_cwd: Path, base: str, s
         return _with_action_context(
             {
                 "lane": "coherence-review",
-                "note": "Run the appropriate full-diff correctness review lane for the current stage before more narrow follow-up.",
+                "cmd": _start_review_command(review_cwd=review_cwd, base=base, mode="normal"),
             },
             review_cwd=review_cwd,
         )
@@ -577,7 +476,7 @@ def _status_action(payload: dict[str, object], *, review_cwd: Path, base: str, s
         return _with_action_context(
             {
                 "lane": "full-review",
-                "note": "Run the appropriate full-diff lane for the current stage instead of another narrow follow-up.",
+                "cmd": _start_review_command(review_cwd=review_cwd, base=base, mode="normal"),
             },
             review_cwd=review_cwd,
         )
@@ -602,31 +501,23 @@ def cmd_status(args: argparse.Namespace) -> int:
     if orchestrator_override is not None:
         payload = orchestrator_override
     else:
-        blocking_override = _caller_round_override(
+        signoff_override = _gate_signoff_override(
             state_dir=state_dir,
             review_cwd=review_cwd,
-            explicit_caller_id=getattr(args, "caller_id", None),
+            base=str(args.base),
+            current_payload=payload,
         )
-        if blocking_override is not None:
-            payload.update(blocking_override)
+        if signoff_override is not None:
+            payload.update(signoff_override)
         else:
-            signoff_override = _gate_signoff_override(
+            gate_findings_override = _gate_findings_rerun_override(
                 state_dir=state_dir,
                 review_cwd=review_cwd,
                 base=str(args.base),
                 current_payload=payload,
             )
-            if signoff_override is not None:
-                payload.update(signoff_override)
-            else:
-                gate_findings_override = _gate_findings_rerun_override(
-                    state_dir=state_dir,
-                    review_cwd=review_cwd,
-                    base=str(args.base),
-                    current_payload=payload,
-                )
-                if gate_findings_override is not None:
-                    payload.update(gate_findings_override)
+            if gate_findings_override is not None:
+                payload.update(gate_findings_override)
     action = _status_action(payload, review_cwd=review_cwd, base=str(args.base), state_dir=state_dir)
     if action is not None:
         payload["Action"] = action

@@ -208,7 +208,6 @@ def test_review_state_status_verbose_keeps_router_details(monkeypatch, tmp_path:
     emitted: list[dict[str, object]] = []
 
     monkeypatch.setattr(review_state, "resolve_repo_root", lambda cd: tmp_path)
-    monkeypatch.setattr(review_state, "resolve_caller_id", lambda explicit: (None, None))
     monkeypatch.setattr(review_state, "pending_gate_signoff_records", lambda **kwargs: [])
     monkeypatch.setattr(
         review_state,
@@ -321,7 +320,6 @@ def test_review_state_status_ignores_stale_green_orchestrator_cycle(monkeypatch,
         },
     )
     monkeypatch.setattr(review_state, "resolve_repo_root", lambda cd: repo)
-    monkeypatch.setattr(review_state, "resolve_caller_id", lambda explicit: (None, None))
     monkeypatch.setattr(review_state, "pending_gate_signoff_records", lambda **kwargs: [])
     monkeypatch.setattr(
         review_state,
@@ -347,7 +345,9 @@ def test_review_state_status_ignores_stale_green_orchestrator_cycle(monkeypatch,
     assert "review" not in emitted[0]
     assert emitted[0]["recommendation"] == "coherence-review"
     assert emitted[0]["reason"] == "diff_churn_exceeded"
-    assert "review_t1.py" in str(emitted[0]["Action"]["cmd"])
+    assert "review.py" in str(emitted[0]["Action"]["cmd"])
+    assert "--mode normal" in str(emitted[0]["Action"]["cmd"])
+    assert "review_t1.py" not in str(emitted[0]["Action"])
 
 
 def test_inspect_workflow_status_recommends_followup_after_t4_findings_amended_head(tmp_path: Path) -> None:
@@ -1663,9 +1663,9 @@ def test_review_state_status_does_not_route_coherence_to_review_deslop(monkeypat
 
     assert exit_code == 0
     assert "lane" not in emitted[0]["Action"]
-    assert "cmd" not in emitted[0]["Action"]
-    assert "full-diff correctness review lane" in emitted[0]["Action"]["note"]
-    assert "review-deslop" not in emitted[0]["Action"]["note"]
+    assert "review.py" in str(emitted[0]["Action"]["cmd"])
+    assert "--mode normal" in str(emitted[0]["Action"]["cmd"])
+    assert "review-deslop" not in str(emitted[0]["Action"])
 
 
 def test_review_state_status_routes_stage_full_review_lane(monkeypatch, tmp_path: Path) -> None:
@@ -1689,7 +1689,9 @@ def test_review_state_status_routes_stage_full_review_lane(monkeypatch, tmp_path
 
     assert exit_code == 0
     assert "lane" not in emitted[0]["Action"]
-    assert "review_t4.py" in str(emitted[0]["Action"]["cmd"])
+    assert "review.py" in str(emitted[0]["Action"]["cmd"])
+    assert "--mode deep" in str(emitted[0]["Action"]["cmd"])
+    assert "review_t4.py" not in str(emitted[0]["Action"])
     assert "review-deslop" not in str(emitted[0]["Action"])
 
 
@@ -1787,7 +1789,6 @@ def test_review_state_status_routes_pending_gate_signoff_decision(monkeypatch, t
     )
 
     monkeypatch.setattr(review_state, "resolve_repo_root", lambda cd: repo)
-    monkeypatch.setattr(review_state, "resolve_caller_id", lambda explicit: (None, None))
     monkeypatch.setattr(
         review_state,
         "inspect_workflow_status",
@@ -1843,7 +1844,6 @@ def test_review_state_status_keeps_pending_gate_signoff_visible_after_amend(monk
     )
 
     monkeypatch.setattr(review_state, "resolve_repo_root", lambda cd: repo)
-    monkeypatch.setattr(review_state, "resolve_caller_id", lambda explicit: (None, None))
     monkeypatch.setattr(
         review_state,
         "inspect_workflow_status",
@@ -1873,7 +1873,6 @@ def test_review_state_status_adds_fix_gate_findings_action(monkeypatch, tmp_path
     repo = tmp_path / "repo"
 
     monkeypatch.setattr(review_state, "resolve_repo_root", lambda cd: repo)
-    monkeypatch.setattr(review_state, "resolve_caller_id", lambda explicit: (None, None))
     monkeypatch.setattr(review_state, "pending_gate_signoff_records", lambda **kwargs: [])
     monkeypatch.setattr(
         review_state,
@@ -1935,7 +1934,6 @@ def test_review_state_status_routes_t4_findings_followup_back_to_t4(monkeypatch,
     )
 
     monkeypatch.setattr(review_state, "resolve_repo_root", lambda cd: repo)
-    monkeypatch.setattr(review_state, "resolve_caller_id", lambda explicit: (None, None))
     monkeypatch.setattr(
         review_state,
         "inspect_workflow_status",
@@ -1959,7 +1957,9 @@ def test_review_state_status_routes_t4_findings_followup_back_to_t4(monkeypatch,
     assert emitted[0]["reason"] == "t4_findings_followup_needs_signoff"
     assert "recommended_lane" not in emitted[0]
     assert "lane" not in emitted[0]["Action"]
-    assert "review_t4.py" in str(emitted[0]["Action"]["cmd"])
+    assert "review.py" in str(emitted[0]["Action"]["cmd"])
+    assert "--mode deep" in str(emitted[0]["Action"]["cmd"])
+    assert "review_t4.py" not in str(emitted[0]["Action"])
 
 
 def test_review_state_status_routes_t2_findings_followup_back_to_t2(monkeypatch, tmp_path: Path) -> None:
@@ -2000,7 +2000,6 @@ def test_review_state_status_routes_t2_findings_followup_back_to_t2(monkeypatch,
     )
 
     monkeypatch.setattr(review_state, "resolve_repo_root", lambda cd: repo)
-    monkeypatch.setattr(review_state, "resolve_caller_id", lambda explicit: (None, None))
     monkeypatch.setattr(
         review_state,
         "inspect_workflow_status",
@@ -2024,15 +2023,16 @@ def test_review_state_status_routes_t2_findings_followup_back_to_t2(monkeypatch,
     assert emitted[0]["reason"] == "t2_findings_followup_needs_signoff"
     assert "recommended_lane" not in emitted[0]
     assert "lane" not in emitted[0]["Action"]
-    assert "review_t2.py" in str(emitted[0]["Action"]["cmd"])
+    assert "review.py" in str(emitted[0]["Action"]["cmd"])
+    assert "--mode normal" in str(emitted[0]["Action"]["cmd"])
+    assert "review_t2.py" not in str(emitted[0]["Action"])
 
 
-def test_review_state_status_prefers_pending_grade_for_caller(monkeypatch, tmp_path: Path) -> None:
+def test_review_state_status_ignores_legacy_pending_grade_for_caller(monkeypatch, tmp_path: Path) -> None:
     emitted: list[dict[str, object]] = []
     state_dir = tmp_path / "state"
 
     monkeypatch.setattr(review_state, "resolve_repo_root", lambda cd: tmp_path)
-    monkeypatch.setattr(review_state, "resolve_caller_id", lambda explicit: ("caller-1", "env"))
     monkeypatch.setattr(
         review_state,
         "inspect_workflow_status",
@@ -2042,49 +2042,25 @@ def test_review_state_status_prefers_pending_grade_for_caller(monkeypatch, tmp_p
             "last_reviewed_head": "abc123",
         },
     )
-    monkeypatch.setattr(
-        review_state,
-        "find_blocking_rounds_for_caller",
-        lambda **kwargs: [
-            {
-                "round_id": "round-123",
-                "task_class": "phase_review",
-                "status": "completed",
-                "runs": [
-                    {
-                        "slot": "alpha",
-                        "review_status": "completed",
-                        "grade_blocked": False,
-                    }
-                ],
-                "task_id_hint": "feat-branch",
-            }
-        ],
-    )
     monkeypatch.setattr(review_state, "emit_toon", lambda payload: emitted.append(payload))
     monkeypatch.setattr(sys, "argv", ["review_state.py", "status", "--base", "main", "--state-dir", str(state_dir)])
 
     exit_code = review_state.main()
 
     assert exit_code == 0
-    assert emitted[0]["recommendation"] == "needs-grade"
-    assert emitted[0]["reason"] == "pending_caller_grade"
+    assert emitted[0]["recommendation"] == "review-followup"
     assert "lane" not in emitted[0]["Action"]
     assert "round_id" not in emitted[0]["Action"]
     assert emitted[0]["Action"]["cwd"] == str(tmp_path)
-    assert "review_suite_arena.py" in str(emitted[0]["Action"]["cmd"])
-    assert "grade" in str(emitted[0]["Action"]["cmd"])
-    assert "--round-id" not in str(emitted[0]["Action"]["cmd"])
-    assert "--refresh-report" not in str(emitted[0]["Action"]["cmd"])
-    assert "dismiss-round" in str(emitted[0]["Action"]["dismiss_cmd"])
+    assert "review_followup.py" in str(emitted[0]["Action"]["cmd"])
+    assert "review_suite_arena.py" not in str(emitted[0]["Action"])
 
 
-def test_review_state_status_prefers_wait_for_running_round(monkeypatch, tmp_path: Path) -> None:
+def test_review_state_status_ignores_legacy_running_round_for_caller(monkeypatch, tmp_path: Path) -> None:
     emitted: list[dict[str, object]] = []
     state_dir = tmp_path / "state"
 
     monkeypatch.setattr(review_state, "resolve_repo_root", lambda cd: tmp_path)
-    monkeypatch.setattr(review_state, "resolve_caller_id", lambda explicit: ("caller-1", "env"))
     monkeypatch.setattr(
         review_state,
         "inspect_workflow_status",
@@ -2094,26 +2070,13 @@ def test_review_state_status_prefers_wait_for_running_round(monkeypatch, tmp_pat
             "last_reviewed_head": "abc123",
         },
     )
-    monkeypatch.setattr(
-        review_state,
-        "find_blocking_rounds_for_caller",
-        lambda **kwargs: [
-            {
-                "round_id": "round-456",
-                "task_class": "phase_review",
-                "status": "running",
-                "runs": [],
-            }
-        ],
-    )
     monkeypatch.setattr(review_state, "emit_toon", lambda payload: emitted.append(payload))
     monkeypatch.setattr(sys, "argv", ["review_state.py", "status", "--base", "main", "--state-dir", str(state_dir)])
 
     exit_code = review_state.main()
 
     assert exit_code == 0
-    assert emitted[0]["recommendation"] == "wait-round"
-    assert emitted[0]["reason"] == "caller_round_in_progress"
+    assert emitted[0]["recommendation"] == "review-followup"
     assert "lane" not in emitted[0]["Action"]
-    assert "dismiss-round" in str(emitted[0]["Action"]["dismiss_cmd"])
-    assert "cmd" not in emitted[0]["Action"]
+    assert "review_followup.py" in str(emitted[0]["Action"]["cmd"])
+    assert "dismiss-round" not in str(emitted[0]["Action"])

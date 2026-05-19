@@ -24,7 +24,6 @@ from review_suite_core import (
 )
 from review_suite_local import (
     OPERATIONAL_STATE_FILENAME,
-    GRADE_BASIS_VALUES,
     RUN_LOG_FILENAME,
     TASK_CLASSES,
     PUBLIC_REVIEWER_LABELS,
@@ -126,13 +125,11 @@ def _blocking_round_error(
         action_payload: dict[str, object] = {
             "cmd": _grade_command(),
             "dismiss_cmd": _dismiss_round_command(round_id=round_id),
-            "note": "grade before starting another arena lane",
         }
     else:
         message = f"pending round blocks {action}: {round_id} ({status})"
         action_payload = {
             "dismiss_cmd": _dismiss_round_command(round_id=round_id),
-            "note": "wait for completion before starting another arena lane",
         }
     return BlockingRoundError(message, action_payload=action_payload)
 
@@ -651,9 +648,6 @@ def _completed_round_payload(
         return {
             "Action": {
                 "cmd": grade_command,
-                "winner": ["alpha", "bravo", "tie"],
-                "basis": list(GRADE_BASIS_VALUES),
-                "note": "grade before starting another local review lane",
             }
         }
     if manual and not grade_command and not reroll_rows and grade is None:
