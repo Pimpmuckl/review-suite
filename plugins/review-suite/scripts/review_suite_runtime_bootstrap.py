@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import shutil
+import subprocess
 import sys
 import time
 import uuid
@@ -36,6 +37,8 @@ def bootstrap_from_installed_cache(
     environ: Mapping[str, str] | None = None,
     executable: str | None = None,
     execv: Callable[[str, Sequence[str]], object] = os.execv,
+    run: Callable[[str, Sequence[str]], int] | None = None,
+    platform_name: str | None = None,
 ) -> bool:
     plan = prepare_runtime_bootstrap(
         script_file,
@@ -45,6 +48,9 @@ def bootstrap_from_installed_cache(
     )
     if plan is None:
         return False
+    if (platform_name or os.name) == "nt":
+        exit_code = run(plan.executable, plan.argv) if run else _run_runtime_process(plan.executable, plan.argv)
+        raise SystemExit(exit_code)
     execv(plan.executable, plan.argv)
     raise RuntimeError("runtime bootstrap exec returned unexpectedly")
 
@@ -76,6 +82,10 @@ def prepare_runtime_bootstrap(
         executable=str(executable or sys.executable),
         argv=next_argv,
     )
+
+
+def _run_runtime_process(executable: str, argv: Sequence[str]) -> int:
+    return subprocess.run(list(argv), executable=executable, check=False).returncode
 
 
 def ensure_runtime_copy(source_root: Path, *, codex_home: Path | None = None) -> Path:
