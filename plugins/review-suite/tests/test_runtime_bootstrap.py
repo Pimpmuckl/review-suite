@@ -45,7 +45,9 @@ def _make_cache_plugin(codex_home: Path, *, version: str = "1.2.3") -> Path:
     return plugin_root
 
 
-def test_cache_launcher_reexecs_to_runtime_and_preserves_argv(tmp_path: Path) -> None:
+def test_cache_launcher_reexecs_to_runtime_and_preserves_argv(
+    tmp_path: Path,
+) -> None:
     codex_home = tmp_path / "codex"
     plugin_root = _make_cache_plugin(codex_home)
     calls: list[tuple[str, Sequence[str]]] = []
@@ -61,6 +63,7 @@ def test_cache_launcher_reexecs_to_runtime_and_preserves_argv(tmp_path: Path) ->
             environ={"CODEX_HOME": str(codex_home)},
             executable="python",
             execv=fake_execv,
+            platform_name="posix",
         )
 
     assert len(calls) == 1
@@ -71,6 +74,39 @@ def test_cache_launcher_reexecs_to_runtime_and_preserves_argv(tmp_path: Path) ->
     assert Path(argv[1]).name == "review.py"
     assert tuple(argv[2:]) == ("--mode", "normal", "--cd", "repo")
     assert not Path(argv[1]).is_relative_to(plugin_root)
+
+
+def test_windows_cache_launcher_waits_for_runtime_and_returns_child_exit(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    codex_home = tmp_path / "codex"
+    plugin_root = _make_cache_plugin(codex_home)
+    execv_calls: list[tuple[str, Sequence[str]]] = []
+    run_calls: list[tuple[str, Sequence[str]]] = []
+
+    def fake_run(executable: str, argv: Sequence[str]) -> int:
+        run_calls.append((executable, argv))
+        return 42
+
+    with pytest.raises(SystemExit) as exc:
+        bootstrap_from_installed_cache(
+            plugin_root / "scripts" / "review.py",
+            argv=["review.py", "--mode", "emergency", "--base", "main"],
+            environ={"CODEX_HOME": str(codex_home)},
+            executable="python",
+            execv=lambda executable, argv: execv_calls.append((executable, argv)),
+            run=fake_run,
+            platform_name="nt",
+        )
+
+    assert exc.value.code == 42
+    assert execv_calls == []
+    assert len(run_calls) == 1
+    executable, argv = run_calls[0]
+    assert executable == "python"
+    assert Path(argv[1]).is_relative_to(codex_home / "plugin-runtimes" / "review-suite")
+    assert tuple(argv[2:]) == ("--mode", "emergency", "--base", "main")
 
 
 def test_already_running_from_runtime_does_not_reexec(tmp_path: Path) -> None:
