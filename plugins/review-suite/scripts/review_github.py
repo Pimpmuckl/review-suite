@@ -12,6 +12,10 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from review_suite_runtime_bootstrap import bootstrap_from_installed_cache
+
+bootstrap_from_installed_cache(__file__)
+
 from review_suite_core import (
     AxiArgumentParser,
     current_head,

@@ -5,6 +5,10 @@ import argparse
 import sys
 from pathlib import Path
 
+from review_suite_runtime_bootstrap import bootstrap_from_installed_cache
+
+bootstrap_from_installed_cache(__file__)
+
 from review_suite_core import (
     AxiArgumentParser,
     DEFAULT_PROGRESS_INTERVAL_SECONDS,

@@ -5,6 +5,10 @@ import argparse
 import sys
 from pathlib import Path
 
+from review_suite_runtime_bootstrap import bootstrap_from_installed_cache
+
+bootstrap_from_installed_cache(__file__)
+
 from review_gate import public_gate_completion_payload, run_gate_round
 from review_suite_local import (
     build_local_review_request,
