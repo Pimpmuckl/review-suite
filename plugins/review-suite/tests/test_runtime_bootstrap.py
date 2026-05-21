@@ -1,0 +1,173 @@
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+from typing import Sequence
+
+import pytest
+
+
+SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts"
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+import review
+import review_suite_runtime_bootstrap as runtime_bootstrap
+from review_suite_runtime_bootstrap import (
+    METADATA_FILENAME,
+    bootstrap_from_installed_cache,
+    content_hash_for_runtime,
+    ensure_runtime_copy,
+    prepare_runtime_bootstrap,
+)
+
+
+class ExecCalled(Exception):
+    pass
+
+
+def _write(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+
+
+def _make_cache_plugin(codex_home: Path, *, version: str = "1.2.3") -> Path:
+    plugin_root = codex_home / "plugins" / "cache" / "market" / "review-suite" / "local"
+    _write(
+        plugin_root / ".codex-plugin" / "plugin.json",
+        json.dumps({"name": "review-suite", "version": version}),
+    )
+    _write(plugin_root / "scripts" / "review.py", "print('review')\n")
+    _write(plugin_root / "scripts" / "review_suite_runtime_bootstrap.py", "print('bootstrap')\n")
+    _write(plugin_root / "references" / "default_config.json", "{}\n")
+    _write(plugin_root / "assets" / "logo.txt", "asset\n")
+    return plugin_root
+
+
+def test_cache_launcher_reexecs_to_runtime_and_preserves_argv(tmp_path: Path) -> None:
+    codex_home = tmp_path / "codex"
+    plugin_root = _make_cache_plugin(codex_home)
+    calls: list[tuple[str, Sequence[str]]] = []
+
+    def fake_execv(executable: str, argv: Sequence[str]) -> object:
+        calls.append((executable, argv))
+        raise ExecCalled
+
+    with pytest.raises(ExecCalled):
+        bootstrap_from_installed_cache(
+            plugin_root / "scripts" / "review.py",
+            argv=["review.py", "--mode", "normal", "--cd", "repo"],
+            environ={"CODEX_HOME": str(codex_home)},
+            executable="python",
+            execv=fake_execv,
+        )
+
+    assert len(calls) == 1
+    executable, argv = calls[0]
+    assert executable == "python"
+    assert argv[0] == "python"
+    assert Path(argv[1]).is_relative_to(codex_home / "plugin-runtimes" / "review-suite")
+    assert Path(argv[1]).name == "review.py"
+    assert tuple(argv[2:]) == ("--mode", "normal", "--cd", "repo")
+    assert not Path(argv[1]).is_relative_to(plugin_root)
+
+
+def test_already_running_from_runtime_does_not_reexec(tmp_path: Path) -> None:
+    codex_home = tmp_path / "codex"
+    plugin_root = _make_cache_plugin(codex_home)
+    runtime_root = ensure_runtime_copy(plugin_root, codex_home=codex_home)
+    calls: list[tuple[str, Sequence[str]]] = []
+
+    result = bootstrap_from_installed_cache(
+        runtime_root / "scripts" / "review.py",
+        argv=["review.py", "--id", "rvw_123"],
+        environ={"CODEX_HOME": str(codex_home)},
+        executable="python",
+        execv=lambda executable, argv: calls.append((executable, argv)),
+    )
+
+    assert result is False
+    assert calls == []
+
+
+def test_runtime_directory_is_created_and_reused(tmp_path: Path) -> None:
+    codex_home = tmp_path / "codex"
+    plugin_root = _make_cache_plugin(codex_home)
+
+    first_root = ensure_runtime_copy(plugin_root, codex_home=codex_home)
+    second_root = ensure_runtime_copy(plugin_root, codex_home=codex_home)
+    expected_hash = content_hash_for_runtime(plugin_root)
+
+    assert first_root == second_root
+    assert first_root.name.startswith("1.2.3-")
+    assert (first_root / "scripts" / "review.py").read_text(encoding="utf-8") == "print('review')\n"
+    assert (first_root / "references" / "default_config.json").is_file()
+    metadata = json.loads((first_root / METADATA_FILENAME).read_text(encoding="utf-8"))
+    assert metadata["source_path"] == str(plugin_root.resolve(strict=False))
+    assert metadata["version"] == "1.2.3"
+    assert metadata["content_hash"] == expected_hash
+    assert metadata["created_at"]
+    assert list(first_root.parent.glob("*.tmp.*")) == []
+
+
+def test_runtime_hash_ignores_volatile_state(tmp_path: Path) -> None:
+    codex_home = tmp_path / "codex"
+    plugin_root = _make_cache_plugin(codex_home)
+    initial_hash = content_hash_for_runtime(plugin_root)
+
+    _write(plugin_root / "scripts" / "__pycache__" / "review.cpython-311.pyc", "bytecode")
+    _write(plugin_root / ".pytest_cache" / "README.md", "cache")
+
+    assert content_hash_for_runtime(plugin_root) == initial_hash
+
+
+def test_runtime_key_matches_staged_copy_when_source_changes_during_install(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    codex_home = tmp_path / "codex"
+    plugin_root = _make_cache_plugin(codex_home)
+    original_copy = runtime_bootstrap._copy_runtime_items
+
+    def copy_then_mutate_source(source_root: Path, temp_root: Path) -> None:
+        original_copy(source_root, temp_root)
+        _write(source_root / "scripts" / "review.py", "print('changed after copy')\n")
+
+    monkeypatch.setattr(runtime_bootstrap, "_copy_runtime_items", copy_then_mutate_source)
+
+    runtime_root = ensure_runtime_copy(plugin_root, codex_home=codex_home)
+    metadata = json.loads((runtime_root / METADATA_FILENAME).read_text(encoding="utf-8"))
+
+    assert metadata["content_hash"] == content_hash_for_runtime(runtime_root)
+    assert metadata["content_hash"] != content_hash_for_runtime(plugin_root)
+    assert (runtime_root / "scripts" / "review.py").read_text(encoding="utf-8") == "print('review')\n"
+
+
+def test_prepare_runtime_bootstrap_returns_none_outside_installed_cache(tmp_path: Path) -> None:
+    source_root = tmp_path / "repo" / "plugins" / "review-suite"
+    _write(source_root / ".codex-plugin" / "plugin.json", json.dumps({"name": "review-suite", "version": "1.2.3"}))
+    _write(source_root / "scripts" / "review.py", "print('review')\n")
+
+    plan = prepare_runtime_bootstrap(
+        source_root / "scripts" / "review.py",
+        argv=["review.py"],
+        environ={"CODEX_HOME": str(tmp_path / "codex")},
+        executable="python",
+    )
+
+    assert plan is None
+
+
+def test_followup_command_uses_runtime_script_path_after_reexec(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    codex_home = tmp_path / "codex"
+    plugin_root = _make_cache_plugin(codex_home)
+    runtime_root = ensure_runtime_copy(plugin_root, codex_home=codex_home)
+    runtime_script = runtime_root / "scripts" / "review.py"
+
+    monkeypatch.setattr(review, "__file__", str(runtime_script))
+
+    command = review._review_command("rvw_123", "--decision", "clean")
+
+    assert str(runtime_script) in command
+    assert str(plugin_root) not in command

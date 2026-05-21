@@ -69,6 +69,16 @@ Network behavior:
 - `review-github` uses `gh` to post and poll `@codex review`
 - no other external publishing is part of the public plugin
 
+## Runtime Copies
+
+When Review Suite is launched from Codex's installed plugin cache, long-running entrypoints create or reuse a runtime copy under:
+
+```text
+~/.codex/plugin-runtimes/review-suite/<version-hash>/
+```
+
+The installed cache stays a launcher surface. Existing review state remains under `~/.codex/state/review-suite`, and old runtime directories are not aggressively removed while Codex sessions may still be using them.
+
 ## Development
 
 Run tests:
@@ -87,4 +97,10 @@ Sync a local installed plugin cache after source edits:
 
 ```powershell
 .\scripts\sync-installed-cache.ps1
+```
+
+Sync the git marketplace source clone used by `codex plugin marketplace add`:
+
+```powershell
+.\scripts\sync-installed-cache.ps1 -MarketplaceSource
 ```

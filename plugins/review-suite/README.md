@@ -47,6 +47,12 @@ codex plugin add review-suite@review-suite
 - Long runs emit `OK <minutes>m: ...` about every 60s.
 - Reviewer text prints once in the final `Output:` block.
 
+## Runtime Copies
+
+- When launched from an installed Codex plugin cache, long-running entrypoints re-exec from `~/.codex/plugin-runtimes/review-suite/<version-hash>/`.
+- Review state remains under `~/.codex/state/review-suite`.
+- Runtime directories are content-addressed and intentionally not aggressively cleaned up while Codex sessions may still be using them.
+
 ## Notes
 
 - Use `python` on Windows and usually `python3` on WSL/Linux.

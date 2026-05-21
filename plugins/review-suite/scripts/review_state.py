@@ -6,6 +6,10 @@ import json
 import sys
 from pathlib import Path
 
+from review_suite_runtime_bootstrap import bootstrap_from_installed_cache
+
+bootstrap_from_installed_cache(__file__)
+
 from review_suite_core import AxiArgumentParser, emit_error, emit_toon, format_command, inspect_workflow_status, resolve_repo_root
 from review_gate import gate_signoff_action_payload, gate_signoff_decisions_by_round, pending_gate_signoff_records
 from review_suite_local import (

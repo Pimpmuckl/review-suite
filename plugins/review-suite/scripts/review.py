@@ -7,6 +7,10 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from review_suite_runtime_bootstrap import bootstrap_from_installed_cache
+
+bootstrap_from_installed_cache(__file__)
+
 from review_gate import (
     gate_record_status,
     gate_signoff_decision_for_round,
