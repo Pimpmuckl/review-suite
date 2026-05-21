@@ -824,6 +824,69 @@ def test_findings_fix_progression_and_clean_decision(monkeypatch: pytest.MonkeyP
     assert _gate_signoff_decisions(state_dir) == []
 
 
+def test_findings_fix_progression_keeps_related_dirty_work_in_fix_pending_on_same_head(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _stub_deslop(monkeypatch)
+    _stub_review(monkeypatch, "phase_review-round-1", "phase_review-round-2")
+    followup_calls = _stub_followup(monkeypatch, "followup-round-1")
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/dirty-fix")
+    reviewed_head = _commit_file(repo, "app.txt", "feature\n", "feature")
+
+    _, created = _run_review(
+        monkeypatch,
+        ["--mode", "normal", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)],
+    )
+    public_id = str(created["review"])
+    _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+    _run_review(monkeypatch, ["--id", public_id, "--decision", "findings", "--state-dir", str(state_dir)])
+    (repo / "app.txt").write_text("feature\nfixed in worktree\n", encoding="utf-8")
+
+    exit_code, reprint = _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+
+    assert exit_code == 0
+    assert reprint["Action"]["note"] == "Fix valid findings, then rerun this command."
+    assert len(followup_calls) == 0
+    assert _git(repo, "rev-parse", "HEAD") == reviewed_head
+
+
+def test_findings_fix_progression_keeps_unrelated_dirty_work_in_fix_pending(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _stub_deslop(monkeypatch)
+    _stub_review(monkeypatch, "phase_review-round-1", "phase_review-round-2")
+    followup_calls = _stub_followup(monkeypatch, "followup-round-1")
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/dirty-new-file-fix")
+    reviewed_head = _commit_file(repo, "app.txt", "feature\n", "feature")
+
+    _, created = _run_review(
+        monkeypatch,
+        ["--mode", "normal", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)],
+    )
+    public_id = str(created["review"])
+    _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+    _run_review(monkeypatch, ["--id", public_id, "--decision", "findings", "--state-dir", str(state_dir)])
+    (repo / "tests" / "test_fix.py").parent.mkdir(parents=True)
+    (repo / "tests" / "test_fix.py").write_text("def test_fix():\n    assert True\n", encoding="utf-8")
+
+    exit_code, reprint = _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+
+    assert exit_code == 0
+    assert reprint["Action"]["note"] == "Fix valid findings, then rerun this command."
+    assert len(followup_calls) == 0
+    assert _git(repo, "rev-parse", "HEAD") == reviewed_head
+
+
 def test_signoff_findings_require_direct_clean_rerun(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _stub_deslop(monkeypatch)
     review_calls = _stub_review(monkeypatch, "phase_review-round-1", "phase_review-round-2", "phase_review-round-3")

@@ -209,6 +209,39 @@ def test_build_local_review_request_pr_base_with_custom_instructions_uses_merge_
     assert "branch diff against base `main`" in request.prompt
 
 
+def test_build_local_review_request_pr_base_with_empty_committed_diff_reports_dirty_recovery(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(args, **kwargs):
+        calls.append(list(args))
+        if args[:2] == ["git", "merge-base"]:
+            return subprocess.CompletedProcess(args, 0, stdout="head-sha\n", stderr="")
+        if args[:3] == ["git", "rev-parse", "HEAD"]:
+            return subprocess.CompletedProcess(args, 0, stdout="head-sha\n", stderr="")
+        if args[:2] == ["git", "diff"]:
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+        raise AssertionError(args)
+
+    monkeypatch.setattr(review_suite_local.subprocess, "run", fake_run)
+    monkeypatch.setattr(review_suite_local, "has_worktree_changes", lambda review_cwd: True)
+
+    with pytest.raises(ValueError, match="no committed diff"):
+        build_local_review_request(
+            review_cwd=tmp_path,
+            base="main",
+            commit_values=None,
+            instruction_builder=build_pr_instructions,
+            custom_instructions="Stay focused on correctness only.",
+        )
+
+    assert calls[0] == ["git", "merge-base", "main", "HEAD"]
+    assert calls[1] == ["git", "rev-parse", "HEAD"]
+    assert calls[2] == ["git", "diff", "--find-renames", "--stat", "--patch", "head-sha..HEAD"]
+
+
 def test_build_local_review_request_pr_base_without_custom_instructions_stays_native_for_unrelated_dirty(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

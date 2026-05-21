@@ -4,6 +4,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 
 SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts"
 if str(SCRIPT_DIR) not in sys.path:
@@ -353,6 +355,7 @@ def test_runner_runs_real_followup_once_from_followup_pending(monkeypatch, tmp_p
     monkeypatch.setattr(orchestrator_runner, "current_head", lambda cwd: "head-2")
     monkeypatch.setattr(orchestrator_runner, "merge_base", lambda cwd, left, right="HEAD": "base-1")
     monkeypatch.setattr(orchestrator_runner, "diff_artifact", lambda cwd, start_ref, end_ref="HEAD": "diff --git a/app.txt b/app.txt\n")
+    monkeypatch.setattr(orchestrator_runner, "dirty_worktree_scope", lambda cwd, base, merge_base_ref=None: {"dirty_paths": []})
     state = _cycle(tmp_path, deslop_enabled=False, step_names=("broad-discovery", "precision-signoff"))
     pending = mark_review_step_pending(
         state,
@@ -387,3 +390,61 @@ def test_runner_runs_real_followup_once_from_followup_pending(monkeypatch, tmp_p
     assert followup_calls[0]["review_scope"]["commit_end"] == "head-2"
     assert "Review this follow-up diff" in str(followup_calls[0]["prompt"])
     assert "Source review round phase_review-round-1" in str(followup_calls[0]["prompt"])
+
+
+def test_runner_rejects_followup_with_committed_and_related_dirty_changes(monkeypatch, tmp_path: Path) -> None:
+    followup_calls = _stub_followup(monkeypatch)
+    monkeypatch.setattr(orchestrator_runner, "current_head", lambda cwd: "head-2")
+    monkeypatch.setattr(orchestrator_runner, "merge_base", lambda cwd, left, right="HEAD": "base-1")
+    monkeypatch.setattr(orchestrator_runner, "diff_artifact", lambda cwd, start_ref, end_ref="HEAD": "diff --git a/app.txt b/app.txt\n")
+    monkeypatch.setattr(
+        orchestrator_runner,
+        "dirty_worktree_scope",
+        lambda cwd, base, merge_base_ref=None: {"dirty_paths": ["app.txt"], "related_dirty_paths": ["app.txt"]},
+    )
+    state = _cycle(tmp_path, deslop_enabled=False, step_names=("broad-discovery", "precision-signoff"))
+    pending = mark_review_step_pending(
+        state,
+        round_id="phase_review-round-1",
+        lane="review_t1",
+        step_index=0,
+        step_name="broad-discovery",
+        reviewed_head="head-1",
+    )
+    findings = record_findings_decision(pending, round_id="phase_review-round-1", lane="review_t1", reviewed_head="head-1")
+    fixed = mark_fix_detected(findings, head="head-2")
+
+    with pytest.raises(ValueError, match="uncommitted changes in reviewed paths"):
+        orchestrator_runner.run_one_expensive_step(fixed, state_dir=tmp_path / "state")
+
+    assert followup_calls == []
+
+
+def test_runner_allows_followup_with_committed_diff_and_unrelated_dirty_changes(monkeypatch, tmp_path: Path) -> None:
+    followup_calls = _stub_followup(monkeypatch)
+    monkeypatch.setattr(orchestrator_runner, "current_head", lambda cwd: "head-2")
+    monkeypatch.setattr(orchestrator_runner, "merge_base", lambda cwd, left, right="HEAD": "base-1")
+    monkeypatch.setattr(orchestrator_runner, "diff_artifact", lambda cwd, start_ref, end_ref="HEAD": "diff --git a/app.txt b/app.txt\n")
+    monkeypatch.setattr(
+        orchestrator_runner,
+        "dirty_worktree_scope",
+        lambda cwd, base, merge_base_ref=None: {"dirty_paths": ["notes.txt"], "related_dirty_paths": [], "unrelated_dirty_paths": ["notes.txt"]},
+    )
+    state = _cycle(tmp_path, deslop_enabled=False, step_names=("broad-discovery", "precision-signoff"))
+    pending = mark_review_step_pending(
+        state,
+        round_id="phase_review-round-1",
+        lane="review_t1",
+        step_index=0,
+        step_name="broad-discovery",
+        reviewed_head="head-1",
+    )
+    findings = record_findings_decision(pending, round_id="phase_review-round-1", lane="review_t1", reviewed_head="head-1")
+    fixed = mark_fix_detected(findings, head="head-2")
+
+    result = orchestrator_runner.run_one_expensive_step(fixed, state_dir=tmp_path / "state")
+
+    assert result.ran_step is True
+    assert result.step == "review-followup"
+    assert len(followup_calls) == 1
+    assert followup_calls[0]["review_scope"]["allowed_dirty_paths"] == ["notes.txt"]

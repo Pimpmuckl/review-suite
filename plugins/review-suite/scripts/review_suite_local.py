@@ -32,6 +32,7 @@ from rollout_capture import (
 from review_suite_core import (
     dirty_worktree_scope,
     format_command,
+    has_worktree_changes,
     inspect_workflow_status,
     meaningful_worktree_status_entries,
     normalize_cwd,
@@ -259,21 +260,24 @@ def _base_branch_review_artifact(*, review_cwd: Path, base: str) -> tuple[str, d
     merge_base = _current_merge_base(review_cwd, base)
     reviewed_head = _current_reviewed_head(review_cwd)
     target_label = f"branch diff against base `{base}`"
-    return (
-        _run_git_artifact(
-            review_cwd,
-            ["git", "diff", "--find-renames", "--stat", "--patch", f"{merge_base}..HEAD"],
-            default_error=f"git diff {merge_base}..HEAD failed",
-        ),
-        {
-            "base": base,
-            "manual_prompt_mode": True,
-            "merge_base": merge_base,
-            "reviewed_head": reviewed_head,
-            "target_label": target_label,
-        },
-        target_label,
+    review_scope = {
+        "base": base,
+        "manual_prompt_mode": True,
+        "merge_base": merge_base,
+        "reviewed_head": reviewed_head,
+        "target_label": target_label,
+    }
+    diff_text = _run_git_artifact(
+        review_cwd,
+        ["git", "diff", "--find-renames", "--stat", "--patch", f"{merge_base}..HEAD"],
+        default_error=f"git diff {merge_base}..HEAD failed",
     )
+    if not diff_text.strip() and has_worktree_changes(review_cwd):
+        raise ValueError(
+            f"base review found no committed diff against `{base}`, but the worktree has uncommitted changes. "
+            "Commit the intended review changes or stash unrelated worktree changes, then rerun the emitted review.py command."
+        )
+    return diff_text, review_scope, target_label
 
 
 def _combined_review_instructions(*, standard_instructions: str, custom_instructions: str | None) -> str:
@@ -2536,14 +2540,29 @@ def ensure_clean_git_worktree(review_cwd: Path, *, allow_dirty: bool, review_sco
         )
         return
     scope = dict(review_scope or {})
+    allowed_dirty_paths = {
+        str(path).strip()
+        for path in list(scope.get("allowed_dirty_paths") or [])
+        if str(path).strip()
+    }
+    if allowed_dirty_paths:
+        dirty_paths = {
+            str(item.get("path") or "").strip()
+            for item in dirty_entries
+            if str(item.get("path") or "").strip()
+        }
+        if dirty_paths and dirty_paths <= allowed_dirty_paths:
+            return
     base = str(scope.get("base") or "").strip()
-    if base and not str(scope.get("commit") or "").strip() and not str(scope.get("commit_end") or "").strip():
+    if base:
+        allow_unrelated_dirty = bool(scope.get("allow_unrelated_dirty_paths"))
+        is_base_review = not str(scope.get("commit") or "").strip() and not str(scope.get("commit_end") or "").strip()
         dirty_scope = dirty_worktree_scope(
             review_cwd,
             base,
             merge_base_ref=str(scope.get("merge_base") or "").strip() or None,
         )
-        if bool(dirty_scope.get("all_dirty_paths_outside_branch_diff")):
+        if (is_base_review or allow_unrelated_dirty) and bool(dirty_scope.get("all_dirty_paths_outside_branch_diff")):
             return
     raise ValueError(
         "review-suite requires a clean worktree. Commit the slice before running a review round, or pass --allow-dirty to override."
