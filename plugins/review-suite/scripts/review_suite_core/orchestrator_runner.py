@@ -31,7 +31,7 @@ from .orchestrator_state import (
     review_profile_has_next_step,
 )
 from .paths import cwd_path_from_normalized
-from .workflow_state import current_head, diff_artifact, merge_base
+from .workflow_state import current_head, diff_artifact, dirty_worktree_scope, merge_base
 
 
 INITIAL_REVIEW_LANE = "review_t1"
@@ -440,6 +440,39 @@ def _followup_note(state: dict[str, Any], active: dict[str, Any], source_round_i
     return " ".join(parts)
 
 
+def _followup_diff_artifact(*, cwd: Path, since_head: str, base: str, merge_base_head: str) -> tuple[str, list[str]]:
+    committed_diff = diff_artifact(cwd, since_head, "HEAD")
+    dirty_scope = dirty_worktree_scope(cwd, base, merge_base_ref=merge_base_head)
+    dirty_paths = [
+        str(path)
+        for path in list(dirty_scope.get("dirty_paths") or [])
+        if str(path).strip()
+    ]
+    related_dirty_paths = [
+        str(path)
+        for path in list(dirty_scope.get("related_dirty_paths") or [])
+        if str(path).strip()
+    ]
+    if committed_diff.strip():
+        if related_dirty_paths:
+            raise ValueError(
+                "follow-up review found committed interdiff changes plus uncommitted changes in reviewed paths. "
+                "Commit the remaining fix changes or stash unrelated worktree changes, then rerun the emitted review.py --id command."
+            )
+        if dirty_paths:
+            return committed_diff, sorted(dirty_paths)
+        return committed_diff, []
+    if dirty_paths:
+        raise ValueError(
+            f"follow-up review found no committed interdiff after reviewed head {since_head}, "
+            "but the worktree has uncommitted changes. Commit the fix changes, then rerun the emitted review.py --id command."
+        )
+    raise ValueError(
+        f"follow-up review requires a non-empty diff after reviewed head {since_head}. "
+        "Commit the fixes, then rerun the emitted review.py --id command."
+    )
+
+
 def _run_followup_review_once(state: dict[str, Any], *, state_dir: Path) -> OrchestratorRunnerResult:
     active = _active_findings(state)
     source_round_id = str(active.get("round_id") or "").strip()
@@ -455,6 +488,7 @@ def _run_followup_review_once(state: dict[str, Any], *, state_dir: Path) -> Orch
         merge_base_head = merge_base(cwd, base, "HEAD")
     except ValueError:
         merge_base_head = _identity_text(state, "merge_base")
+    diff_text, allowed_dirty_paths = _followup_diff_artifact(cwd=cwd, since_head=since_head, base=base, merge_base_head=merge_base_head)
     review_scope = {
         "base": base,
         "commit": since_head,
@@ -465,11 +499,13 @@ def _run_followup_review_once(state: dict[str, Any], *, state_dir: Path) -> Orch
         "target_label": f"interdiff `{since_head}..{head}`",
         "source_round_id": source_round_id,
     }
+    if allowed_dirty_paths:
+        review_scope["allowed_dirty_paths"] = allowed_dirty_paths
     prompt = build_followup_prompt(
         since_head=since_head,
         head=head,
         note=_followup_note(state, active, source_round_id),
-        diff_text=diff_artifact(cwd, since_head, "HEAD"),
+        diff_text=diff_text,
     )
     if not prompt.strip():
         raise ValueError("follow-up review prompt must not be empty")

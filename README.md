@@ -36,6 +36,8 @@ Use `$review` for local review, `$review-state` to inspect progress, and `$revie
 
 Default local runs print reviewer text once in `Output:`, then one `Action.cmd`.
 
+Review orchestration expects committed review changes. If `git diff` is non-empty but `base..HEAD` is empty, commit the intended changes or stash unrelated worktree changes before rerunning the emitted command.
+
 Modes:
 
 - `brief`: tiny same-seam fix, docs/wording, focused regression proves it
@@ -71,13 +73,21 @@ Network behavior:
 
 ## Runtime Copies
 
+Installed cache paths are launcher paths. A git marketplace install usually launches from:
+
+```text
+~/.codex/plugins/cache/review-suite/review-suite/<version>/
+```
+
+Older local marketplace installs may launch from `~/.codex/plugins/cache/jonat-local/review-suite/local/`. Do not invoke scripts directly from `~/.codex/.tmp/marketplaces/review-suite`; that directory is Codex's marketplace source clone, not the stable plugin launcher surface.
+
 When Review Suite is launched from Codex's installed plugin cache, long-running entrypoints create or reuse a runtime copy under:
 
 ```text
 ~/.codex/plugin-runtimes/review-suite/<version-hash>/
 ```
 
-The installed cache stays a launcher surface. Existing review state remains under `~/.codex/state/review-suite`, and old runtime directories are not aggressively removed while Codex sessions may still be using them.
+The installed cache stays a launcher surface. Emitted `Action.cmd` values may point at the runtime copy after bootstrap; that is expected and avoids locking the installed cache on Windows. Existing review state remains under `~/.codex/state/review-suite`, and old runtime directories are not aggressively removed while Codex sessions may still be using them.
 
 ## Development
 
