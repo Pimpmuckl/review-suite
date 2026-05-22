@@ -133,7 +133,7 @@ function Remove-PathInside {
 function Remove-MarketplaceLocalArtifacts {
     param([Parameter(Mandatory = $true)][string]$TargetPath)
 
-    foreach ($name in ($marketplaceRootArtifactDirs + $marketplaceRecursiveArtifactDirs)) {
+    foreach ($name in $marketplaceRootArtifactDirs) {
         Remove-PathInside -Path (Join-Path $TargetPath $name) -Parent $TargetPath
     }
 
@@ -156,6 +156,179 @@ function Remove-MarketplaceLocalArtifacts {
     foreach ($file in $artifactFiles) {
         Remove-PathInside -Path $file.FullName -Parent $TargetPath
     }
+}
+
+function ConvertTo-MarketplaceRelativePath {
+    param([Parameter(Mandatory = $true)][string]$PathText)
+
+    $path = $PathText.Trim().Trim('"').Replace("\", "/")
+    if ($path.StartsWith("./")) {
+        $path = $path.Substring(2)
+    }
+    return $path.TrimEnd("/")
+}
+
+function Test-MarketplacePathIsKnownArtifact {
+    param([Parameter(Mandatory = $true)][string]$RelativePath)
+
+    $path = ConvertTo-MarketplaceRelativePath -PathText $RelativePath
+    if (-not $path) {
+        return $false
+    }
+    if ($path -eq ".codex-marketplace-install.json") {
+        return $true
+    }
+    foreach ($name in $marketplaceRootArtifactDirs) {
+        $prefix = "$name/"
+        if ($path.Equals($name, [System.StringComparison]::OrdinalIgnoreCase) -or
+            $path.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+            return $true
+        }
+    }
+    foreach ($name in $marketplaceRootArtifactFileNames) {
+        if ($path.Equals($name, [System.StringComparison]::OrdinalIgnoreCase)) {
+            return $true
+        }
+    }
+    $segments = @($path -split "/")
+    foreach ($name in $marketplaceRecursiveArtifactDirs) {
+        if ($segments -contains $name) {
+            return $true
+        }
+    }
+    $leaf = Split-Path -Leaf $path
+    foreach ($glob in $marketplaceRecursiveArtifactFileGlobs) {
+        if ($leaf -like $glob) {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Get-GitStatusPorcelainEntries {
+    param([Parameter(Mandatory = $true)][string]$TargetPath)
+
+    $processInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $processInfo.FileName = "git"
+    $processInfo.UseShellExecute = $false
+    $processInfo.RedirectStandardOutput = $true
+    $processInfo.RedirectStandardError = $true
+    $processInfo.CreateNoWindow = $true
+    foreach ($argument in @("-C", $TargetPath, "status", "--porcelain=v1", "-z", "--untracked-files=all")) {
+        [void]$processInfo.ArgumentList.Add($argument)
+    }
+
+    try {
+        $process = [System.Diagnostics.Process]::Start($processInfo)
+        $stdout = [System.IO.MemoryStream]::new()
+        $process.StandardOutput.BaseStream.CopyTo($stdout)
+        $process.StandardError.ReadToEnd() | Out-Null
+        $process.WaitForExit()
+        $exitCode = $process.ExitCode
+    }
+    catch {
+        return [pscustomobject]@{ Succeeded = $false; Entries = @() }
+    }
+    finally {
+        if ($process) {
+            $process.Dispose()
+        }
+    }
+
+    if ($exitCode -ne 0) {
+        return [pscustomobject]@{ Succeeded = $false; Entries = @() }
+    }
+
+    $segments = @([System.Text.Encoding]::UTF8.GetString($stdout.ToArray()) -split "`0" |
+        Where-Object { $_ -ne "" })
+    $entries = @()
+    for ($index = 0; $index -lt $segments.Count; $index++) {
+        $segment = [string]$segments[$index]
+        if ($segment.Length -lt 4) {
+            $entries += [pscustomobject]@{ StatusCode = ""; Paths = @(); Malformed = $true }
+            continue
+        }
+
+        $statusCode = $segment.Substring(0, 2).Trim()
+        $paths = @($segment.Substring(3))
+        if ($statusCode.StartsWith("R") -or $statusCode.StartsWith("C")) {
+            if ($index + 1 -ge $segments.Count) {
+                $entries += [pscustomobject]@{ StatusCode = $statusCode; Paths = $paths; Malformed = $true }
+                continue
+            }
+            $index++
+            $paths += [string]$segments[$index]
+        }
+        $entries += [pscustomobject]@{ StatusCode = $statusCode; Paths = $paths; Malformed = $false }
+    }
+
+    return [pscustomobject]@{ Succeeded = $true; Entries = $entries }
+}
+
+function Get-DirectoryFileSnapshot {
+    param([Parameter(Mandatory = $true)][string]$RootPath)
+
+    $root = (Resolve-Path -LiteralPath $RootPath).Path.TrimEnd("\", "/")
+    $snapshot = @{}
+    foreach ($file in Get-ChildItem -LiteralPath $root -File -Recurse -Force -ErrorAction SilentlyContinue) {
+        $relative = $file.FullName.Substring($root.Length).TrimStart("\", "/").Replace("\", "/")
+        $snapshot[$relative] = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash
+    }
+    return $snapshot
+}
+
+function Test-DirectoryMatchesSource {
+    param(
+        [Parameter(Mandatory = $true)][string]$SourcePath,
+        [Parameter(Mandatory = $true)][string]$TargetPath
+    )
+
+    $sourceSnapshot = Get-DirectoryFileSnapshot -RootPath $SourcePath
+    $targetSnapshot = Get-DirectoryFileSnapshot -RootPath $TargetPath
+    if ($sourceSnapshot.Count -ne $targetSnapshot.Count) {
+        return $false
+    }
+    foreach ($path in $sourceSnapshot.Keys) {
+        if (-not $targetSnapshot.ContainsKey($path)) {
+            return $false
+        }
+        if ($sourceSnapshot[$path] -ne $targetSnapshot[$path]) {
+            return $false
+        }
+    }
+    return $true
+}
+
+function Test-MarketplacePathMatchesSource {
+    param(
+        [Parameter(Mandatory = $true)][string]$TargetPath,
+        [Parameter(Mandatory = $true)][string]$RelativePath
+    )
+
+    $path = ConvertTo-MarketplaceRelativePath -PathText $RelativePath
+    if (-not $path) {
+        return $true
+    }
+
+    $sourcePath = Join-Path $repoRoot.Path $path
+    $targetFilePath = Join-Path $TargetPath $path
+    $sourceExists = Test-Path -LiteralPath $sourcePath
+    $targetExists = Test-Path -LiteralPath $targetFilePath
+    if (-not $sourceExists -and -not $targetExists) {
+        return $true
+    }
+    if ($sourceExists -and $targetExists) {
+        $sourceItem = Get-Item -LiteralPath $sourcePath
+        $targetItem = Get-Item -LiteralPath $targetFilePath
+        if ($sourceItem.PSIsContainer -and $targetItem.PSIsContainer) {
+            return Test-DirectoryMatchesSource -SourcePath $sourcePath -TargetPath $targetFilePath
+        }
+        if (-not $sourceItem.PSIsContainer -and -not $targetItem.PSIsContainer) {
+            return (Get-FileHash -LiteralPath $sourcePath -Algorithm SHA256).Hash -eq
+                (Get-FileHash -LiteralPath $targetFilePath -Algorithm SHA256).Hash
+        }
+    }
+    return $false
 }
 
 function Sync-MarketplaceSource {
@@ -197,6 +370,51 @@ function Sync-InstalledCache {
     Write-Output "synced installed cache: $resolvedTarget"
 }
 
+function Get-MarketplaceSourceDefaultSyncBlocker {
+    param([Parameter(Mandatory = $true)][string]$TargetPath)
+
+    if (-not (Test-Path -LiteralPath (Join-Path $TargetPath ".git"))) {
+        return ""
+    }
+
+    $branch = (@(& git -C $TargetPath branch --show-current 2>$null) -join "").Trim()
+    if ($LASTEXITCODE -ne 0) {
+        return "git status unavailable"
+    }
+    if (-not $branch) {
+        return "git checkout is detached"
+    }
+    if ($branch -ne "main") {
+        return "git branch is $branch, not main"
+    }
+
+    $status = Get-GitStatusPorcelainEntries -TargetPath $TargetPath
+    if (-not $status.Succeeded) {
+        return "git status unavailable"
+    }
+    $dirty = @($status.Entries | Where-Object {
+            $entry = $_
+            if ($entry.Malformed) {
+                return $true
+            }
+            $relativePaths = @($entry.Paths | ForEach-Object { ConvertTo-MarketplaceRelativePath -PathText $_ })
+            $nonArtifactPaths = @($relativePaths | Where-Object { -not (Test-MarketplacePathIsKnownArtifact -RelativePath $_) })
+            if ($nonArtifactPaths.Count -eq 0) {
+                return $false
+            }
+            foreach ($relativePath in $nonArtifactPaths) {
+                if (-not (Test-MarketplacePathMatchesSource -TargetPath $TargetPath -RelativePath $relativePath)) {
+                    return $true
+                }
+            }
+            return $false
+        })
+    if ($dirty.Count -gt 0) {
+        return "git worktree has local changes"
+    }
+    return ""
+}
+
 if ($MarketplaceSource) {
     if ($Marketplace -or $InstallLabel) {
         throw "-MarketplaceSource cannot be combined with -Marketplace or -InstallLabel."
@@ -211,7 +429,13 @@ if (-not $TargetRoot -and -not $Marketplace -and -not $InstallLabel) {
     if (Test-Path -LiteralPath $marketplaceSourceRoot) {
         $resolvedMarketplaceSourceRoot = Resolve-MarketplaceSourceRoot
         if (Test-ReviewSuiteRepoRoot -Path $resolvedMarketplaceSourceRoot) {
-            Sync-MarketplaceSource -TargetPath $resolvedMarketplaceSourceRoot
+            $defaultSyncBlocker = Get-MarketplaceSourceDefaultSyncBlocker -TargetPath $resolvedMarketplaceSourceRoot
+            if ($defaultSyncBlocker) {
+                Write-Output "skipped marketplace source: $resolvedMarketplaceSourceRoot $defaultSyncBlocker"
+            }
+            else {
+                Sync-MarketplaceSource -TargetPath $resolvedMarketplaceSourceRoot
+            }
         }
         else {
             Write-Output "skipped marketplace source: $resolvedMarketplaceSourceRoot is not a review-suite marketplace source clone"
