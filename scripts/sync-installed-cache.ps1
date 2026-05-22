@@ -12,6 +12,13 @@ $repoRoot = Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")
 $source = Resolve-Path -LiteralPath (Join-Path $repoRoot "plugins\review-suite")
 $cacheRoot = Join-Path $CodexHome "plugins\cache"
 $marketplacesRoot = Join-Path $CodexHome ".tmp\marketplaces"
+$marketplaceSourceRoot = Join-Path $marketplacesRoot "review-suite"
+$marketplaceRootArtifactDirs = @(".ask-pro", ".review-suite", ".tmp", "tmp", "state", ".venv")
+$marketplaceRootArtifactFileNames = @(".coverage", ".env", ".DS_Store", "Thumbs.db", "task_plan.md", "findings.md", "progress.md")
+$marketplaceRecursiveArtifactDirs = @("__pycache__", ".pytest_cache", ".ruff_cache")
+$marketplaceRecursiveArtifactFileGlobs = @("*.pyc")
+$marketplacePreservedDirs = @(".git")
+$marketplacePreservedFiles = @(".codex-marketplace-install.json")
 
 function Test-ReviewSuiteRoot {
     param([Parameter(Mandatory = $true)][string]$Path)
@@ -43,17 +50,7 @@ function Test-IsInsidePath {
         $resolvedChild.StartsWith("$resolvedParent/", [System.StringComparison]::OrdinalIgnoreCase)
 }
 
-function Resolve-TargetRoot {
-    if ($MarketplaceSource) {
-        if ($Marketplace -or $InstallLabel) {
-            throw "-MarketplaceSource cannot be combined with -Marketplace or -InstallLabel."
-        }
-        if ($TargetRoot) {
-            return (Resolve-Path -LiteralPath $TargetRoot).Path
-        }
-        return (Resolve-Path -LiteralPath (Join-Path $marketplacesRoot "review-suite")).Path
-    }
-
+function Resolve-InstalledTargetRoot {
     if ($TargetRoot) {
         return (Resolve-Path -LiteralPath $TargetRoot).Path
     }
@@ -85,31 +82,142 @@ function Resolve-TargetRoot {
     throw "Multiple review-suite cache roots found. Pass -TargetRoot or -Marketplace/-InstallLabel.`n$choices"
 }
 
-$target = Resolve-TargetRoot
-$resolvedTarget = (Resolve-Path -LiteralPath $target).Path
+function Resolve-MarketplaceSourceRoot {
+    if ($TargetRoot) {
+        return (Resolve-Path -LiteralPath $TargetRoot).Path
+    }
+    return (Resolve-Path -LiteralPath $marketplaceSourceRoot).Path
+}
 
-if ($MarketplaceSource) {
+function Invoke-CheckedRobocopy {
+    param(
+        [Parameter(Mandatory = $true)][string]$SourcePath,
+        [Parameter(Mandatory = $true)][string]$TargetPath,
+        [string[]]$ExcludeDirs = @(),
+        [string[]]$ExcludeFiles = @()
+    )
+
+    $args = @($SourcePath, $TargetPath, "/MIR")
+    if ($ExcludeDirs.Count -gt 0) {
+        $args += "/XD"
+        $args += $ExcludeDirs
+    }
+    if ($ExcludeFiles.Count -gt 0) {
+        $args += "/XF"
+        $args += $ExcludeFiles
+    }
+
+    & robocopy @args | Out-String | Write-Output
+    $code = $LASTEXITCODE
+    if ($code -ge 8) {
+        throw "robocopy failed with exit code $code"
+    }
+}
+
+function Remove-PathInside {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Parent
+    )
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return
+    }
+    $resolved = (Resolve-Path -LiteralPath $Path).Path
+    if (-not (Test-IsInsidePath -Child $resolved -Parent $Parent)) {
+        throw "Refusing to remove path outside marketplace source: $resolved"
+    }
+    Remove-Item -LiteralPath $resolved -Recurse -Force
+}
+
+function Remove-MarketplaceLocalArtifacts {
+    param([Parameter(Mandatory = $true)][string]$TargetPath)
+
+    foreach ($name in ($marketplaceRootArtifactDirs + $marketplaceRecursiveArtifactDirs)) {
+        Remove-PathInside -Path (Join-Path $TargetPath $name) -Parent $TargetPath
+    }
+
+    foreach ($name in $marketplaceRootArtifactFileNames) {
+        Remove-PathInside -Path (Join-Path $TargetPath $name) -Parent $TargetPath
+    }
+
+    $artifactDirs = @(Get-ChildItem -LiteralPath $TargetPath -Directory -Recurse -Force -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -in $marketplaceRecursiveArtifactDirs } |
+        Sort-Object FullName -Descending)
+    foreach ($dir in $artifactDirs) {
+        Remove-PathInside -Path $dir.FullName -Parent $TargetPath
+    }
+
+    $artifactFiles = @(Get-ChildItem -LiteralPath $TargetPath -File -Recurse -Force -ErrorAction SilentlyContinue |
+        Where-Object {
+            $name = $_.Name
+            $marketplaceRecursiveArtifactFileGlobs | Where-Object { $name -like $_ }
+        })
+    foreach ($file in $artifactFiles) {
+        Remove-PathInside -Path $file.FullName -Parent $TargetPath
+    }
+}
+
+function Sync-MarketplaceSource {
+    param([Parameter(Mandatory = $true)][string]$TargetPath)
+
+    $resolvedTarget = (Resolve-Path -LiteralPath $TargetPath).Path
     if (-not (Test-ReviewSuiteRepoRoot -Path $resolvedTarget)) {
         throw "Target is not a review-suite marketplace source clone: $resolvedTarget"
     }
     if (-not (Test-IsInsidePath -Child $resolvedTarget -Parent $marketplacesRoot)) {
         throw "Refusing to sync marketplace source outside Codex marketplaces temp root: $resolvedTarget"
     }
-    robocopy $repoRoot.Path $resolvedTarget /MIR /XD .git __pycache__ .pytest_cache .tmp /XF "*.pyc" ".codex-marketplace-install.json" | Out-String | Write-Output
+    $rootArtifactSourceDirs = $marketplaceRootArtifactDirs | ForEach-Object { Join-Path $repoRoot.Path $_ }
+    $rootArtifactSourceFiles = $marketplaceRootArtifactFileNames | ForEach-Object { Join-Path $repoRoot.Path $_ }
+    Invoke-CheckedRobocopy `
+        -SourcePath $repoRoot.Path `
+        -TargetPath $resolvedTarget `
+        -ExcludeDirs ($marketplacePreservedDirs + $marketplaceRecursiveArtifactDirs + $rootArtifactSourceDirs) `
+        -ExcludeFiles ($marketplaceRecursiveArtifactFileGlobs + $marketplacePreservedFiles + $rootArtifactSourceFiles)
+    Remove-MarketplaceLocalArtifacts -TargetPath $resolvedTarget
+    Write-Output "synced marketplace source: $resolvedTarget"
 }
-else {
+
+function Sync-InstalledCache {
+    param([Parameter(Mandatory = $true)][string]$TargetPath)
+
+    $resolvedTarget = (Resolve-Path -LiteralPath $TargetPath).Path
     if (-not (Test-ReviewSuiteRoot -Path $resolvedTarget)) {
         throw "Target is not an installed review-suite plugin root: $resolvedTarget"
     }
     if (-not (Test-IsInsidePath -Child $resolvedTarget -Parent $cacheRoot)) {
         throw "Refusing to sync outside Codex plugin cache: $resolvedTarget"
     }
-    robocopy $source.Path $resolvedTarget /MIR /XD __pycache__ .pytest_cache /XF "*.pyc" | Out-String | Write-Output
+    Invoke-CheckedRobocopy `
+        -SourcePath $source.Path `
+        -TargetPath $resolvedTarget `
+        -ExcludeDirs @("__pycache__", ".pytest_cache", ".ruff_cache") `
+        -ExcludeFiles @("*.pyc")
+    Write-Output "synced installed cache: $resolvedTarget"
 }
 
-$code = $LASTEXITCODE
-if ($code -ge 8) {
-    throw "robocopy failed with exit code $code"
+if ($MarketplaceSource) {
+    if ($Marketplace -or $InstallLabel) {
+        throw "-MarketplaceSource cannot be combined with -Marketplace or -InstallLabel."
+    }
+    Sync-MarketplaceSource -TargetPath (Resolve-MarketplaceSourceRoot)
+    return
 }
 
-Write-Output "synced: $resolvedTarget"
+Sync-InstalledCache -TargetPath (Resolve-InstalledTargetRoot)
+
+if (-not $TargetRoot -and -not $Marketplace -and -not $InstallLabel) {
+    if (Test-Path -LiteralPath $marketplaceSourceRoot) {
+        $resolvedMarketplaceSourceRoot = Resolve-MarketplaceSourceRoot
+        if (Test-ReviewSuiteRepoRoot -Path $resolvedMarketplaceSourceRoot) {
+            Sync-MarketplaceSource -TargetPath $resolvedMarketplaceSourceRoot
+        }
+        else {
+            Write-Output "skipped marketplace source: $resolvedMarketplaceSourceRoot is not a review-suite marketplace source clone"
+        }
+    }
+    else {
+        Write-Output "skipped marketplace source: $marketplaceSourceRoot not found"
+    }
+}
