@@ -144,6 +144,10 @@ def test_build_local_review_request_pr_base_without_custom_instructions_stays_na
             return subprocess.CompletedProcess(args, 0, stdout="merge-base-sha\n", stderr="")
         if args[:3] == ["git", "rev-parse", "HEAD"]:
             return subprocess.CompletedProcess(args, 0, stdout="head-sha\n", stderr="")
+        if args[:2] == ["git", "diff"]:
+            if "--quiet" in args:
+                return subprocess.CompletedProcess(args, 1, stdout="", stderr="")
+            return subprocess.CompletedProcess(args, 0, stdout="diff --git a/app.py b/app.py\n", stderr="")
         raise AssertionError(args)
 
     monkeypatch.setattr(review_suite_local.subprocess, "run", fake_run)
@@ -161,7 +165,11 @@ def test_build_local_review_request_pr_base_without_custom_instructions_stays_na
         custom_instructions=None,
     )
 
-    assert calls == [["git", "merge-base", "main", "HEAD"], ["git", "rev-parse", "HEAD"]]
+    assert calls == [
+        ["git", "merge-base", "main", "HEAD"],
+        ["git", "rev-parse", "HEAD"],
+        ["git", "diff", "--quiet", "merge-base-sha..HEAD"],
+    ]
     assert uses_native_base_review(request.review_scope)
     assert request.review_scope["base"] == "main"
     assert request.review_scope["merge_base"] == "merge-base-sha"
@@ -242,6 +250,32 @@ def test_build_local_review_request_pr_base_with_empty_committed_diff_reports_di
     assert calls[2] == ["git", "diff", "--find-renames", "--stat", "--patch", "head-sha..HEAD"]
 
 
+def test_build_local_review_request_native_pr_base_with_empty_committed_diff_reports_dirty_recovery(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    def fake_run(args, **kwargs):
+        if args[:2] == ["git", "merge-base"]:
+            return subprocess.CompletedProcess(args, 0, stdout="head-sha\n", stderr="")
+        if args[:3] == ["git", "rev-parse", "HEAD"]:
+            return subprocess.CompletedProcess(args, 0, stdout="head-sha\n", stderr="")
+        if args[:2] == ["git", "diff"]:
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+        raise AssertionError(args)
+
+    monkeypatch.setattr(review_suite_local.subprocess, "run", fake_run)
+    monkeypatch.setattr(review_suite_local, "has_worktree_changes", lambda review_cwd: True)
+
+    with pytest.raises(ValueError, match="no committed diff"):
+        build_local_review_request(
+            review_cwd=tmp_path,
+            base="main",
+            commit_values=None,
+            instruction_builder=build_pr_instructions,
+            custom_instructions=None,
+        )
+
+
 def test_build_local_review_request_pr_base_without_custom_instructions_stays_native_for_unrelated_dirty(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -254,6 +288,10 @@ def test_build_local_review_request_pr_base_without_custom_instructions_stays_na
             return subprocess.CompletedProcess(args, 0, stdout="merge-base-sha\n", stderr="")
         if args[:3] == ["git", "rev-parse", "HEAD"]:
             return subprocess.CompletedProcess(args, 0, stdout="head-sha\n", stderr="")
+        if args[:2] == ["git", "diff"]:
+            if "--quiet" in args:
+                return subprocess.CompletedProcess(args, 1, stdout="", stderr="")
+            return subprocess.CompletedProcess(args, 0, stdout="diff --git a/app.py b/app.py\n", stderr="")
         raise AssertionError(args)
 
     monkeypatch.setattr(review_suite_local.subprocess, "run", fake_run)
@@ -383,6 +421,10 @@ def test_t3_t4_without_custom_instructions_keep_native_base_review(
             return subprocess.CompletedProcess(args, 0, stdout="feature/test\n", stderr="")
         if args[:3] == ["git", "rev-parse", "HEAD"]:
             return subprocess.CompletedProcess(args, 0, stdout="head-sha\n", stderr="")
+        if args[:2] == ["git", "diff"]:
+            if "--quiet" in args:
+                return subprocess.CompletedProcess(args, 1, stdout="", stderr="")
+            return subprocess.CompletedProcess(args, 0, stdout="diff --git a/app.py b/app.py\n", stderr="")
         raise AssertionError(args)
 
     monkeypatch.setattr(review_suite_local.subprocess, "run", fake_run)
@@ -435,6 +477,10 @@ def test_t2_t4_pass_champion_override_to_gate_runner(
             return subprocess.CompletedProcess(args, 0, stdout="feature/test\n", stderr="")
         if args[:3] == ["git", "rev-parse", "HEAD"]:
             return subprocess.CompletedProcess(args, 0, stdout="head-sha\n", stderr="")
+        if args[:2] == ["git", "diff"]:
+            if "--quiet" in args:
+                return subprocess.CompletedProcess(args, 1, stdout="", stderr="")
+            return subprocess.CompletedProcess(args, 0, stdout="diff --git a/app.py b/app.py\n", stderr="")
         raise AssertionError(args)
 
     monkeypatch.setattr(review_suite_local.subprocess, "run", fake_run)
@@ -479,6 +525,8 @@ def test_t3_t4_with_custom_instructions_switch_to_manual_merge_base_review(
         if args[:3] == ["git", "rev-parse", "HEAD"]:
             return subprocess.CompletedProcess(args, 0, stdout="head-sha\n", stderr="")
         if args[:2] == ["git", "diff"]:
+            if "--quiet" in args:
+                return subprocess.CompletedProcess(args, 1, stdout="", stderr="")
             return subprocess.CompletedProcess(args, 0, stdout="diff --git a/x b/x\n", stderr="")
         raise AssertionError(args)
 

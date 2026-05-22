@@ -396,7 +396,6 @@ def test_ensure_clean_git_worktree_allows_unrelated_dirty_files_for_base_review(
             "unrelated_dirty_paths": ["docs/notes.md"],
         },
     )
-
     ensure_clean_git_worktree(tmp_path, allow_dirty=False, review_scope={"base": "main", "merge_base": "base123"})
 
 
@@ -420,7 +419,7 @@ def test_ensure_clean_git_worktree_still_blocks_related_dirty_files_for_base_rev
         ensure_clean_git_worktree(tmp_path, allow_dirty=False, review_scope={"base": "main", "merge_base": "base123"})
 
 
-def test_ensure_clean_git_worktree_allows_explicit_dirty_paths_for_commit_review(
+def test_ensure_clean_git_worktree_allows_unrelated_dirty_files_for_flagged_commit_review(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -428,7 +427,13 @@ def test_ensure_clean_git_worktree_allows_explicit_dirty_paths_for_commit_review
         "review_suite_local.meaningful_worktree_status_entries",
         lambda review_cwd: [{"code": " M", "path": "docs/notes.md"}],
     )
-
+    monkeypatch.setattr(
+        "review_suite_local.dirty_worktree_scope",
+        lambda review_cwd, base, merge_base_ref=None: {
+            "all_dirty_paths_outside_branch_diff": True,
+            "unrelated_dirty_paths": ["docs/notes.md"],
+        },
+    )
     ensure_clean_git_worktree(
         tmp_path,
         allow_dirty=False,
@@ -437,7 +442,7 @@ def test_ensure_clean_git_worktree_allows_explicit_dirty_paths_for_commit_review
             "commit": "head-1",
             "commit_end": "head-2",
             "merge_base": "base123",
-            "allowed_dirty_paths": ["docs/notes.md"],
+            "allow_unrelated_dirty_paths": True,
         },
     )
 

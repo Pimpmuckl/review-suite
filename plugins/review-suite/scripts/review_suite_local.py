@@ -230,6 +230,46 @@ def _current_merge_base(review_cwd: Path, base: str) -> str:
     return merge_base
 
 
+def _has_committed_diff(review_cwd: Path, start_ref: str, end_ref: str = "HEAD") -> bool:
+    proc = subprocess.run(
+        ["git", "diff", "--quiet", f"{start_ref}..{end_ref}"],
+        cwd=str(review_cwd),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    if proc.returncode == 0:
+        return False
+    if proc.returncode == 1:
+        return True
+    raise ValueError((proc.stderr or proc.stdout or "").strip() or f"git diff --quiet {start_ref}..{end_ref} failed")
+
+
+def _base_review_scope(*, review_cwd: Path, base: str, manual_prompt_mode: bool) -> tuple[dict[str, Any], str]:
+    merge_base = _current_merge_base(review_cwd, base)
+    reviewed_head = _current_reviewed_head(review_cwd)
+    target_label = f"branch diff against base `{base}`" if manual_prompt_mode else f"base `{base}`"
+    review_scope = {
+        "base": base,
+        "merge_base": merge_base,
+        "reviewed_head": reviewed_head,
+        "target_label": target_label,
+    }
+    if manual_prompt_mode:
+        review_scope["manual_prompt_mode"] = True
+    return review_scope, target_label
+
+
+def _ensure_base_review_has_committed_diff_or_clean_worktree(*, review_cwd: Path, base: str, merge_base: str) -> None:
+    if not _has_committed_diff(review_cwd, merge_base, "HEAD") and has_worktree_changes(review_cwd):
+        raise ValueError(
+            f"base review found no committed diff against `{base}`, but the worktree has uncommitted changes. "
+            "Commit the intended review changes or stash unrelated worktree changes, then rerun the emitted review.py command."
+        )
+
+
 def _commit_review_artifact(*, review_cwd: Path, commit: str, commit_end: str | None) -> tuple[str, dict[str, Any], str]:
     if commit_end:
         return (
@@ -257,16 +297,8 @@ def _commit_review_artifact(*, review_cwd: Path, commit: str, commit_end: str | 
 
 
 def _base_branch_review_artifact(*, review_cwd: Path, base: str) -> tuple[str, dict[str, Any], str]:
-    merge_base = _current_merge_base(review_cwd, base)
-    reviewed_head = _current_reviewed_head(review_cwd)
-    target_label = f"branch diff against base `{base}`"
-    review_scope = {
-        "base": base,
-        "manual_prompt_mode": True,
-        "merge_base": merge_base,
-        "reviewed_head": reviewed_head,
-        "target_label": target_label,
-    }
+    review_scope, target_label = _base_review_scope(review_cwd=review_cwd, base=base, manual_prompt_mode=True)
+    merge_base = str(review_scope["merge_base"])
     diff_text = _run_git_artifact(
         review_cwd,
         ["git", "diff", "--find-renames", "--stat", "--patch", f"{merge_base}..HEAD"],
@@ -381,13 +413,13 @@ def build_local_review_request(
             diff_text=diff_text,
         )
     if custom_instructions is None:
+        native_scope, _target_label = _base_review_scope(review_cwd=review_cwd, base=str(base), manual_prompt_mode=False)
+        _ensure_base_review_has_committed_diff_or_clean_worktree(
+            review_cwd=review_cwd,
+            base=str(base),
+            merge_base=str(native_scope["merge_base"]),
+        )
         base_dirty_scope = dirty_worktree_scope(review_cwd, str(base))
-        native_scope = {
-            "base": str(base),
-            "merge_base": _current_merge_base(review_cwd, str(base)),
-            "reviewed_head": _current_reviewed_head(review_cwd),
-            "target_label": f"base `{base}`",
-        }
         if bool(base_dirty_scope.get("all_dirty_paths_outside_branch_diff")):
             unrelated_paths = list(base_dirty_scope.get("unrelated_dirty_paths") or [])
             native_scope["ignored_dirty_path_count"] = len(unrelated_paths)
@@ -2540,23 +2572,12 @@ def ensure_clean_git_worktree(review_cwd: Path, *, allow_dirty: bool, review_sco
         )
         return
     scope = dict(review_scope or {})
-    allowed_dirty_paths = {
-        str(path).strip()
-        for path in list(scope.get("allowed_dirty_paths") or [])
-        if str(path).strip()
-    }
-    if allowed_dirty_paths:
-        dirty_paths = {
-            str(item.get("path") or "").strip()
-            for item in dirty_entries
-            if str(item.get("path") or "").strip()
-        }
-        if dirty_paths and dirty_paths <= allowed_dirty_paths:
-            return
     base = str(scope.get("base") or "").strip()
     if base:
         allow_unrelated_dirty = bool(scope.get("allow_unrelated_dirty_paths"))
-        is_base_review = not str(scope.get("commit") or "").strip() and not str(scope.get("commit_end") or "").strip()
+        commit = str(scope.get("commit") or "").strip()
+        commit_end = str(scope.get("commit_end") or "").strip()
+        is_base_review = not commit and not commit_end
         dirty_scope = dirty_worktree_scope(
             review_cwd,
             base,
