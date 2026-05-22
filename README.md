@@ -103,13 +103,13 @@ Compile scripts:
 python -m py_compile plugins/review-suite/scripts/*.py plugins/review-suite/scripts/review_suite_core/*.py
 ```
 
-Sync a local installed plugin cache after source edits:
+Sync the local installed plugin cache after source edits. When the git marketplace source clone exists, the default command syncs that clone too so local plugin add/refresh paths see the same files:
 
 ```powershell
 .\scripts\sync-installed-cache.ps1
 ```
 
-Sync the git marketplace source clone used by `codex plugin marketplace add`:
+Sync only the git marketplace source clone used by `codex plugin marketplace add`:
 
 ```powershell
 .\scripts\sync-installed-cache.ps1 -MarketplaceSource
