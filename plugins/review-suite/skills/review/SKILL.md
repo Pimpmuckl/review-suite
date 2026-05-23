@@ -24,6 +24,7 @@ Mode:
 
 Rules:
 - Run focused validation before dispatch; start slow full-suite/CI after dispatch and track final status.
+- To replace an existing ladder with stricter review, use `review.py --id <id> --restart-mode deep --reason "<why>"` while the original repo/base/branch/head/merge-base still match and the worktree is clean; plain `--mode deep --cd <repo-root>` is not a restart.
 - Review orchestration expects committed review changes. If `git diff` is non-empty but `base..HEAD` is empty, commit intended changes or stash unrelated worktree changes before rerunning.
 - Read `Output:`, then follow the emitted `Action.cmd`.
 - Classify reviewer output before coding valid findings.

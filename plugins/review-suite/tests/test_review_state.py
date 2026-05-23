@@ -247,6 +247,7 @@ def test_review_state_status_surfaces_orchestrator_progress(monkeypatch, tmp_pat
         {
             "public_id": "rvw_progress",
             "stage": "decision-pending",
+            "mode": {"requested": "normal", "effective": "normal"},
             "identity": {
                 "cwd": str(review_state.normalize_review_cwd_value(repo)),
                 "base": "main",
@@ -294,9 +295,23 @@ def test_review_state_status_surfaces_orchestrator_progress(monkeypatch, tmp_pat
     assert "reason" not in emitted[0]
     assert "--id rvw_progress --decision clean" in str(emitted[0]["Action"]["cmd"])
     assert "--id rvw_progress --decision findings" in str(emitted[0]["Action"]["alt"])
+    assert "--id rvw_progress --restart-mode deep --reason REASON" in str(emitted[0]["Action"]["restart"]["cmd"])
+    assert emitted[0]["Action"]["restart"]["mode"] == "deep"
     assert "--state-dir" in str(emitted[0]["Action"]["cmd"])
     assert str(state_dir.resolve(strict=False)) in str(emitted[0]["Action"]["cmd"])
     assert "review_t1.py" not in str(emitted[0]["Action"])
+
+
+def test_orchestrator_action_routes_superseded_reviews(tmp_path: Path) -> None:
+    action = review_state._orchestrator_action(
+        {"stage": "aborted", "superseded_by": {"review": "rvw_new"}},
+        "rvw_old",
+        state_dir=tmp_path / "state",
+    )
+
+    assert "--id rvw_new" in str(action["cmd"])
+    assert "superseded" in str(action["note"])
+    assert "restart" not in action
 
 
 def test_review_state_status_ignores_stale_green_orchestrator_cycle(monkeypatch, tmp_path: Path) -> None:

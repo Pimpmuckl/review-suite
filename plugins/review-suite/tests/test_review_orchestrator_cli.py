@@ -204,6 +204,12 @@ def _cycle_payload(state_dir: Path, public_id: str) -> dict[str, object]:
     return json.loads((state_dir / "orchestrator" / "cycles" / f"{cycle_key}.json").read_text(encoding="utf-8"))
 
 
+def _write_cycle_payload(state_dir: Path, public_id: str, payload: dict[str, object]) -> None:
+    index = json.loads((state_dir / "orchestrator" / "index.json").read_text(encoding="utf-8"))
+    cycle_key = index["ids"][public_id]
+    (state_dir / "orchestrator" / "cycles" / f"{cycle_key}.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
 def _gate_signoff_decisions(state_dir: Path) -> list[dict[str, object]]:
     path = state_dir / "gate_signoffs.jsonl"
     if not path.exists():
@@ -483,10 +489,205 @@ def test_create_resume_and_id_reprint_use_one_pending_action(monkeypatch: pytest
     assert len(review_calls) == 2
 
 
+def test_restart_mode_supersedes_cycle_and_starts_fresh_deep_ladder(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    deslop_calls = _stub_deslop(monkeypatch)
+    review_calls = _stub_review(monkeypatch, "normal-round-1", "deep-round-1")
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/restart-deep")
+    _commit_file(repo, "app.txt", "feature\n", "feature")
+
+    _, created = _run_review(
+        monkeypatch,
+        ["--mode", "normal", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)],
+    )
+    old_id = str(created["review"])
+    _run_review(monkeypatch, ["--id", old_id, "--state-dir", str(state_dir)])
+
+    exit_code, restarted = _run_review(
+        monkeypatch,
+        [
+            "--id",
+            old_id,
+            "--restart-mode",
+            "deep",
+            "--reason",
+            "github review had many suspicious notes",
+            "--state-dir",
+            str(state_dir),
+        ],
+    )
+
+    new_id = str(restarted["review"])
+    assert exit_code == 0
+    assert new_id != old_id
+    assert f"--id {new_id}" in str(restarted["Action"]["cmd"])
+    assert len(deslop_calls) == 2
+    assert len(review_calls) == 1
+    assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 2
+
+    old_state = _cycle_payload(state_dir, old_id)
+    new_state = _cycle_payload(state_dir, new_id)
+    assert old_state["stage"] == "aborted"
+    assert old_state["recovery"]["status"] == "aborted"
+    assert old_state["superseded_by"] == {
+        "review": new_id,
+        "cycle_key": new_state["cycle_key"],
+        "mode": "deep",
+        "reason": "github review had many suspicious notes",
+    }
+    assert new_state["mode"] == {"requested": "deep", "effective": "deep"}
+    assert new_state["identity"] == old_state["identity"]
+    assert new_state["cycle_key"] != old_state["cycle_key"]
+    assert new_state["restart"]["token"] == f"{old_state['cycle_key']}:deep"
+    assert new_state["restart"]["supersedes"] == old_id
+    assert new_state["restart"]["supersedes_cycle_key"] == old_state["cycle_key"]
+    assert new_state["restart"]["from_mode"] == "normal"
+    assert [step["name"] for step in new_state["review_plan"]["steps"]] == [
+        "broad-discovery",
+        "deep-discovery",
+        "deep-signoff",
+    ]
+
+    old_state_without_redirect = dict(old_state)
+    old_state_without_redirect.pop("superseded_by")
+    _write_cycle_payload(state_dir, old_id, old_state_without_redirect)
+    _, retry = _run_review(
+        monkeypatch,
+        [
+            "--id",
+            old_id,
+            "--restart-mode",
+            "deep",
+            "--reason",
+            "retry after partial write",
+            "--state-dir",
+            str(state_dir),
+        ],
+    )
+    assert retry["review"] == new_id
+    assert len(deslop_calls) == 2
+    assert len(review_calls) == 1
+
+    _, old_reprint = _run_review(monkeypatch, ["--id", old_id, "--state-dir", str(state_dir)])
+    assert f"--id {new_id}" in str(old_reprint["Action"]["cmd"])
+    assert "superseded" in str(old_reprint["Action"]["note"])
+
+    _, deep_review = _run_review(monkeypatch, ["--id", new_id, "--state-dir", str(state_dir)])
+    assert "--decision clean" in str(deep_review["Action"]["cmd"])
+    assert len(review_calls) == 2
+    assert review_calls[1]["step_name"] == "broad-discovery"
+    assert review_calls[1]["step_position"] == 1
+    assert review_calls[1]["step_total"] == 3
+
+
+def test_restart_mode_requires_escalation_reason_and_stricter_mode(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _stub_deslop(monkeypatch)
+    _stub_review(monkeypatch)
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+
+    _, created = _run_review(
+        monkeypatch,
+        ["--mode", "normal", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)],
+    )
+    public_id = str(created["review"])
+
+    messages: list[str] = []
+    monkeypatch.setattr(review, "emit_error", lambda message, **kwargs: messages.append(str(message)) or 2)
+
+    monkeypatch.setattr(sys, "argv", ["review.py", "--id", public_id, "--restart-mode", "deep", "--state-dir", str(state_dir)])
+    assert review.main() == 2
+    assert messages[-1] == "--reason is required for --restart-mode"
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["review.py", "--id", public_id, "--restart-mode", "brief", "--reason", "try downgrade", "--state-dir", str(state_dir)],
+    )
+    assert review.main() == 2
+    assert "--restart-mode must increase strictness" in messages[-1]
+
+
+def test_restart_mode_rejects_dirty_worktree(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _stub_deslop(monkeypatch)
+    _stub_review(monkeypatch)
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+
+    _, created = _run_review(
+        monkeypatch,
+        ["--mode", "normal", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)],
+    )
+    public_id = str(created["review"])
+    (repo / "app.txt").write_text("dirty\n", encoding="utf-8")
+
+    messages: list[str] = []
+    monkeypatch.setattr(review, "emit_error", lambda message, **kwargs: messages.append(str(message)) or 2)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["review.py", "--id", public_id, "--restart-mode", "deep", "--reason", "rerun deeper", "--state-dir", str(state_dir)],
+    )
+
+    assert review.main() == 2
+    assert messages[-1] == "cannot restart review cycle with a dirty worktree; commit or stash changes, then rerun"
+    assert "superseded_by" not in _cycle_payload(state_dir, public_id)
+    assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 1
+
+
+def test_restart_mode_rejects_changed_head(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _stub_deslop(monkeypatch)
+    _stub_review(monkeypatch)
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+
+    _, created = _run_review(
+        monkeypatch,
+        ["--mode", "normal", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)],
+    )
+    public_id = str(created["review"])
+    _commit_file(repo, "app.txt", "changed head\n", "change head")
+
+    messages: list[str] = []
+    monkeypatch.setattr(review, "emit_error", lambda message, **kwargs: messages.append(str(message)) or 2)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["review.py", "--id", public_id, "--restart-mode", "deep", "--reason", "rerun deeper", "--state-dir", str(state_dir)],
+    )
+
+    assert review.main() == 2
+    assert messages[-1] == "cannot restart review cycle after HEAD changed; start a new review instead"
+    assert "superseded_by" not in _cycle_payload(state_dir, public_id)
+    assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 1
+
+
 def test_review_orchestrator_help_hides_internal_selection() -> None:
     help_text = review.build_parser().format_help()
 
     assert "--mode" in help_text
+    assert "--restart-mode" in help_text
     assert "--selection" not in help_text
     assert "--state-dir" not in help_text
 

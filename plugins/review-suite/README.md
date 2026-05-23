@@ -24,6 +24,14 @@ codex plugin add review-suite@review-suite
 - `deep`: leases, retries, queues, terminal state, schema/data ownership, or security.
 - `emergency`: blocked stack/local run; fix now and soak after.
 
+To explicitly replace an existing local review ladder with a stricter one, use the selected review id:
+
+```powershell
+<python> <review-suite-plugin-root>/scripts/review.py --id rvw_xxx --restart-mode deep --reason "why this run needs stricter review"
+```
+
+`--restart-mode` only allows strictness escalation (`brief` to `normal`/`deep`, or `normal` to `deep`). The old review is marked superseded, and the replacement review starts as a fresh ladder for the same repo/base/branch/head/merge-base. The worktree must be clean.
+
 ## Rules
 
 - Start with `--mode brief|normal|deep|emergency`.
@@ -40,6 +48,7 @@ codex plugin add review-suite@review-suite
 ```powershell
 <python> <review-suite-plugin-root>/scripts/review.py --mode brief|normal|deep|emergency --cd <repo-root> --base main
 <python> <review-suite-plugin-root>/scripts/review.py --id <id> --decision clean|findings
+<python> <review-suite-plugin-root>/scripts/review.py --id <id> --restart-mode deep --reason "why this run needs stricter review"
 <python> <review-suite-plugin-root>/scripts/review_github.py run --cd <repo-root>
 ```
 

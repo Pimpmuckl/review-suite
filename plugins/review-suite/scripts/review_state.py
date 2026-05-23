@@ -11,6 +11,7 @@ from review_suite_runtime_bootstrap import bootstrap_from_installed_cache
 bootstrap_from_installed_cache(__file__)
 
 from review_suite_core import AxiArgumentParser, emit_error, emit_toon, format_command, inspect_workflow_status, resolve_repo_root
+from review_suite_core.orchestrator_profiles import RESTART_MODE_ORDER
 from review_gate import gate_signoff_action_payload, gate_signoff_decisions_by_round, pending_gate_signoff_records
 from review_suite_local import (
     default_state_dir,
@@ -263,6 +264,20 @@ def _review_command(public_id: str, *, state_dir: Path, extra: tuple[str, ...] =
     )
 
 
+def _restart_deep_action(state: dict[str, object], public_id: str, *, state_dir: Path) -> dict[str, object] | None:
+    stage = str(state.get("stage") or "").strip()
+    if stage in ORCHESTRATOR_HIDDEN_STAGES or isinstance(state.get("superseded_by"), dict):
+        return None
+    mode = str(dict(state.get("mode") or {}).get("effective") or dict(state.get("mode") or {}).get("requested") or "").strip()
+    if mode not in RESTART_MODE_ORDER or RESTART_MODE_ORDER[mode] >= RESTART_MODE_ORDER["deep"]:
+        return None
+    return {
+        "cmd": _review_command(public_id, state_dir=state_dir, extra=("--restart-mode", "deep", "--reason", "REASON")),
+        "mode": "deep",
+        "note": "Use only for explicit escalation; replace REASON.",
+    }
+
+
 def _orchestrator_cycles(state_dir: Path) -> list[dict[str, object]]:
     cycles: list[dict[str, object]] = []
     for path in sorted((state_dir / "orchestrator" / "cycles").glob("*.json")):
@@ -316,18 +331,26 @@ def _orchestrator_progress_label(state: dict[str, object]) -> str | None:
 
 def _orchestrator_action(state: dict[str, object], public_id: str, *, state_dir: Path) -> dict[str, object]:
     stage = str(state.get("stage") or "").strip()
+    superseded_by = state.get("superseded_by")
+    if stage == "aborted" and isinstance(superseded_by, dict):
+        replacement = str(superseded_by.get("review") or "").strip()
+        if replacement:
+            return {
+                "cmd": _review_command(replacement, state_dir=state_dir),
+                "note": f"Review {public_id} was superseded by {replacement}.",
+            }
     if stage == "decision-pending":
-        return {
+        action: dict[str, object] = {
             "cmd": _review_command(public_id, state_dir=state_dir, extra=("--decision", "clean")),
             "alt": _review_command(public_id, state_dir=state_dir, extra=("--decision", "findings")),
         }
-    if stage == "fix-pending":
-        return {
+    elif stage == "fix-pending":
+        action = {
             "cmd": _review_command(public_id, state_dir=state_dir),
             "note": "Fix valid findings, then rerun this command.",
         }
-    if stage in {"review-green", "local-green-handoff"}:
-        action: dict[str, object] = {
+    elif stage in {"review-green", "local-green-handoff"}:
+        action = {
             "cmd": _review_command(public_id, state_dir=state_dir, extra=("--github-review",)),
             "after": "PR create/update",
         }
@@ -339,8 +362,12 @@ def _orchestrator_action(state: dict[str, object], public_id: str, *, state_dir:
                 blockers.append(f"{key}:{value}")
         if blockers:
             action["blocked_by"] = blockers
-        return action
-    return {"cmd": _review_command(public_id, state_dir=state_dir)}
+    else:
+        action = {"cmd": _review_command(public_id, state_dir=state_dir)}
+    restart = _restart_deep_action(state, public_id, state_dir=state_dir)
+    if restart:
+        action["restart"] = restart
+    return action
 
 
 def _orchestrator_review_head(state: dict[str, object]) -> str:

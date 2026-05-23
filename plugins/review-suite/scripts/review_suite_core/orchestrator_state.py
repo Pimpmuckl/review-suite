@@ -103,9 +103,12 @@ def cycle_key(
     branch: str | None,
     head: str,
     merge_base: str,
+    restart_token: str | None = None,
 ) -> str:
     identity = normalize_cycle_identity(cwd=cwd, base=base, branch=branch, head=head, merge_base=merge_base)
-    material = json.dumps(identity, sort_keys=True, separators=(",", ":"))
+    token = _optional_text(restart_token)
+    material_payload: dict[str, Any] = identity if token is None else {"identity": identity, "restart_token": token}
+    material = json.dumps(material_payload, sort_keys=True, separators=(",", ":"))
     return f"orc-{blake2s(material.encode('utf-8'), digest_size=10).hexdigest()}"
 
 
@@ -121,6 +124,7 @@ def create_cycle(
     selection: str = "auto",
     effective_selection: str | None = None,
     deslop_enabled: bool | None = None,
+    restart_token: str | None = None,
 ) -> dict[str, Any]:
     identity = normalize_cycle_identity(cwd=cwd, base=base, branch=branch, head=head, merge_base=merge_base)
     requested = _normalize_mode(requested_mode, field="requested_mode")
@@ -128,9 +132,10 @@ def create_cycle(
     requested_selection = _normalize_selection(selection, field="selection")
     resolved_selection = _normalize_selection(effective_selection or requested_selection, field="effective_selection")
     deslop_tracked = bool(deslop_enabled) if deslop_enabled is not None else effective != "emergency"
-    return {
+    token = _optional_text(restart_token)
+    state = {
         "schema_version": ORCHESTRATOR_STATE_SCHEMA_VERSION,
-        "cycle_key": cycle_key(cwd=cwd, base=base, branch=branch, head=head, merge_base=merge_base),
+        "cycle_key": cycle_key(cwd=cwd, base=base, branch=branch, head=head, merge_base=merge_base, restart_token=token),
         "identity": identity,
         "mode": {
             "requested": requested,
@@ -174,6 +179,9 @@ def create_cycle(
         "active_findings": None,
         "resolved_gate_findings": [],
     }
+    if token is not None:
+        state["restart"] = {"token": token}
+    return state
 
 
 def _copy_state(state: dict[str, Any]) -> dict[str, Any]:

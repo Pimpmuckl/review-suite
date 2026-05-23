@@ -25,12 +25,13 @@ from review_suite_core import (
     emit_error,
     emit_toon,
     format_command,
+    has_worktree_changes,
     merge_base,
     record_review_anchor,
     resolve_repo_root,
 )
 from review_suite_core.config import default_state_dir, load_config
-from review_suite_core.orchestrator_profiles import SUPPORTED_MODES, SUPPORTED_SELECTIONS, resolve_orchestrator_profile
+from review_suite_core.orchestrator_profiles import RESTART_MODE_ORDER, SUPPORTED_MODES, resolve_orchestrator_profile
 from review_suite_core.orchestrator_runner import run_one_expensive_step
 from review_suite_core.orchestrator_state import (
     DECISION_CLEAN,
@@ -41,6 +42,7 @@ from review_suite_core.orchestrator_state import (
     STAGE_FOLLOWUP_PENDING,
     STAGE_LOCAL_GREEN_HANDOFF,
     STAGE_REVIEW_GREEN,
+    STAGE_ABORTED,
     create_cycle,
     mark_fix_detected,
     record_clean_decision,
@@ -48,6 +50,7 @@ from review_suite_core.orchestrator_state import (
     record_followup_clean,
     record_followup_findings,
     record_validation_statuses,
+    abort_cycle,
 )
 from review_suite_core.orchestrator_store import (
     load_cycle_by_key,
@@ -68,6 +71,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = AxiArgumentParser(description="Run the review-suite orchestrator shell.")
     parser.add_argument("--id")
     parser.add_argument("--mode", choices=SUPPORTED_MODES)
+    parser.add_argument("--restart-mode", choices=tuple(RESTART_MODE_ORDER))
+    parser.add_argument("--reason")
     parser.add_argument("--cd")
     parser.add_argument("--base")
     parser.add_argument("--decision", choices=(DECISION_CLEAN, DECISION_FINDINGS))
@@ -93,11 +98,7 @@ def _github_review_action_command(public_id: str) -> str:
 
 
 def _configured_selection(config: dict[str, Any]) -> str:
-    selection = str(((config.get("orchestrator") or {}).get("selection") or "auto")).strip()
-    if selection not in SUPPORTED_SELECTIONS:
-        allowed = ", ".join(SUPPORTED_SELECTIONS)
-        raise ValueError(f"orchestrator.selection must be one of: {allowed}")
-    return selection
+    return str(((config.get("orchestrator") or {}).get("selection") or "auto")).strip()
 
 
 def _path_key(path: Path) -> str:
@@ -171,6 +172,35 @@ def _reject_id_creation_args(args: argparse.Namespace, state: dict[str, Any]) ->
         context.append(cwd)
     suffix = f"; this id is locked to {' at '.join(context)}" if context else ""
     raise ValueError(f"--id already selects review context; remove --{', --'.join(sent)}{suffix}")
+
+
+def _restart_reason(args: argparse.Namespace) -> str:
+    reason = str(args.reason or "").strip()
+    if not reason or reason == "REASON":
+        raise ValueError("--reason is required for --restart-mode")
+    return reason
+
+
+def _mode_rank(mode: str) -> int:
+    if mode not in RESTART_MODE_ORDER:
+        allowed = ", ".join(RESTART_MODE_ORDER)
+        raise ValueError(f"review cycle mode {mode} cannot be restarted; supported restart modes: {allowed}")
+    return RESTART_MODE_ORDER[mode]
+
+
+def _validate_restart_mode(state: dict[str, Any], target_mode: str) -> str:
+    mode = dict(state.get("mode") or {})
+    current_mode = str(mode.get("effective") or mode.get("requested") or "").strip()
+    current_rank = _mode_rank(current_mode)
+    target_rank = _mode_rank(target_mode)
+    if target_rank <= current_rank:
+        raise ValueError(f"--restart-mode must increase strictness from {current_mode}; requested {target_mode}")
+    return current_mode
+
+
+def _normalized_branch(branch: str | None) -> str | None:
+    value = str(branch or "").strip()
+    return None if value in {"", "HEAD"} else value
 
 
 def _round_by_id(state: dict[str, Any], round_id: str) -> dict[str, Any]:
@@ -297,32 +327,8 @@ def _resume_progress(state: dict[str, Any]) -> dict[str, Any]:
     return _with_fix_action(state)
 
 
-def _create_or_resume_cycle(*, args: argparse.Namespace, state_dir: Path) -> dict[str, Any]:
-    if not args.mode:
-        raise ValueError("--mode is required when creating a review cycle")
-    review_root = resolve_repo_root(args.cd)
-    head = current_head(review_root)
-    branch = current_branch(review_root)
-    base = _base_arg(args)
-    merge_base_head = merge_base(review_root, base, "HEAD")
-    config = load_config(state_dir)
-    resolution = resolve_orchestrator_profile(config, mode=str(args.mode), selection=_configured_selection(config))
-    state = create_cycle(
-        cwd=review_root,
-        base=base,
-        branch=branch,
-        head=head,
-        merge_base=merge_base_head,
-        requested_mode=resolution.requested_mode,
-        effective_mode=resolution.effective_mode,
-        selection=resolution.requested_selection,
-        effective_selection=resolution.effective_selection,
-        deslop_enabled=resolution.profile.deslop_enabled,
-    )
+def _apply_profile_resolution(state: dict[str, Any], resolution: Any) -> dict[str, Any]:
     state["selection"]["reason"] = resolution.selection_reason
-    existing = load_cycle_by_key(state_dir, str(state["cycle_key"]))
-    if existing is not None:
-        return existing
     state["grading"] = {"required": bool(resolution.requires_grading)}
 
     def step_payload(step: Any) -> dict[str, Any]:
@@ -349,6 +355,126 @@ def _create_or_resume_cycle(*, args: argparse.Namespace, state_dir: Path) -> dic
         "steps": [step_payload(step) for step in resolution.steps],
     }
     return state
+
+
+def _create_or_resume_cycle(*, args: argparse.Namespace, state_dir: Path) -> dict[str, Any]:
+    if not args.mode:
+        raise ValueError("--mode is required when creating a review cycle")
+    review_root = resolve_repo_root(args.cd)
+    head = current_head(review_root)
+    branch = current_branch(review_root)
+    base = _base_arg(args)
+    merge_base_head = merge_base(review_root, base, "HEAD")
+    config = load_config(state_dir)
+    resolution = resolve_orchestrator_profile(config, mode=str(args.mode), selection=_configured_selection(config))
+    state = create_cycle(
+        cwd=review_root,
+        base=base,
+        branch=branch,
+        head=head,
+        merge_base=merge_base_head,
+        requested_mode=resolution.requested_mode,
+        effective_mode=resolution.effective_mode,
+        selection=resolution.requested_selection,
+        effective_selection=resolution.effective_selection,
+        deslop_enabled=resolution.profile.deslop_enabled,
+    )
+    existing = load_cycle_by_key(state_dir, str(state["cycle_key"]))
+    if existing is not None:
+        return existing
+    return _apply_profile_resolution(state, resolution)
+
+
+def _current_restart_identity(state: dict[str, Any]) -> tuple[Path, str, str | None, str, str]:
+    identity = dict(state.get("identity") or {})
+    cwd = str(identity.get("cwd") or "").strip()
+    if not cwd:
+        raise ValueError("review cycle is missing cwd and cannot be restarted")
+    base = str(identity.get("base") or "").strip()
+    if not base:
+        raise ValueError("review cycle is missing base and cannot be restarted")
+    review_root = cwd_path_from_normalized(cwd)
+    old_branch = _normalized_branch(str(identity.get("branch") or ""))
+    branch = _normalized_branch(current_branch(review_root))
+    if branch != old_branch:
+        raise ValueError(f"cannot restart review cycle on branch {branch or 'HEAD'}; expected {old_branch or 'HEAD'}")
+    if has_worktree_changes(review_root):
+        raise ValueError("cannot restart review cycle with a dirty worktree; commit or stash changes, then rerun")
+    head = current_head(review_root)
+    expected_head = str(identity.get("head") or "").strip()
+    if head != expected_head:
+        raise ValueError("cannot restart review cycle after HEAD changed; start a new review instead")
+    merge_base_head = merge_base(review_root, base, "HEAD")
+    expected_merge_base = str(identity.get("merge_base") or "").strip()
+    if merge_base_head != expected_merge_base:
+        raise ValueError("cannot restart review cycle after merge-base changed; start a new review instead")
+    return review_root, base, branch, head, merge_base_head
+
+
+def _create_restart_cycle(
+    *,
+    state: dict[str, Any],
+    state_dir: Path,
+    target_mode: str,
+    reason: str,
+) -> tuple[dict[str, Any], bool]:
+    if isinstance(state.get("superseded_by"), dict):
+        replacement = str(dict(state.get("superseded_by") or {}).get("review") or "").strip()
+        raise ValueError(f"review cycle is already superseded{f' by {replacement}' if replacement else ''}")
+    current_mode = _validate_restart_mode(state, target_mode)
+    review_root, base, branch, head, merge_base_head = _current_restart_identity(state)
+    config = load_config(state_dir)
+    selection = str(dict(state.get("selection") or {}).get("requested") or _configured_selection(config)).strip()
+    resolution = resolve_orchestrator_profile(config, mode=target_mode, selection=selection)
+    restart_token = f"{state.get('cycle_key')}:{target_mode}"
+    replacement = create_cycle(
+        cwd=review_root,
+        base=base,
+        branch=branch,
+        head=head,
+        merge_base=merge_base_head,
+        requested_mode=resolution.requested_mode,
+        effective_mode=resolution.effective_mode,
+        selection=resolution.requested_selection,
+        effective_selection=resolution.effective_selection,
+        deslop_enabled=resolution.profile.deslop_enabled,
+        restart_token=restart_token,
+    )
+    existing = load_cycle_by_key(state_dir, str(replacement["cycle_key"]))
+    if existing is not None:
+        return existing, True
+    replacement["restart"].update(
+        {
+            "supersedes": str(state.get("public_id") or ""),
+            "supersedes_cycle_key": str(state.get("cycle_key") or ""),
+            "from_mode": current_mode,
+            "reason": reason,
+        }
+    )
+    return _apply_profile_resolution(replacement, resolution), False
+
+
+def _restart_cycle(state: dict[str, Any], *, state_dir: Path, target_mode: str, reason: str) -> dict[str, Any]:
+    replacement, existing_replacement = _create_restart_cycle(
+        state=state,
+        state_dir=state_dir,
+        target_mode=target_mode,
+        reason=reason,
+    )
+    if not existing_replacement:
+        replacement = _advance_without_decision(replacement, state_dir=state_dir)
+    saved_replacement = save_cycle(state_dir, replacement)
+    _register_saved_cycle(state_dir, saved_replacement)
+    superseded = abort_cycle(state, reason=reason)
+    superseded["superseded_by"] = {
+        "review": str(saved_replacement.get("public_id") or ""),
+        "cycle_key": str(saved_replacement.get("cycle_key") or ""),
+        "mode": target_mode,
+        "reason": reason,
+    }
+    saved_superseded = save_cycle(state_dir, superseded)
+    _register_saved_cycle(state_dir, saved_superseded)
+    return saved_replacement
 
 
 def _advance_without_decision(state: dict[str, Any], *, state_dir: Path) -> dict[str, Any]:
@@ -425,6 +551,14 @@ def _github_handoff_action(state: dict[str, Any], *, state_dir: Path) -> dict[st
 def _action_payload(state: dict[str, Any], *, state_dir: Path) -> dict[str, Any] | None:
     public_id = str(state.get("public_id") or "").strip()
     stage = state.get("stage")
+    if stage == STAGE_ABORTED and isinstance(state.get("superseded_by"), dict):
+        replacement = dict(state.get("superseded_by") or {})
+        replacement_id = str(replacement.get("review") or "").strip()
+        if replacement_id:
+            return {
+                "cmd": _review_command(replacement_id),
+                "note": f"Review {public_id} was superseded by {replacement_id}.",
+            }
     if stage == STAGE_DECISION_PENDING:
         return {
             "cmd": _review_command(public_id, "--decision", DECISION_CLEAN),
@@ -489,6 +623,12 @@ def main() -> int:
         args = parser.parse_args()
         state_dir = Path(args.state_dir)
         has_validation_status = _has_validation_status(args)
+        if args.restart_mode and not args.id:
+            raise ValueError("--restart-mode requires --id")
+        if args.reason and not args.restart_mode:
+            raise ValueError("--reason requires --restart-mode")
+        if args.restart_mode and (args.decision or args.github_review or args.github_force or has_validation_status):
+            raise ValueError("--restart-mode cannot be combined with decisions, GitHub review, or validation status flags")
         if args.decision and not args.id:
             raise ValueError("--decision requires --id")
         if args.github_force and not args.github_review:
@@ -502,6 +642,15 @@ def main() -> int:
         if args.id:
             state_dir, state = _load_cycle_and_state_dir(state_dir, str(args.id))
             _reject_id_creation_args(args, state)
+            if args.restart_mode:
+                state = _restart_cycle(
+                    state,
+                    state_dir=state_dir,
+                    target_mode=str(args.restart_mode),
+                    reason=_restart_reason(args),
+                )
+                _render(state, state_dir=state_dir)
+                return 0
             if args.github_review:
                 return _run_github_review(state, state_dir=state_dir, force=bool(args.github_force))
             if args.decision:

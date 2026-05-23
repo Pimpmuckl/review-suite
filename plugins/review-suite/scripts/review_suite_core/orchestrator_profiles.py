@@ -5,6 +5,7 @@ from typing import Any
 
 SUPPORTED_MODES = ("brief", "normal", "deep", "emergency")
 SUPPORTED_SELECTIONS = ("stable", "benchmark", "auto")
+RESTART_MODE_ORDER = {"brief": 0, "normal": 1, "deep": 2}
 SUPPORTED_SELECTION_REASONS = (
     "explicit_stable",
     "explicit_benchmark",
