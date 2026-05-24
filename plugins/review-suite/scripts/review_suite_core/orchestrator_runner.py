@@ -4,11 +4,15 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from review_gate import run_gate_round
 from review_followup import build_followup_prompt
-from review_suite_arena import run_orchestrator_followup_review_step, run_orchestrator_review_step
+from review_suite_arena import (
+    resume_orchestrator_review_step,
+    run_orchestrator_followup_review_step,
+    run_orchestrator_review_step,
+)
 from review_suite_local import build_local_review_request, build_phase_instructions, default_roster_path
 
 from .axi_output import format_command, write_text
@@ -19,6 +23,7 @@ from .orchestrator_state import (
     STAGE_DECISION_PENDING,
     STAGE_FOLLOWUP_PENDING,
     STAGE_GATE_RERUN_NEEDED,
+    STAGE_RUNNING,
     deslop_is_ready,
     deslop_should_run,
     mark_blocked,
@@ -26,6 +31,7 @@ from .orchestrator_state import (
     mark_deslop_failed,
     mark_followup_review_pending,
     mark_gate_step_pending,
+    mark_review_step_running,
     mark_review_step_pending,
     next_review_profile_step,
     review_profile_has_next_step,
@@ -47,6 +53,9 @@ class OrchestratorRunnerResult:
     state: dict[str, Any]
     ran_step: bool
     step: str | None = None
+
+
+StatePersister = Callable[[dict[str, Any]], dict[str, Any] | None]
 
 
 def _script_path(name: str) -> Path:
@@ -246,6 +255,10 @@ def run_review_step(**kwargs: Any) -> dict[str, object]:
     return run_orchestrator_review_step(**kwargs)
 
 
+def resume_review_step(**kwargs: Any) -> dict[str, object]:
+    return resume_orchestrator_review_step(**kwargs)
+
+
 def run_followup_review_step(**kwargs: Any) -> dict[str, object]:
     return run_orchestrator_followup_review_step(**kwargs)
 
@@ -260,6 +273,7 @@ def _run_profile_review_once(
     state_dir: Path,
     step_index: int | None = None,
     step: dict[str, Any] | None = None,
+    persist_state: StatePersister | None = None,
 ) -> OrchestratorRunnerResult:
     if step_index is None or step is None:
         step_index, step = _next_profile_step(state)
@@ -268,6 +282,25 @@ def _run_profile_review_once(
     cwd = _identity_cwd(state)
     scope = _review_scope(state, cwd)
     step_position, step_total = _review_step_position(state, step_index)
+    running_base_state = state
+
+    def on_round_started(round_info: dict[str, object]) -> None:
+        nonlocal running_base_state
+        running_state = mark_review_step_running(
+            state,
+            round_id=str(round_info.get("round_id") or ""),
+            lane=INITIAL_REVIEW_LANE,
+            step_index=step_index,
+            step_name=str(step["name"]),
+            reviewed_head=str(round_info.get("reviewed_head") or scope.get("reviewed_head") or "").strip() or None,
+            round_state_dir=str(round_info.get("round_state_dir") or "").strip() or None,
+        )
+        if persist_state is not None:
+            saved = persist_state(running_state)
+            if saved is not None:
+                running_state = saved
+        running_base_state = running_state
+
     review_result = run_review_step(
         lane=INITIAL_REVIEW_LANE,
         step_name=str(step["name"]),
@@ -286,17 +319,60 @@ def _run_profile_review_once(
         progress_interval_seconds=DEFAULT_PROGRESS_INTERVAL_SECONDS,
         allow_unsafe_windows_wsl_fallback=False,
         grading_required=bool(dict(state.get("grading") or {}).get("required")),
+        on_round_started=on_round_started,
     )
     round_id = str(review_result.get("round_id") or "").strip()
     if not round_id:
         raise ValueError("review step did not return a round_id")
     reviewed_head = str(review_result.get("reviewed_head") or scope.get("reviewed_head") or "").strip() or None
     next_state = mark_review_step_pending(
-        state,
+        running_base_state,
         round_id=round_id,
         lane=INITIAL_REVIEW_LANE,
         step_index=step_index,
         step_name=str(step["name"]),
+        reviewed_head=reviewed_head,
+    )
+    return OrchestratorRunnerResult(
+        _attach_review_result(next_state, review_result),
+        ran_step=True,
+        step="review",
+    )
+
+
+def _collect_running_review_once(state: dict[str, Any], *, state_dir: Path) -> OrchestratorRunnerResult:
+    pending = dict(state.get("pending_action") or {})
+    if str(pending.get("kind") or "") != "collect-review-step":
+        return OrchestratorRunnerResult(state, ran_step=False)
+    round_id = str(pending.get("round_id") or "").strip()
+    lane = str(pending.get("lane") or INITIAL_REVIEW_LANE).strip() or INITIAL_REVIEW_LANE
+    step_name = str(pending.get("step") or "").strip()
+    if not round_id or not step_name:
+        raise ValueError("running review step is missing round_id or step")
+    cwd = _identity_cwd(state)
+    round_payload = _round_by_id(state, round_id)
+    round_state_dir_text = str(pending.get("round_state_dir") or round_payload.get("round_state_dir") or "").strip()
+    round_state_dir = Path(round_state_dir_text) if round_state_dir_text else None
+    review_result = resume_review_step(
+        round_id=round_id,
+        lane=lane,
+        step_name=step_name,
+        review_cwd=cwd,
+        state_dir=state_dir,
+        round_state_dir=round_state_dir,
+        sqlite_path=Path.home() / ".codex" / "state_5.sqlite",
+        task_id=_task_id(state),
+        progress_interval_seconds=DEFAULT_PROGRESS_INTERVAL_SECONDS,
+        grading_required=bool(dict(state.get("grading") or {}).get("required")),
+    )
+    step_index = int(pending.get("step_index") if pending.get("step_index") is not None else 0)
+    reviewed_head = str(review_result.get("reviewed_head") or round_payload.get("reviewed_head") or "").strip() or None
+    next_state = mark_review_step_pending(
+        state,
+        round_id=round_id,
+        lane=lane,
+        step_index=step_index,
+        step_name=step_name,
         reviewed_head=reviewed_head,
     )
     return OrchestratorRunnerResult(
@@ -540,15 +616,28 @@ def _run_followup_review_once(state: dict[str, Any], *, state_dir: Path) -> Orch
     )
 
 
-def run_one_expensive_step(state: dict[str, Any], *, state_dir: Path | None = None) -> OrchestratorRunnerResult:
+def run_one_expensive_step(
+    state: dict[str, Any],
+    *,
+    state_dir: Path | None = None,
+    persist_state: StatePersister | None = None,
+) -> OrchestratorRunnerResult:
     resolved_state_dir = state_dir or Path.home() / ".codex" / "state" / "review-suite"
     if deslop_should_run(state):
         return _run_deslop_once(state)
+    if state.get("stage") == STAGE_RUNNING:
+        return _collect_running_review_once(state, state_dir=resolved_state_dir)
     if _review_should_run(state):
         step_index, step = _next_profile_step(state)
         if _step_kind(step) == "gate":
             return _run_profile_gate_once(state, state_dir=resolved_state_dir, step_index=step_index, step=step)
-        return _run_profile_review_once(state, state_dir=resolved_state_dir, step_index=step_index, step=step)
+        return _run_profile_review_once(
+            state,
+            state_dir=resolved_state_dir,
+            step_index=step_index,
+            step=step,
+            persist_state=persist_state,
+        )
     if state.get("stage") == STAGE_FOLLOWUP_PENDING:
         return _run_followup_review_once(state, state_dir=resolved_state_dir)
     if state.get("stage") == STAGE_GATE_RERUN_NEEDED:

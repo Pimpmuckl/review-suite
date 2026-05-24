@@ -670,6 +670,50 @@ def mark_running(
     return next_state
 
 
+def mark_review_step_running(
+    state: dict[str, Any],
+    *,
+    round_id: str,
+    lane: str,
+    step_index: int,
+    step_name: str,
+    reviewed_head: str | None = None,
+    round_state_dir: str | None = None,
+) -> dict[str, Any]:
+    index = _nonnegative_int(step_index, field="step_index")
+    name = _required_text(step_name, field="step_name")
+    next_state = mark_running(state, round_id=round_id, lane=lane, reviewed_head=reviewed_head)
+    action = {
+        "kind": "collect-review-step",
+        "round_id": round_id,
+        "lane": lane,
+        "step_index": index,
+        "step": name,
+        "round_state_dir": _optional_text(round_state_dir),
+    }
+    _set_stage(next_state, STAGE_RUNNING, action)
+    profile_step = {
+        "index": index,
+        "name": name,
+        "round_id": _required_text(round_id, field="round_id"),
+        "lane": _required_text(lane, field="lane"),
+    }
+    if _review_step_rerun_on_findings(next_state, index):
+        profile_step["rerun_on_findings"] = True
+    for item in list(next_state.get("rounds") or []):
+        if isinstance(item, dict) and item.get("round_id") == round_id:
+            item["profile_step"] = {
+                key: profile_step[key]
+                for key in ("index", "name", "rerun_on_findings")
+                if key in profile_step
+            }
+            if action.get("round_state_dir"):
+                item["round_state_dir"] = action["round_state_dir"]
+            break
+    _set_review_progress(next_state, next_step_index=index, current_step=profile_step)
+    return next_state
+
+
 def mark_decision_pending(
     state: dict[str, Any],
     *,

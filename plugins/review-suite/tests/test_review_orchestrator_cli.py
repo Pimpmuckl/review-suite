@@ -88,6 +88,15 @@ def _stub_review(monkeypatch: pytest.MonkeyPatch, *round_ids: str) -> list[dict[
         round_id = ids[min(len(calls) - 1, len(ids) - 1)]
         scope = kwargs.get("review_scope")
         reviewed_head = str(scope.get("reviewed_head") if isinstance(scope, dict) else "head-1")
+        on_round_started = kwargs.get("on_round_started")
+        if callable(on_round_started):
+            on_round_started(
+                {
+                    "round_id": round_id,
+                    "round_state_dir": "state/orchestrator/review-rounds",
+                    "reviewed_head": reviewed_head,
+                }
+            )
         return {
             "round_id": round_id,
             "lane": "review_t1",
@@ -268,6 +277,7 @@ def test_orchestrator_review_helper_uses_phase_prompt_without_predecision_anchor
     ) -> dict[str, object]:
         captured["prompt"] = prompt
         captured["review_scope"] = dict(review_scope)
+        captured["round_payload"] = dict(round_payload)
         return {
             **round_payload,
             "status": "completed",
@@ -297,7 +307,7 @@ def test_orchestrator_review_helper_uses_phase_prompt_without_predecision_anchor
         reviewer_count=1,
         model="gpt-5.5",
         reasoning_effort="medium",
-        service_tier=None,
+        service_tier="flex",
         review_cwd=repo,
         state_dir=state_dir,
         sqlite_path=tmp_path / "state.sqlite",
@@ -316,6 +326,7 @@ def test_orchestrator_review_helper_uses_phase_prompt_without_predecision_anchor
     assert "Reviewer output is advisory risk input" in prompt
     assert "=== BEGIN DIFF ===" in prompt
     assert dict(captured["review_scope"])["manual_prompt_mode"] is True
+    assert dict(captured["round_payload"])["runs"][0]["service_tier"] == "flex"
     assert result["reviewed_head"] == head
     assert result["output_refs"] == ["rollout://alpha"]
     assert banner_calls == [{"task_name": "review 1/2 precision", "round_id": result["round_id"]}]
@@ -487,6 +498,76 @@ def test_create_resume_and_id_reprint_use_one_pending_action(monkeypatch: pytest
     assert state["validation"]["ci"] == "classified"
     assert len(deslop_calls) == 1
     assert len(review_calls) == 2
+
+
+def test_id_collects_running_round_without_spawning_duplicate(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _stub_deslop(monkeypatch)
+    review_calls = _stub_review(monkeypatch, "phase_review-round-1", "phase_review-round-duplicate")
+    resume_calls: list[dict[str, object]] = []
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/running-review")
+    _commit_file(repo, "app.txt", "feature\n", "feature")
+
+    args = ["--mode", "normal", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)]
+    _, created = _run_review(monkeypatch, args)
+    public_id = str(created["review"])
+    _run_review(monkeypatch, args)
+
+    state = _cycle_payload(state_dir, public_id)
+    round_id = str(state["rounds"][0]["round_id"])
+    state["stage"] = "running"
+    state["pending_action"] = {
+        "kind": "collect-review-step",
+        "round_id": round_id,
+        "lane": "review_t1",
+        "step_index": 0,
+        "step": "broad-discovery",
+        "round_state_dir": "state/orchestrator/review-rounds",
+    }
+    state["rounds"][0]["status"] = "running"
+    _write_cycle_payload(state_dir, public_id, state)
+
+    def fake_resume(**kwargs: object) -> dict[str, object]:
+        resume_calls.append(dict(kwargs))
+        return {
+            "round_id": round_id,
+            "lane": "review_t1",
+            "kind": "review",
+            "status": "completed",
+            "blocked": False,
+            "reviewed_head": state["rounds"][0]["reviewed_head"],
+            "output_refs": ["rollout://phase_review-round-1/resumed"],
+            "runs": [
+                {
+                    "slot": "alpha",
+                    "status": "completed",
+                    "summary": "No findings.",
+                    "ref": "rollout://phase_review-round-1/resumed",
+                    "blocked": False,
+                    "block": None,
+                }
+            ],
+            "round_state_dir": "state/orchestrator/review-rounds",
+        }
+
+    monkeypatch.setattr(orchestrator_runner, "resume_review_step", fake_resume)
+
+    exit_code, payload = _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+
+    assert exit_code == 0
+    assert payload["review"] == public_id
+    assert "--decision clean" in str(payload["Action"]["cmd"])
+    assert len(review_calls) == 1
+    assert len(resume_calls) == 1
+    assert resume_calls[0]["round_id"] == round_id
+    saved = _cycle_payload(state_dir, public_id)
+    assert saved["stage"] == "decision-pending"
+    assert saved["pending_action"]["kind"] == "decision"
+    assert [item["round_id"] for item in saved["rounds"]] == [round_id]
+    assert saved["rounds"][0]["output_refs"] == ["rollout://phase_review-round-1/resumed"]
 
 
 def test_restart_mode_supersedes_cycle_and_starts_fresh_deep_ladder(

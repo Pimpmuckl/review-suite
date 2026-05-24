@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -62,6 +63,15 @@ def _stub_review(monkeypatch, *round_ids: str) -> list[dict[str, object]]:
     def fake_run(**kwargs: object) -> dict[str, object]:
         calls.append(dict(kwargs))
         round_id = ids[min(len(calls) - 1, len(ids) - 1)]
+        on_round_started = kwargs.get("on_round_started")
+        if callable(on_round_started):
+            on_round_started(
+                {
+                    "round_id": round_id,
+                    "round_state_dir": "state/orchestrator/review-rounds",
+                    "reviewed_head": "head-1",
+                }
+            )
         return {
             "round_id": round_id,
             "lane": "review_t1",
@@ -255,6 +265,42 @@ def test_runner_walks_profile_steps_after_clean_decisions(monkeypatch, tmp_path:
         "phase_review-round-2",
     ]
     assert len(review_calls) == 2
+
+
+def test_runner_persists_running_review_step_before_collecting_result(monkeypatch, tmp_path: Path) -> None:
+    _stub_review(monkeypatch, "phase_review-round-1")
+    state = _cycle(tmp_path, deslop_enabled=False)
+    persisted: list[dict[str, object]] = []
+
+    def persist_state(next_state: dict[str, object]) -> dict[str, object]:
+        saved = json.loads(json.dumps(next_state))
+        saved["public_id"] = "rvw_running"
+        persisted.append(saved)
+        return saved
+
+    result = orchestrator_runner.run_one_expensive_step(
+        state,
+        state_dir=tmp_path / "state",
+        persist_state=persist_state,
+    )
+
+    assert len(persisted) == 1
+    running = persisted[0]
+    assert running["stage"] == "running"
+    assert running["pending_action"] == {
+        "kind": "collect-review-step",
+        "round_id": "phase_review-round-1",
+        "lane": "review_t1",
+        "step_index": 0,
+        "step": "precision",
+        "round_state_dir": "state/orchestrator/review-rounds",
+    }
+    assert running["rounds"][0]["status"] == "running"
+    assert running["review_progress"]["current_step"]["round_id"] == "phase_review-round-1"
+    assert result.state["public_id"] == "rvw_running"
+    assert result.state["stage"] == STAGE_DECISION_PENDING
+    assert result.state["pending_action"]["kind"] == "decision"
+    assert result.state["rounds"][0]["review_status"] == "completed"
 
 
 def test_runner_runs_gate_profile_step_once_after_review_steps(monkeypatch, tmp_path: Path) -> None:

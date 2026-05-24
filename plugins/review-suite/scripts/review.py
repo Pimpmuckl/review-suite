@@ -479,7 +479,13 @@ def _restart_cycle(state: dict[str, Any], *, state_dir: Path, target_mode: str, 
 
 def _advance_without_decision(state: dict[str, Any], *, state_dir: Path) -> dict[str, Any]:
     ready_state = _resume_progress(state)
-    result = run_one_expensive_step(ready_state, state_dir=state_dir)
+
+    def persist_running(next_state: dict[str, Any]) -> dict[str, Any]:
+        saved = save_cycle(state_dir, next_state)
+        _register_saved_cycle(state_dir, saved)
+        return saved
+
+    result = run_one_expensive_step(ready_state, state_dir=state_dir, persist_state=persist_running)
     if result.ran_step:
         return result.state
     return _resume_progress(ready_state)

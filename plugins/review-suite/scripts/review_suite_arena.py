@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import Callable
 
 from review_suite_runtime_bootstrap import bootstrap_from_installed_cache
 
@@ -777,6 +778,72 @@ def _orchestrator_review_state_dir(state_dir: Path) -> Path:
     return state_dir / "orchestrator" / "review-rounds"
 
 
+def _orchestrator_roster_from_round(payload: dict[str, object]) -> dict[str, object]:
+    variants: dict[str, dict[str, object]] = {}
+    for run in list(payload.get("runs") or []):
+        if not isinstance(run, dict):
+            continue
+        variant_id = str(run.get("variant_id") or "").strip()
+        model = str(run.get("model") or "").strip()
+        reasoning_effort = str(run.get("reasoning_effort") or "").strip()
+        if not variant_id or not model or not reasoning_effort:
+            continue
+        variant = {
+            "id": variant_id,
+            "state": "active",
+            "model": model,
+            "reasoning_effort": reasoning_effort,
+            "task_classes": ["phase_review"],
+        }
+        service_tier = str(run.get("service_tier") or "").strip()
+        if service_tier:
+            variant["service_tier"] = service_tier
+        variants[variant_id] = variant
+    if not variants:
+        raise ValueError(f"round {payload.get('round_id')} is missing reviewer model metadata")
+    return {"settings": {}, "variants": list(variants.values())}
+
+
+def _completed_orchestrator_review_result(
+    *,
+    completed: dict[str, object],
+    lane: str,
+    step_name: str,
+    review_cwd: Path,
+    state_dir: Path,
+    round_state_dir: Path,
+    task_id: str | None,
+    grading_required: bool,
+    step_position: int | None = None,
+    step_total: int | None = None,
+) -> dict[str, object]:
+    completed["task_id_hint"] = task_id or str(completed.get("round_id") or "")
+    completed["grading_required"] = bool(grading_required)
+    completed["public_task"] = lane
+    completed["orchestrator_step"] = step_name
+    if step_position is not None and step_total is not None:
+        completed["orchestrator_step_position"] = step_position
+        completed["orchestrator_step_total"] = step_total
+    write_round(round_state_dir, completed)
+    refresh_review_cost_report_best_effort(state_dir=state_dir, review_cwd=review_cwd)
+    result = public_round_result(completed)
+    _print_findings(completed)
+    output_refs = _review_output_refs([run for run in list(completed.get("runs") or []) if isinstance(run, dict)])
+    review_scope = dict(completed.get("review_scope") or {})
+    return {
+        "round_id": str(completed.get("round_id") or ""),
+        "lane": lane,
+        "kind": "review",
+        "status": result.get("status"),
+        "blocked": bool(result.get("blocked")),
+        "reviewed_head": str(review_scope.get("reviewed_head") or review_scope.get("commit_end") or ""),
+        "output_refs": output_refs,
+        "runs": list(result.get("runs") or []),
+        "round_state_dir": str(round_state_dir),
+        "grading_required": bool(grading_required),
+    }
+
+
 def _orchestrator_review_slots(count: int) -> list[str]:
     labels = list(PUBLIC_REVIEWER_LABELS)
     return [
@@ -817,6 +884,7 @@ def run_orchestrator_review_step(
     grading_required: bool = False,
     step_position: int | None = None,
     step_total: int | None = None,
+    on_round_started: Callable[[dict[str, object]], None] | None = None,
 ) -> dict[str, object]:
     if reviewer_count <= 0:
         raise ValueError("reviewer_count must be > 0")
@@ -843,6 +911,7 @@ def run_orchestrator_review_step(
         grading_required=grading_required,
         step_position=step_position,
         step_total=step_total,
+        on_round_started=on_round_started,
     )
 
 
@@ -866,6 +935,7 @@ def _run_orchestrator_manual_review_step(
     grading_required: bool = False,
     step_position: int | None = None,
     step_total: int | None = None,
+    on_round_started: Callable[[dict[str, object]], None] | None = None,
 ) -> dict[str, object]:
     if reviewer_count <= 0:
         raise ValueError("reviewer_count must be > 0")
@@ -883,6 +953,17 @@ def _run_orchestrator_manual_review_step(
         variant["service_tier"] = service_tier
     round_state_dir = _orchestrator_review_state_dir(state_dir)
     round_id = make_round_id("phase_review", review_cwd=review_cwd)
+    runs = []
+    for slot in _orchestrator_review_slots(reviewer_count):
+        run = {
+            "slot": slot,
+            "variant_id": variant_id,
+            "model": model,
+            "reasoning_effort": reasoning_effort,
+        }
+        if service_tier:
+            run["service_tier"] = service_tier
+        runs.append(run)
     payload = {
         "round_id": round_id,
         "task_class": "phase_review",
@@ -891,22 +972,27 @@ def _run_orchestrator_manual_review_step(
         "grading_required": bool(grading_required),
         "sampled_at": utc_now_iso(),
         "review_cwd_normalized": normalize_review_cwd_value(review_cwd),
+        "review_cwd": str(review_cwd),
         "review_scope": dict(review_scope),
+        "requested_prompt": prompt,
+        "allow_dirty": allow_dirty,
+        "allow_unsafe_windows_wsl_fallback": allow_unsafe_windows_wsl_fallback,
+        "progress_interval_seconds": progress_interval_seconds,
         "status": "sampled",
-        "runs": [
-            {
-                "slot": slot,
-                "variant_id": variant_id,
-                "model": model,
-                "reasoning_effort": reasoning_effort,
-            }
-            for slot in _orchestrator_review_slots(reviewer_count)
-        ],
+        "runs": runs,
     }
     if step_position is not None and step_total is not None:
         payload["orchestrator_step_position"] = step_position
         payload["orchestrator_step_total"] = step_total
     write_round(round_state_dir, payload)
+    if on_round_started is not None:
+        on_round_started(
+            {
+                "round_id": round_id,
+                "round_state_dir": str(round_state_dir),
+                "reviewed_head": str(review_scope.get("reviewed_head") or review_scope.get("commit_end") or ""),
+            }
+        )
     _print_round_banner(
         task_name=_orchestrator_banner_task_name(
             lane,
@@ -930,30 +1016,86 @@ def _run_orchestrator_manual_review_step(
         allow_dirty=allow_dirty,
         allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
     )
-    completed["task_id_hint"] = task_id or round_id
-    completed["grading_required"] = bool(grading_required)
-    completed["public_task"] = lane
-    completed["orchestrator_step"] = step_name
-    if step_position is not None and step_total is not None:
-        completed["orchestrator_step_position"] = step_position
-        completed["orchestrator_step_total"] = step_total
-    write_round(round_state_dir, completed)
-    refresh_review_cost_report_best_effort(state_dir=state_dir, review_cwd=review_cwd)
-    result = public_round_result(completed)
-    _print_findings(completed)
-    output_refs = _review_output_refs([run for run in list(completed.get("runs") or []) if isinstance(run, dict)])
-    return {
-        "round_id": round_id,
-        "lane": lane,
-        "kind": "review",
-        "status": result.get("status"),
-        "blocked": bool(result.get("blocked")),
-        "reviewed_head": str(review_scope.get("reviewed_head") or review_scope.get("commit_end") or ""),
-        "output_refs": output_refs,
-        "runs": list(result.get("runs") or []),
-        "round_state_dir": str(round_state_dir),
-        "grading_required": bool(grading_required),
-    }
+    return _completed_orchestrator_review_result(
+        completed=completed,
+        lane=lane,
+        step_name=step_name,
+        review_cwd=review_cwd,
+        state_dir=state_dir,
+        round_state_dir=round_state_dir,
+        task_id=task_id,
+        grading_required=grading_required,
+        step_position=step_position,
+        step_total=step_total,
+    )
+
+
+def resume_orchestrator_review_step(
+    *,
+    round_id: str,
+    lane: str,
+    step_name: str,
+    review_cwd: Path,
+    state_dir: Path,
+    round_state_dir: Path | None,
+    sqlite_path: Path,
+    task_id: str | None,
+    progress_interval_seconds: int,
+    grading_required: bool = False,
+) -> dict[str, object]:
+    resolved_round_state_dir = round_state_dir or _orchestrator_review_state_dir(state_dir)
+    payload = load_round(resolved_round_state_dir, round_id)
+    status = str(payload.get("status") or "").strip()
+    resolved_review_cwd = Path(str(payload.get("review_cwd") or review_cwd))
+    if status == "completed":
+        completed = payload
+    elif status == "running":
+        completed = collect_round_results(
+            round_payload=payload,
+            roster=_orchestrator_roster_from_round(payload),
+            state_dir=resolved_round_state_dir,
+            review_cwd=resolved_review_cwd,
+            sqlite_path=sqlite_path,
+            progress_interval_seconds=progress_interval_seconds,
+            wait=True,
+        )
+    elif status in {"sampled", "failed"}:
+        completed = run_round(
+            round_payload=payload,
+            roster=_orchestrator_roster_from_round(payload),
+            state_dir=resolved_round_state_dir,
+            review_cwd=resolved_review_cwd,
+            prompt=str(payload.get("requested_prompt") or ""),
+            review_scope=dict(payload.get("review_scope") or {}),
+            sqlite_path=sqlite_path,
+            progress_interval_seconds=int(
+                payload.get("progress_interval_seconds") or progress_interval_seconds
+            ),
+            allow_dirty=bool(payload.get("allow_dirty")),
+            allow_unsafe_windows_wsl_fallback=bool(payload.get("allow_unsafe_windows_wsl_fallback")),
+        )
+    else:
+        raise ValueError(f"round {round_id} is {status or 'missing status'}, not resumable")
+    return _completed_orchestrator_review_result(
+        completed=completed,
+        lane=lane,
+        step_name=step_name,
+        review_cwd=resolved_review_cwd,
+        state_dir=state_dir,
+        round_state_dir=resolved_round_state_dir,
+        task_id=task_id,
+        grading_required=grading_required or bool(payload.get("grading_required")),
+        step_position=(
+            payload.get("orchestrator_step_position")
+            if isinstance(payload.get("orchestrator_step_position"), int)
+            else None
+        ),
+        step_total=(
+            payload.get("orchestrator_step_total")
+            if isinstance(payload.get("orchestrator_step_total"), int)
+            else None
+        ),
+    )
 
 
 def run_orchestrator_followup_review_step(

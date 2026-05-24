@@ -26,6 +26,7 @@ from review_suite_arena import (
     cmd_run_manual_round,
     cmd_show_last,
     cmd_show_round,
+    resume_orchestrator_review_step,
     run_benchmarked_round,
 )
 from review_suite_local import public_round_result, write_round
@@ -1365,6 +1366,87 @@ def test_cmd_resume_round_records_workflow_anchor_when_completed(monkeypatch, tm
     assert anchor_calls[0]["lane"] == "review_t3"
     assert anchor_calls[0]["task_id"] == "branch-1"
     assert "Resume body" in capsys.readouterr().out
+
+
+def test_resume_orchestrator_review_step_collects_existing_running_round(monkeypatch, tmp_path) -> None:
+    state_dir = tmp_path / "state"
+    round_state_dir = state_dir / "orchestrator" / "review-rounds"
+    review_cwd = tmp_path / "repo"
+    review_cwd.mkdir()
+    collect_calls: list[dict[str, object]] = []
+    round_payload = {
+        "round_id": "phase_review-round-1",
+        "task_class": "phase_review",
+        "status": "running",
+        "review_cwd": str(review_cwd),
+        "review_scope": {"base": "main", "reviewed_head": "head-1"},
+        "runs": [
+            {
+                "slot": "alpha",
+                "variant_id": "gpt-5.5-medium",
+                "model": "gpt-5.5",
+                "reasoning_effort": "medium",
+                "service_tier": "flex",
+            }
+        ],
+    }
+    write_round(round_state_dir, round_payload)
+
+    def fake_collect_round_results(**kwargs: object) -> dict[str, object]:
+        collect_calls.append(dict(kwargs))
+        assert kwargs["roster"] == {
+            "settings": {},
+            "variants": [
+                {
+                    "id": "gpt-5.5-medium",
+                    "state": "active",
+                    "model": "gpt-5.5",
+                    "reasoning_effort": "medium",
+                    "service_tier": "flex",
+                    "task_classes": ["phase_review"],
+                }
+            ],
+        }
+        return {
+            **round_payload,
+            "status": "completed",
+            "runs": [
+                {
+                    "slot": "alpha",
+                    "review_status": "completed",
+                    "status_summary": "No findings.",
+                    "grade_blocked": False,
+                    "grade_block_reason": None,
+                    "reviewer_output": "No findings.",
+                    "reviewer_output_ref": "rollout://phase_review-round-1/alpha",
+                }
+            ],
+        }
+
+    monkeypatch.setattr("review_suite_arena.collect_round_results", fake_collect_round_results)
+    monkeypatch.setattr("review_suite_arena.refresh_review_cost_report_best_effort", lambda **kwargs: None)
+    monkeypatch.setattr("review_suite_arena._print_findings", lambda result: False)
+
+    result = resume_orchestrator_review_step(
+        round_id="phase_review-round-1",
+        lane="review_t1",
+        step_name="precision",
+        review_cwd=review_cwd,
+        state_dir=state_dir,
+        round_state_dir=round_state_dir,
+        sqlite_path=tmp_path / "state.sqlite",
+        task_id="branch-1",
+        progress_interval_seconds=1,
+    )
+
+    assert len(collect_calls) == 1
+    assert result["round_id"] == "phase_review-round-1"
+    assert result["status"] == "completed"
+    assert result["output_refs"] == ["rollout://phase_review-round-1/alpha"]
+    saved = json.loads((round_state_dir / "rounds" / "phase_review-round-1.json").read_text(encoding="utf-8"))
+    assert saved["task_id_hint"] == "branch-1"
+    assert saved["public_task"] == "review_t1"
+    assert saved["orchestrator_step"] == "precision"
 
 
 def test_public_local_task_name_maps_gate_aliases() -> None:
