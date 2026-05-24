@@ -1237,7 +1237,7 @@ def run_gate_round(
     if includes_deep_review_effort([dict(variant) for variant in selection.variants]):
         print_deep_review_wait_note()
     print(
-        f"[review-suite] waiting for {target_reviewer_count} gate reviewers; completion status prints as each finishes.",
+        f"[review-suite] waiting for {target_reviewer_count} gate reviewers; wrapper is active as long as output streams, do not stop it prematurely",
         file=sys.stderr,
         flush=True,
     )

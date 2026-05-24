@@ -3346,7 +3346,7 @@ def round_has_live_reviewer_process(round_payload: dict[str, Any]) -> bool:
 def _reviewer_wait_line(round_payload: dict[str, Any]) -> str:
     count = len([run for run in list(round_payload.get("runs") or []) if isinstance(run, dict)])
     label = "reviewer" if count == 1 else "reviewers"
-    return f"[review-suite] waiting for {count} {label}; completion status prints as each finishes."
+    return f"[review-suite] waiting for {count} {label};  wrapper is active as long as output streams, do not stop it prematurely"
 
 
 def collect_round_results(

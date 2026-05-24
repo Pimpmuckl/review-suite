@@ -54,10 +54,10 @@ from review_suite_local import (
 
 def test_reviewer_wait_line_uses_actual_count() -> None:
     assert _reviewer_wait_line({"runs": [{"slot": "alpha"}]}) == (
-        "[review-suite] waiting for 1 reviewer; completion status prints as each finishes."
+        "[review-suite] waiting for 1 reviewer; wrapper is active as long as output streams, do not stop it prematurely"
     )
     assert _reviewer_wait_line({"runs": [{"slot": "alpha"}, {"slot": "bravo"}]}) == (
-        "[review-suite] waiting for 2 reviewers; completion status prints as each finishes."
+        "[review-suite] waiting for 2 reviewers; wrapper is active as long as output streams, do not stop it prematurely"
     )
 
 
