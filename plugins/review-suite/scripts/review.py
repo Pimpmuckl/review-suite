@@ -40,6 +40,7 @@ from review_suite_core.orchestrator_state import (
     STAGE_DECISION_PENDING,
     STAGE_FIX_PENDING,
     STAGE_FOLLOWUP_PENDING,
+    STAGE_GATE_RERUN_NEEDED,
     STAGE_LOCAL_GREEN_HANDOFF,
     STAGE_REVIEW_GREEN,
     STAGE_ABORTED,
@@ -542,6 +543,45 @@ def _validation_blockers(state: dict[str, Any]) -> list[str]:
     return blockers
 
 
+def _last_decision_is_clean_followup(state: dict[str, Any]) -> bool:
+    for item in reversed(list(state.get("decisions") or [])):
+        if not isinstance(item, dict):
+            continue
+        return (
+            str(item.get("lane") or "") == FOLLOWUP_LANE
+            and str(item.get("command") or "") == DECISION_CLEAN
+        )
+    return False
+
+
+def _review_step_label(state: dict[str, Any], pending: dict[str, Any]) -> str:
+    step = str(pending.get("step") or "").strip() or "next review step"
+    try:
+        position = int(pending.get("step_index")) + 1
+    except (TypeError, ValueError):
+        position = None
+    steps = list(dict(state.get("review_plan") or {}).get("steps") or [])
+    if position is not None and steps:
+        return f"review step {position}/{len(steps)} {step}"
+    return f"review step {step}"
+
+
+def _continuation_note(state: dict[str, Any]) -> str | None:
+    pending = dict(state.get("pending_action") or {})
+    kind = str(pending.get("kind") or "").strip()
+    if kind == "run-review-step":
+        if not _last_decision_is_clean_followup(state):
+            return None
+        label = _review_step_label(state, pending)
+        return f"Clean follow-up is not final signoff; run {label} before treating the review as green."
+    if kind == "rerun-gate":
+        if not _last_decision_is_clean_followup(state):
+            return None
+        gate = str(pending.get("gate") or pending.get("lane") or "").strip() or "the same gate"
+        return f"Clean follow-up is not final signoff; rerun {gate} before treating the review as green."
+    return None
+
+
 def _github_handoff_action(state: dict[str, Any], *, state_dir: Path) -> dict[str, Any]:
     public_id = str(state.get("public_id") or "").strip()
     action: dict[str, Any] = {
@@ -575,6 +615,12 @@ def _action_payload(state: dict[str, Any], *, state_dir: Path) -> dict[str, Any]
             "cmd": _review_command(public_id),
             "note": "Fix valid findings, then rerun this command.",
         }
+    if stage in {STAGE_CREATED, STAGE_GATE_RERUN_NEEDED}:
+        action = {"cmd": _review_command(public_id)}
+        note = _continuation_note(state)
+        if note:
+            action["note"] = note
+        return action
     if stage in {STAGE_REVIEW_GREEN, STAGE_LOCAL_GREEN_HANDOFF}:
         return _github_handoff_action(state, state_dir=state_dir)
     return {"cmd": _review_command(public_id)}
