@@ -5,6 +5,7 @@ import json
 import os
 import sqlite3
 import subprocess
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from hashlib import blake2s
@@ -1065,6 +1066,24 @@ def refresh_review_cost_report_best_effort(
 
 
 def launch_review_cost_report_refresh_best_effort(*, state_dir: Path, review_cwd: Path | None = None) -> bool:
-    # Disabled until wrapper updates use append-only per-round cost events.
-    # Manual `review_suite_arena.py costs ...` remains available.
-    return False
+    script_path = Path(__file__).with_name("review_suite_arena.py")
+    command = [sys.executable, str(script_path), "costs", "--state-dir", str(state_dir)]
+    if review_cwd is not None:
+        command.extend(["--cd", str(review_cwd)])
+
+    cwd = review_cwd if review_cwd is not None and review_cwd.exists() else state_dir
+    popen_kwargs: dict[str, Any] = {
+        "cwd": str(cwd if cwd.exists() else script_path.parent),
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+    }
+    if os.name == "nt":
+        popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    else:
+        popen_kwargs["start_new_session"] = True
+    try:
+        subprocess.Popen(command, **popen_kwargs)
+    except Exception:
+        return False
+    return True

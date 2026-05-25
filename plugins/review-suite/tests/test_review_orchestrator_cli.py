@@ -261,6 +261,7 @@ def test_orchestrator_review_helper_uses_phase_prompt_without_predecision_anchor
     anchor_calls: list[dict[str, object]] = []
     banner_calls: list[dict[str, object]] = []
     refresh_calls: list[dict[str, object]] = []
+    completion_events: list[str] = []
 
     def fake_run_round(
         *,
@@ -297,9 +298,13 @@ def test_orchestrator_review_helper_uses_phase_prompt_without_predecision_anchor
 
     monkeypatch.setattr(review_suite_arena, "run_round", fake_run_round)
     monkeypatch.setattr(review_suite_arena, "_print_round_banner", lambda **kwargs: banner_calls.append(kwargs))
-    monkeypatch.setattr(review_suite_arena, "_print_findings", lambda result: False)
+    monkeypatch.setattr(review_suite_arena, "_print_findings", lambda result: completion_events.append("findings") or False)
     monkeypatch.setattr(review_suite_arena, "record_review_anchor", lambda **kwargs: anchor_calls.append(kwargs))
-    monkeypatch.setattr(review_suite_arena, "refresh_review_cost_report_best_effort", lambda **kwargs: refresh_calls.append(kwargs))
+    monkeypatch.setattr(
+        review_suite_arena,
+        "launch_review_cost_report_refresh_best_effort",
+        lambda **kwargs: completion_events.append("cost") or refresh_calls.append(kwargs) or True,
+    )
 
     result = review_suite_arena.run_orchestrator_review_step(
         lane="review_t1",
@@ -332,6 +337,7 @@ def test_orchestrator_review_helper_uses_phase_prompt_without_predecision_anchor
     assert banner_calls == [{"task_name": "review 1/2 precision", "round_id": result["round_id"]}]
     assert anchor_calls == []
     assert refresh_calls == [{"state_dir": state_dir, "review_cwd": repo}]
+    assert completion_events == ["findings", "cost"]
 
 
 def test_create_resume_and_id_reprint_use_one_pending_action(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

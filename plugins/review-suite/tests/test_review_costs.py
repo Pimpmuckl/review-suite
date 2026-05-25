@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import subprocess
 import sys
 from pathlib import Path
 
@@ -582,8 +583,23 @@ def test_current_pr_number_can_skip_gh_for_background_refresh(monkeypatch, tmp_p
     assert _current_pr_number(tmp_path) == ""
 
 
-def test_wrapper_cost_refresh_launcher_is_disabled(tmp_path: Path) -> None:
-    assert launch_review_cost_report_refresh_best_effort(state_dir=tmp_path, review_cwd=tmp_path) is False
+def test_wrapper_cost_refresh_launcher_detaches_costs_command(monkeypatch, tmp_path: Path) -> None:
+    calls: list[tuple[list[str], dict[str, object]]] = []
+
+    def fake_popen(command: list[str], **kwargs: object) -> object:
+        calls.append((command, kwargs))
+        return object()
+
+    monkeypatch.setattr("review_costs.subprocess.Popen", fake_popen)
+
+    assert launch_review_cost_report_refresh_best_effort(state_dir=tmp_path, review_cwd=tmp_path) is True
+
+    command, kwargs = calls[0]
+    assert command[:3] == [sys.executable, str(SCRIPT_DIR / "review_suite_arena.py"), "costs"]
+    assert command[3:] == ["--state-dir", str(tmp_path), "--cd", str(tmp_path)]
+    assert kwargs["stdin"] is subprocess.DEVNULL
+    assert kwargs["stdout"] is subprocess.DEVNULL
+    assert kwargs["stderr"] is subprocess.DEVNULL
 
 
 def test_collect_review_cost_rows_includes_implementation_only_worktree(monkeypatch, tmp_path: Path) -> None:

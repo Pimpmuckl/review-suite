@@ -100,6 +100,7 @@ from review_gate import (
 from review_costs import (
     DEFAULT_COST_REPORT_FILENAME,
     collect_review_cost_rows,
+    launch_review_cost_report_refresh_best_effort,
     refresh_review_cost_report_best_effort,
     update_review_cost_row_cache,
     write_review_cost_report,
@@ -825,9 +826,9 @@ def _completed_orchestrator_review_result(
         completed["orchestrator_step_position"] = step_position
         completed["orchestrator_step_total"] = step_total
     write_round(round_state_dir, completed)
-    refresh_review_cost_report_best_effort(state_dir=state_dir, review_cwd=review_cwd)
     result = public_round_result(completed)
     _print_findings(completed)
+    launch_review_cost_report_refresh_best_effort(state_dir=state_dir, review_cwd=review_cwd)
     output_refs = _review_output_refs([run for run in list(completed.get("runs") or []) if isinstance(run, dict)])
     review_scope = dict(completed.get("review_scope") or {})
     return {
