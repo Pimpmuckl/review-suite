@@ -1065,6 +1065,10 @@ def test_findings_fix_progression_and_clean_decision(monkeypatch: pytest.MonkeyP
     assert exit_code == 0
     assert "stage" not in clean
     assert f"--id {public_id}" in str(clean["Action"]["cmd"])
+    assert clean["Action"]["note"] == (
+        "Clean follow-up is not final signoff; run review step 2/2 precision-signoff "
+        "before treating the review as green."
+    )
     state = _cycle_payload(state_dir, public_id)
     assert state["active_findings"] is None
     assert state["validation"]["review_green"] == "unknown"
@@ -1225,6 +1229,49 @@ def test_signoff_findings_require_direct_clean_rerun(monkeypatch: pytest.MonkeyP
     ]
 
 
+def test_clean_followup_note_does_not_leak_to_later_review_steps(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _stub_deslop(monkeypatch)
+    _stub_review(monkeypatch, "phase_review-round-1", "phase_review-round-2", "phase_review-round-3")
+    _stub_followup(monkeypatch, "followup-round-1")
+    config = deepcopy(review.load_config(tmp_path / "state"))
+    config["orchestrator"]["profiles"]["stable"]["normal"]["steps"].append(
+        {"name": "final-sweep", "count": 1, "model_ref": "signoff_brief_model"}
+    )
+    monkeypatch.setattr(review, "load_config", lambda state_dir: config)
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/signoff-note-stale")
+    _commit_file(repo, "app.txt", "feature\n", "feature")
+
+    _, created = _run_review(
+        monkeypatch,
+        ["--mode", "normal", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)],
+    )
+    public_id = str(created["review"])
+    _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+    _run_review(monkeypatch, ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)])
+    _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+    _run_review(monkeypatch, ["--id", public_id, "--decision", "findings", "--state-dir", str(state_dir)])
+    _commit_file(repo, "app.txt", "fixed\n", "fix signoff finding")
+    _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+
+    _, rerun_ready = _run_review(monkeypatch, ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)])
+
+    assert rerun_ready["Action"]["note"] == (
+        "Clean follow-up is not final signoff; run review step 2/3 precision-signoff "
+        "before treating the review as green."
+    )
+
+    _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+    _, final_step_ready = _run_review(monkeypatch, ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)])
+
+    assert set(dict(final_step_ready["Action"])) == {"cmd"}
+    state = _cycle_payload(state_dir, public_id)
+    assert state["pending_action"] == {"kind": "run-review-step", "step_index": 2, "step": "final-sweep"}
+
+
 def test_gate_findings_flow_requires_followup_and_same_gate_rerun(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _stub_deslop(monkeypatch)
     _stub_review(monkeypatch, "phase_review-round-1", "phase_review-round-2")
@@ -1272,6 +1319,9 @@ def test_gate_findings_flow_requires_followup_and_same_gate_rerun(monkeypatch: p
     exit_code, rerun_needed = _run_review(monkeypatch, ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)])
     assert exit_code == 0
     assert "stage" not in rerun_needed
+    assert rerun_needed["Action"]["note"] == (
+        "Clean follow-up is not final signoff; rerun phase_gate before treating the review as green."
+    )
     state = _cycle_payload(state_dir, public_id)
     assert state["pending_action"]["kind"] == "rerun-gate"
     assert state["pending_action"]["gate"] == "phase_gate"
