@@ -30,6 +30,11 @@ DECISION_CLEAN = "clean"
 DECISION_FINDINGS = "findings"
 DECISION_COMMANDS = {DECISION_CLEAN, DECISION_FINDINGS}
 
+GITHUB_RESULT_CLEAN = "clean"
+GITHUB_RESULT_FINDINGS = "findings"
+GITHUB_RESULT_WAIVED = "waived"
+GITHUB_RESULT_COMMANDS = {GITHUB_RESULT_CLEAN, GITHUB_RESULT_FINDINGS, GITHUB_RESULT_WAIVED}
+
 DESLOP_STATUS_TRACKED = "tracked"
 DESLOP_STATUS_DONE = "done"
 DESLOP_STATUS_FAILED = "failed"
@@ -165,6 +170,9 @@ def create_cycle(
             "full_suite": "unknown",
             "ci": "unknown",
         },
+        "github_review": {
+            "status": "unknown",
+        },
         "recovery": {
             "status": "none",
             "retry_count": 0,
@@ -198,6 +206,15 @@ def _compact(payload: dict[str, Any]) -> dict[str, Any]:
 
 def _state_head(state: dict[str, Any]) -> str:
     return _required_text(dict(state.get("identity") or {}).get("head"), field="state.identity.head")
+
+
+def _last_reviewed_head(state: dict[str, Any]) -> str | None:
+    review_heads = dict(state.get("review_heads") or {})
+    for key in ("last_reviewed_head", "last_gate_clean_head", "last_followup_head", "head"):
+        value = _optional_text(review_heads.get(key))
+        if value:
+            return value
+    return None
 
 
 def _round_kind(lane: str, gate: str | None = None) -> str:
@@ -351,7 +368,12 @@ def _next_profile_step_action(state: dict[str, Any]) -> dict[str, Any]:
 
 def _rewind_profile_step_action(state: dict[str, Any], profile_step: dict[str, Any]) -> dict[str, Any]:
     index = _nonnegative_int(profile_step.get("index"), field="profile_step.index")
-    _set_review_progress(state, next_step_index=index, current_step=None)
+    completed = [
+        item
+        for item in _review_progress(state)["completed_steps"]
+        if int(item.get("index") or 0) < index
+    ]
+    _set_review_progress(state, next_step_index=index, current_step=None, completed_steps=completed)
     return _next_profile_step_action(state)
 
 
@@ -591,6 +613,28 @@ def _profile_step_reruns_after_findings(state: dict[str, Any], profile_step: dic
     except ValueError:
         return False
     return _review_step_rerun_on_findings(state, index)
+
+
+def _last_completed_profile_round_id(state: dict[str, Any]) -> str | None:
+    for item in reversed(_review_progress(state)["completed_steps"]):
+        if not isinstance(item, dict):
+            continue
+        round_id = _optional_text(item.get("round_id"))
+        if not round_id:
+            continue
+        profile_step = _profile_step_for_round(state, round_id)
+        if profile_step:
+            return round_id
+    return None
+
+
+def _next_github_round_id(state: dict[str, Any]) -> str:
+    count = sum(
+        1
+        for item in list(state.get("rounds") or [])
+        if isinstance(item, dict) and str(item.get("lane") or "") == "review-github"
+    )
+    return f"github-review-{count + 1}"
 
 
 def deslop_is_ready(state: dict[str, Any]) -> bool:
@@ -904,7 +948,7 @@ def record_followup_clean(
     next_state["active_findings"] = None
     profile_round_id = _profile_round_id_for_findings(next_state, active)
     profile_step = _profile_step_for_round(next_state, profile_round_id) if profile_round_id else None
-    if profile_step and _profile_step_reruns_after_findings(next_state, profile_step):
+    if profile_step and (bool(active.get("rerun_profile_round")) or _profile_step_reruns_after_findings(next_state, profile_step)):
         _set_review_green(next_state, "unknown")
         _set_stage(next_state, STAGE_CREATED, _rewind_profile_step_action(next_state, profile_step))
         return next_state
@@ -1050,6 +1094,68 @@ def can_advance_or_anchor(state: dict[str, Any]) -> bool:
         and dict(state.get("pending_action") or {}).get("kind") != "rerun-gate"
         and dict(state.get("validation") or {}).get("review_green") == "passed"
     )
+
+
+def record_github_result(
+    state: dict[str, Any],
+    *,
+    result: str,
+    note: str | None = None,
+    reviewed_head: str | None = None,
+) -> dict[str, Any]:
+    resolved_result = _required_text(result, field="github_result")
+    if resolved_result not in GITHUB_RESULT_COMMANDS:
+        raise ValueError(f"github_result must be one of: {', '.join(sorted(GITHUB_RESULT_COMMANDS))}")
+    if resolved_result == GITHUB_RESULT_WAIVED and not _optional_text(note):
+        raise ValueError("--github-note is required when --github-result waived")
+    if not can_advance_or_anchor(state):
+        raise ValueError("--github-result requires local green review state")
+
+    next_state = _copy_state(state)
+    head = reviewed_head or _last_reviewed_head(next_state) or _state_head(next_state)
+    next_state["github_review"] = _compact(
+        {
+            "status": resolved_result,
+            "reviewed_head": head,
+            "note": note,
+        }
+    )
+    if resolved_result != GITHUB_RESULT_FINDINGS:
+        return next_state
+
+    profile_round_id = _last_completed_profile_round_id(next_state)
+    if not profile_round_id:
+        raise ValueError("--github-result findings requires a completed local signoff step")
+    round_id = _next_github_round_id(next_state)
+    _upsert_round(
+        next_state,
+        round_id=round_id,
+        lane="review-github",
+        status="decided",
+        reviewed_head=head,
+        command=DECISION_FINDINGS,
+    )
+    _upsert_decision(
+        next_state,
+        round_id=round_id,
+        lane="review-github",
+        command=DECISION_FINDINGS,
+        reviewed_head=head,
+    )
+    next_state["active_findings"] = _compact(
+        {
+            "round_id": round_id,
+            "lane": "review-github",
+            "reviewed_head": head,
+            "status": STAGE_FIX_PENDING,
+            "profile_round_id": profile_round_id,
+            "rerun_profile_round": True,
+            "note": note,
+        }
+    )
+    _set_review_green(next_state, "unknown")
+    _set_stage(next_state, STAGE_FIX_PENDING)
+    return next_state
 
 
 def mark_blocked(

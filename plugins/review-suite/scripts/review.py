@@ -36,6 +36,10 @@ from review_suite_core.orchestrator_runner import run_one_expensive_step
 from review_suite_core.orchestrator_state import (
     DECISION_CLEAN,
     DECISION_FINDINGS,
+    GITHUB_RESULT_CLEAN,
+    GITHUB_RESULT_FINDINGS,
+    GITHUB_RESULT_WAIVED,
+    GITHUB_RESULT_COMMANDS,
     STAGE_CREATED,
     STAGE_DECISION_PENDING,
     STAGE_FIX_PENDING,
@@ -50,6 +54,7 @@ from review_suite_core.orchestrator_state import (
     record_findings_decision,
     record_followup_clean,
     record_followup_findings,
+    record_github_result,
     record_validation_statuses,
     abort_cycle,
 )
@@ -79,6 +84,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--decision", choices=(DECISION_CLEAN, DECISION_FINDINGS))
     parser.add_argument("--github-review", action="store_true")
     parser.add_argument("--github-force", action="store_true")
+    parser.add_argument("--github-result", choices=tuple(sorted(GITHUB_RESULT_COMMANDS)))
+    parser.add_argument("--github-note")
     parser.add_argument("--focused-validation", choices=CLI_VALIDATION_STATUSES)
     parser.add_argument("--full-suite", choices=CLI_VALIDATION_STATUSES)
     parser.add_argument("--ci", choices=CLI_VALIDATION_STATUSES)
@@ -96,6 +103,10 @@ def _review_command(public_id: str, *extra: str) -> str:
 
 def _github_review_action_command(public_id: str) -> str:
     return _review_command(public_id, "--github-review")
+
+
+def _github_result_command(public_id: str, result: str, *extra: str) -> str:
+    return _review_command(public_id, "--github-result", result, *extra)
 
 
 def _configured_selection(config: dict[str, Any]) -> str:
@@ -533,6 +544,14 @@ def _record_validation_status(state: dict[str, Any], args: argparse.Namespace) -
     )
 
 
+def _record_github_result(state: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
+    return record_github_result(
+        state,
+        result=str(args.github_result),
+        note=args.github_note,
+    )
+
+
 def _validation_blockers(state: dict[str, Any]) -> list[str]:
     validation = dict(state.get("validation") or {})
     blockers: list[str] = []
@@ -587,11 +606,62 @@ def _github_handoff_action(state: dict[str, Any], *, state_dir: Path) -> dict[st
     action: dict[str, Any] = {
         "cmd": _github_review_action_command(public_id),
         "after": "PR create/update",
+        "result": {
+            GITHUB_RESULT_CLEAN: _github_result_command(public_id, GITHUB_RESULT_CLEAN),
+            GITHUB_RESULT_FINDINGS: _github_result_command(public_id, GITHUB_RESULT_FINDINGS),
+            GITHUB_RESULT_WAIVED: _github_result_command(public_id, GITHUB_RESULT_WAIVED, "--github-note", "REASON"),
+        },
     }
+    github_review = dict(state.get("github_review") or {})
+    if str(github_review.get("status") or "") == GITHUB_RESULT_FINDINGS:
+        action["note"] = "GitHub findings were fixed and locally signed off; request GitHub review again."
     blockers = _validation_blockers(state)
     if blockers:
         action["blocked_by"] = blockers
     return action
+
+
+def _validation_status_command(public_id: str, blockers: list[str], status: str) -> str:
+    args: list[str] = []
+    for blocker in blockers:
+        key = blocker.split(":", 1)[0]
+        if key == "full_suite":
+            args.extend(["--full-suite", status])
+        if key == "ci":
+            args.extend(["--ci", status])
+    return _review_command(public_id, *args)
+
+
+def _validation_blocker_action(public_id: str, blockers: list[str]) -> dict[str, Any]:
+    return {
+        "cmd": _validation_status_command(public_id, blockers, "passed"),
+        "alt": _validation_status_command(public_id, blockers, "waived"),
+        "blocked_by": blockers,
+        "note": "GitHub result is recorded; record full-suite/CI before PR-final or merge-ready.",
+    }
+
+
+def _github_review_is_terminal(state: dict[str, Any]) -> bool:
+    github_review = dict(state.get("github_review") or {})
+    status = str(github_review.get("status") or "").strip()
+    if status not in {GITHUB_RESULT_CLEAN, GITHUB_RESULT_WAIVED}:
+        return False
+    reviewed_head = str(github_review.get("reviewed_head") or "").strip()
+    if not reviewed_head:
+        return False
+    current_head_value = _identity_head(state)
+    if not current_head_value:
+        current_head_value = str(dict(state.get("review_heads") or {}).get("last_reviewed_head") or "").strip()
+    if not current_head_value:
+        current_head_value = str(dict(state.get("identity") or {}).get("head") or "").strip()
+    return bool(current_head_value) and reviewed_head == current_head_value
+
+
+def _github_terminal_action(state: dict[str, Any], public_id: str) -> dict[str, Any] | None:
+    blockers = _validation_blockers(state)
+    if blockers:
+        return _validation_blocker_action(public_id, blockers)
+    return None
 
 
 def _action_payload(state: dict[str, Any], *, state_dir: Path) -> dict[str, Any] | None:
@@ -622,6 +692,8 @@ def _action_payload(state: dict[str, Any], *, state_dir: Path) -> dict[str, Any]
             action["note"] = note
         return action
     if stage in {STAGE_REVIEW_GREEN, STAGE_LOCAL_GREEN_HANDOFF}:
+        if _github_review_is_terminal(state):
+            return _github_terminal_action(state, public_id)
         return _github_handoff_action(state, state_dir=state_dir)
     return {"cmd": _review_command(public_id)}
 
@@ -636,6 +708,10 @@ def _render(state: dict[str, Any], *, state_dir: Path) -> None:
     action = _action_payload(state, state_dir=state_dir)
     if action:
         payload["Action"] = action
+    github_review = dict(state.get("github_review") or {})
+    github_status = str(github_review.get("status") or "").strip()
+    if github_status and github_status != "unknown":
+        payload["github_review"] = github_status
     emit_toon(payload)
 
 
@@ -679,16 +755,24 @@ def main() -> int:
             raise ValueError("--restart-mode requires --id")
         if args.reason and not args.restart_mode:
             raise ValueError("--reason requires --restart-mode")
-        if args.restart_mode and (args.decision or args.github_review or args.github_force or has_validation_status):
-            raise ValueError("--restart-mode cannot be combined with decisions, GitHub review, or validation status flags")
+        if args.restart_mode and (
+            args.decision or args.github_review or args.github_force or args.github_result or has_validation_status
+        ):
+            raise ValueError("--restart-mode cannot be combined with decisions, GitHub review, GitHub results, or validation status flags")
         if args.decision and not args.id:
             raise ValueError("--decision requires --id")
         if args.github_force and not args.github_review:
             raise ValueError("--github-force requires --github-review")
         if args.github_review and not args.id:
             raise ValueError("--github-review requires --id")
-        if args.github_review and (args.decision or has_validation_status):
-            raise ValueError("--github-review cannot be combined with decisions or validation status flags")
+        if args.github_review and (args.decision or args.github_result or args.github_note or has_validation_status):
+            raise ValueError("--github-review cannot be combined with decisions, GitHub results, GitHub notes, or validation status flags")
+        if args.github_result and not args.id:
+            raise ValueError("--github-result requires --id")
+        if args.github_result and (args.decision or has_validation_status):
+            raise ValueError("--github-result cannot be combined with decisions or validation status flags")
+        if args.github_note and not args.github_result:
+            raise ValueError("--github-note requires --github-result")
         if has_validation_status and not args.id:
             raise ValueError("validation status flags require --id")
         if args.id:
@@ -705,6 +789,12 @@ def main() -> int:
                 return 0
             if args.github_review:
                 return _run_github_review(state, state_dir=state_dir, force=bool(args.github_force))
+            if args.github_result:
+                state = _record_github_result(state, args)
+                saved = save_cycle(state_dir, state)
+                _register_saved_cycle(state_dir, saved)
+                _render(saved, state_dir=state_dir)
+                return 0
             if args.decision:
                 state = _apply_decision(state, str(args.decision), state_dir=state_dir)
             if has_validation_status:

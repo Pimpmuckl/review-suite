@@ -36,6 +36,7 @@ from review_suite_core.orchestrator_state import (
     record_findings_decision,
     record_followup_clean,
     record_followup_findings,
+    record_github_result,
 )
 
 
@@ -355,6 +356,192 @@ def test_followup_clean_reruns_sticky_signoff_step(tmp_path: Path) -> None:
             "round_id": "signoff-2",
             "lane": "review_t1",
             "reviewed_head": "head-2",
+        }
+    ]
+
+
+def test_github_findings_followup_reruns_last_local_signoff_step(tmp_path: Path) -> None:
+    state = _cycle(tmp_path)
+    state["review_plan"] = {
+        "steps": [
+            {
+                "name": "precision-signoff",
+                "count": 1,
+                "model": "gpt-5.5",
+                "reasoning_effort": "medium",
+                "rerun_on_findings": True,
+            },
+        ]
+    }
+    pending = mark_review_step_pending(
+        state,
+        round_id="signoff-1",
+        lane="review_t1",
+        step_index=0,
+        step_name="precision-signoff",
+        reviewed_head="head-1",
+    )
+    green = record_clean_decision(pending, round_id="signoff-1", lane="review_t1", reviewed_head="head-1")
+
+    github_findings = record_github_result(
+        green,
+        result="findings",
+        note="GitHub found a boundary case.",
+        reviewed_head="head-1",
+    )
+
+    assert github_findings["stage"] == STAGE_FIX_PENDING
+    assert github_findings["validation"]["review_green"] == "unknown"
+    assert github_findings["github_review"]["status"] == "findings"
+    assert github_findings["active_findings"] == {
+        "round_id": "github-review-1",
+        "lane": "review-github",
+        "reviewed_head": "head-1",
+        "status": STAGE_FIX_PENDING,
+        "profile_round_id": "signoff-1",
+        "rerun_profile_round": True,
+        "note": "GitHub found a boundary case.",
+    }
+
+    fixed = mark_fix_detected(github_findings, head="head-2")
+    followup_pending = mark_followup_review_pending(
+        fixed,
+        round_id="followup-1",
+        reviewed_head="head-2",
+        source_round_id="github-review-1",
+    )
+    clean = record_followup_clean(followup_pending, round_id="followup-1", reviewed_head="head-2")
+
+    assert clean["stage"] == STAGE_CREATED
+    assert clean["active_findings"] is None
+    assert clean["pending_action"] == {"kind": "run-review-step", "step_index": 0, "step": "precision-signoff"}
+    assert clean["review_progress"]["completed_steps"] == []
+
+
+def test_github_result_defaults_to_latest_local_reviewed_head(tmp_path: Path) -> None:
+    state = _cycle(tmp_path)
+    state["review_plan"] = {
+        "steps": [
+            {
+                "name": "precision-signoff",
+                "count": 1,
+                "model": "gpt-5.5",
+                "reasoning_effort": "medium",
+                "rerun_on_findings": True,
+            },
+        ]
+    }
+    pending = mark_review_step_pending(
+        state,
+        round_id="signoff-1",
+        lane="review_t1",
+        step_index=0,
+        step_name="precision-signoff",
+        reviewed_head="head-2",
+    )
+    green = record_clean_decision(pending, round_id="signoff-1", lane="review_t1", reviewed_head="head-2")
+
+    github_findings = record_github_result(green, result="findings")
+
+    assert github_findings["github_review"]["reviewed_head"] == "head-2"
+    assert github_findings["active_findings"]["reviewed_head"] == "head-2"
+
+
+def test_github_findings_force_signoff_rerun_for_non_sticky_profile(tmp_path: Path) -> None:
+    state = _cycle(tmp_path)
+    state["review_plan"] = {
+        "steps": [
+            {
+                "name": "custom-signoff",
+                "count": 1,
+                "model": "gpt-5.5",
+                "reasoning_effort": "medium",
+            },
+        ]
+    }
+    pending = mark_review_step_pending(
+        state,
+        round_id="signoff-1",
+        lane="review_t1",
+        step_index=0,
+        step_name="custom-signoff",
+        reviewed_head="head-1",
+    )
+    green = record_clean_decision(pending, round_id="signoff-1", lane="review_t1", reviewed_head="head-1")
+    github_findings = record_github_result(green, result="findings", reviewed_head="head-1")
+    fixed = mark_fix_detected(github_findings, head="head-2")
+    followup_pending = mark_followup_review_pending(
+        fixed,
+        round_id="followup-1",
+        reviewed_head="head-2",
+        source_round_id="github-review-1",
+    )
+
+    clean = record_followup_clean(followup_pending, round_id="followup-1", reviewed_head="head-2")
+
+    assert clean["stage"] == STAGE_CREATED
+    assert clean["pending_action"] == {"kind": "run-review-step", "step_index": 0, "step": "custom-signoff"}
+    assert clean["review_progress"]["completed_steps"] == []
+
+
+def test_github_findings_anchor_to_latest_completed_step_not_older_sticky_step(tmp_path: Path) -> None:
+    state = _cycle(tmp_path)
+    state["review_plan"] = {
+        "steps": [
+            {
+                "name": "early-sticky",
+                "count": 1,
+                "model": "gpt-5.5",
+                "reasoning_effort": "medium",
+                "rerun_on_findings": True,
+            },
+            {
+                "name": "final-signoff",
+                "count": 1,
+                "model": "gpt-5.5",
+                "reasoning_effort": "medium",
+            },
+        ]
+    }
+    first_pending = mark_review_step_pending(
+        state,
+        round_id="early-1",
+        lane="review_t1",
+        step_index=0,
+        step_name="early-sticky",
+        reviewed_head="head-1",
+    )
+    queued = record_clean_decision(first_pending, round_id="early-1", lane="review_t1", reviewed_head="head-1")
+    final_pending = mark_review_step_pending(
+        queued,
+        round_id="final-1",
+        lane="review_t1",
+        step_index=1,
+        step_name="final-signoff",
+        reviewed_head="head-1",
+    )
+    green = record_clean_decision(final_pending, round_id="final-1", lane="review_t1", reviewed_head="head-1")
+
+    github_findings = record_github_result(green, result="findings", reviewed_head="head-1")
+
+    assert github_findings["active_findings"]["profile_round_id"] == "final-1"
+    fixed = mark_fix_detected(github_findings, head="head-2")
+    followup_pending = mark_followup_review_pending(
+        fixed,
+        round_id="followup-1",
+        reviewed_head="head-2",
+        source_round_id="github-review-1",
+    )
+    clean = record_followup_clean(followup_pending, round_id="followup-1", reviewed_head="head-2")
+
+    assert clean["pending_action"] == {"kind": "run-review-step", "step_index": 1, "step": "final-signoff"}
+    assert clean["review_progress"]["completed_steps"] == [
+        {
+            "index": 0,
+            "name": "early-sticky",
+            "round_id": "early-1",
+            "lane": "review_t1",
+            "reviewed_head": "head-1",
         }
     ]
 

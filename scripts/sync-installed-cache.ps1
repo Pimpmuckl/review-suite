@@ -205,6 +205,44 @@ function Test-MarketplacePathIsKnownArtifact {
     return $false
 }
 
+function Join-ProcessArguments {
+    param([Parameter(Mandatory = $true)][string[]]$Arguments)
+
+    $quoted = foreach ($argument in $Arguments) {
+        $value = [string]$argument
+        if ($value -notmatch '[\s"]') {
+            $value
+            continue
+        }
+        $builder = [System.Text.StringBuilder]::new()
+        [void]$builder.Append('"')
+        $backslashes = 0
+        foreach ($char in $value.ToCharArray()) {
+            if ($char -eq '\') {
+                $backslashes++
+                continue
+            }
+            if ($char -eq '"') {
+                [void]$builder.Append('\' * (($backslashes * 2) + 1))
+                [void]$builder.Append('"')
+                $backslashes = 0
+                continue
+            }
+            if ($backslashes -gt 0) {
+                [void]$builder.Append('\' * $backslashes)
+                $backslashes = 0
+            }
+            [void]$builder.Append($char)
+        }
+        if ($backslashes -gt 0) {
+            [void]$builder.Append('\' * ($backslashes * 2))
+        }
+        [void]$builder.Append('"')
+        $builder.ToString()
+    }
+    return $quoted -join " "
+}
+
 function Get-GitStatusPorcelainEntries {
     param([Parameter(Mandatory = $true)][string]$TargetPath)
 
@@ -214,13 +252,25 @@ function Get-GitStatusPorcelainEntries {
     $processInfo.RedirectStandardOutput = $true
     $processInfo.RedirectStandardError = $true
     $processInfo.CreateNoWindow = $true
-    foreach ($argument in @("-C", $TargetPath, "status", "--porcelain=v1", "-z", "--untracked-files=all")) {
-        [void]$processInfo.ArgumentList.Add($argument)
+    $arguments = @("-C", $TargetPath, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+    if ($null -ne $processInfo.ArgumentList) {
+        foreach ($argument in $arguments) {
+            [void]$processInfo.ArgumentList.Add($argument)
+        }
     }
+    else {
+        $processInfo.Arguments = Join-ProcessArguments -Arguments $arguments
+    }
+
+    $process = $null
+    $stdout = [System.IO.MemoryStream]::new()
+    $exitCode = 1
 
     try {
         $process = [System.Diagnostics.Process]::Start($processInfo)
-        $stdout = [System.IO.MemoryStream]::new()
+        if ($null -eq $process) {
+            return [pscustomobject]@{ Succeeded = $false; Entries = @() }
+        }
         $process.StandardOutput.BaseStream.CopyTo($stdout)
         $process.StandardError.ReadToEnd() | Out-Null
         $process.WaitForExit()

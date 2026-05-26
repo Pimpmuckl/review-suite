@@ -48,8 +48,10 @@ To explicitly replace an existing local review ladder with a stricter one, use t
 ```powershell
 <python> <review-suite-plugin-root>/scripts/review.py --mode brief|normal|deep|emergency --cd <repo-root> --base main
 <python> <review-suite-plugin-root>/scripts/review.py --id <id> --decision clean|findings
+<python> <review-suite-plugin-root>/scripts/review.py --id <id> --github-review
+<python> <review-suite-plugin-root>/scripts/review.py --id <id> --github-result clean|findings
+<python> <review-suite-plugin-root>/scripts/review.py --id <id> --github-result waived --github-note "why"
 <python> <review-suite-plugin-root>/scripts/review.py --id <id> --restart-mode deep --reason "why this run needs stricter review"
-<python> <review-suite-plugin-root>/scripts/review_github.py run --cd <repo-root>
 ```
 
 `<review-suite-plugin-root>` is the installed Codex plugin cache root, such as `%USERPROFILE%\.codex\plugins\cache\review-suite\review-suite\0.1.0` for the git marketplace install or `%USERPROFILE%\.codex\plugins\cache\jonat-local\review-suite\local` for the older local marketplace install. Do not run scripts from `%USERPROFILE%\.codex\.tmp\marketplaces\review-suite`; that is Codex's marketplace source clone.
@@ -58,6 +60,8 @@ To explicitly replace an existing local review ladder with a stricter one, use t
 
 - Long runs emit `OK <minutes>m: ...` about every 60s.
 - Reviewer text prints once in the final `Output:` block.
+- If GitHub review finds issues, record them on the owning review id with `--github-result findings`; after the fix follow-up is clean, that id reruns the final local signoff step before requesting GitHub again.
+- If GitHub cannot run or the parent workflow approves no GitHub review, record the explicit escape hatch with `--github-result waived --github-note "why"`.
 
 ## Runtime Copies
 
