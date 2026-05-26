@@ -1259,7 +1259,7 @@ def test_run_gate_round_retries_operational_block_once(monkeypatch, tmp_path: Pa
     captured = capsys.readouterr()
     assert "Output:" in captured.out
     assert "I did not find any actionable bugs in this diff." in captured.out
-    assert "reviews can take up to 20m" in captured.err
+    assert "reviews can take a long time" in captured.err
     assert "alpha-model" not in captured.err
     assert "bravo-model" not in captured.err
     assert "xhigh" not in captured.err

@@ -778,7 +778,7 @@ def test_run_benchmarked_round_warns_for_deep_review_without_model_names(monkeyp
 
     assert result == 0
     err = capsys.readouterr().err
-    assert "reviews can take up to 20m" in err
+    assert "reviews can take a long time" in err
     assert "hidden-alpha" not in err
     assert "hidden-bravo" not in err
     assert "xhigh" not in err

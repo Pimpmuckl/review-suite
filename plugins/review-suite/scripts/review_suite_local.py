@@ -125,7 +125,7 @@ def includes_deep_review_effort(items: list[dict[str, Any]]) -> bool:
 
 def print_deep_review_wait_note() -> None:
     print(
-        "[review-suite] deep review selected; reviews can take up to 20m. Wait for wrapper output.",
+        "[review-suite] deep review selected; reviews can take a long time. Wait for wrapper output.",
         file=sys.stderr,
         flush=True,
     )
