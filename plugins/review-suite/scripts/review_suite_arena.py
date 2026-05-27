@@ -101,6 +101,7 @@ from review_costs import (
     DEFAULT_COST_REPORT_FILENAME,
     collect_review_cost_rows,
     launch_review_cost_report_refresh_best_effort,
+    read_review_cost_row_cache,
     refresh_review_cost_report_best_effort,
     update_review_cost_row_cache,
     write_review_cost_report,
@@ -2000,17 +2001,33 @@ def cmd_costs(args: argparse.Namespace) -> int:
     )
     output_path = Path(args.output) if getattr(args, "output", None) else state_dir / DEFAULT_COST_REPORT_FILENAME
     update_review_cost_row_cache(state_dir=state_dir, rows=rows)
-    write_review_cost_report(rows=rows, output_path=output_path)
+    report_rows = read_review_cost_row_cache(state_dir) or rows
+    write_review_cost_report(rows=report_rows, output_path=output_path)
+    scoped_totals = {
+        "tokens": sum(row.tokens for row in rows),
+        "cost_usd": round(sum(row.cost_usd for row in rows), 6),
+        "implementation_tokens": sum(row.implementation_tokens for row in rows),
+        "implementation_cost_usd": round(sum(row.implementation_cost_usd for row in rows), 6),
+    }
     payload = {
         "status": "ok",
         "rows": len(rows),
+        "report_rows": len(report_rows),
         "report": str(output_path),
-        "total_tokens": sum(row.tokens for row in rows),
-        "total_cost_usd": round(sum(row.cost_usd for row in rows), 6),
-        "total_implementation_tokens": sum(row.implementation_tokens for row in rows),
-        "total_implementation_cost_usd": round(sum(row.implementation_cost_usd for row in rows), 6),
+        "total_tokens": scoped_totals["tokens"],
+        "total_cost_usd": scoped_totals["cost_usd"],
+        "total_implementation_tokens": scoped_totals["implementation_tokens"],
+        "total_implementation_cost_usd": scoped_totals["implementation_cost_usd"],
         "costs": [_cost_row_payload(row) for row in rows],
     }
+    if len(report_rows) != len(rows):
+        payload["report_total_tokens"] = sum(row.tokens for row in report_rows)
+        payload["report_total_cost_usd"] = round(sum(row.cost_usd for row in report_rows), 6)
+        payload["report_total_implementation_tokens"] = sum(row.implementation_tokens for row in report_rows)
+        payload["report_total_implementation_cost_usd"] = round(
+            sum(row.implementation_cost_usd for row in report_rows),
+            6,
+        )
     if bool(getattr(args, "json", False)):
         print(json.dumps(payload, indent=2))
     else:

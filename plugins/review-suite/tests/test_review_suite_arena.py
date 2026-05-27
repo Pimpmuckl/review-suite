@@ -29,6 +29,7 @@ from review_suite_arena import (
     resume_orchestrator_review_step,
     run_benchmarked_round,
 )
+from review_costs import ReviewCostRow, update_review_cost_row_cache
 from review_suite_local import public_round_result, write_round
 
 
@@ -388,6 +389,58 @@ def test_cmd_costs_writes_markdown_report(monkeypatch, tmp_path: Path, capsys) -
     assert "total_cost_usd: 0.012345" in captured.out
     assert "total_implementation_tokens: 1000" in captured.out
     assert "total_implementation_cost_usd: 0.004" in captured.out
+
+
+def test_cmd_costs_renders_cached_rows_after_scoped_refresh(monkeypatch, tmp_path: Path, capsys) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    state_dir = tmp_path / "state"
+    output = tmp_path / "costs.md"
+    cached_row = ReviewCostRow(
+        repo="cached-repo",
+        folder="cached-worktree",
+        branch="feat/cached",
+        pr_number="7",
+        worker_model="gpt-5.5 medium",
+        implementation_tokens=2000,
+        implementation_cost_usd=0.02,
+        caller_threads=(),
+        latest_review="2026-04-26T10:00:00Z",
+        lane_sessions={"review_t1": 1, "review_t2": 0, "review_t3": 0, "review_t4": 0, "review_followup": 0},
+        review_seconds=60,
+        tokens=300,
+        cost_usd=0.003,
+    )
+    current_row = ReviewCostRow(
+        repo="repo",
+        folder="repo",
+        branch="feat/costs",
+        pr_number="42",
+        worker_model="gpt-5.5 medium",
+        implementation_tokens=1000,
+        implementation_cost_usd=0.004,
+        caller_threads=(),
+        latest_review="2026-04-27T10:00:00Z",
+        lane_sessions={"review_t1": 2, "review_t2": 2, "review_t3": 0, "review_t4": 0, "review_followup": 0},
+        review_seconds=123.0,
+        tokens=456,
+        cost_usd=0.012345,
+    )
+    update_review_cost_row_cache(state_dir=state_dir, rows=[cached_row])
+    monkeypatch.setattr("review_suite_arena.resolve_repo_root", lambda cd: repo)
+    monkeypatch.setattr("review_suite_arena.collect_review_cost_rows", lambda **kwargs: [current_row])
+
+    result = cmd_costs(Namespace(cd=str(repo), all=False, state_dir=str(state_dir), output=str(output), json=False))
+
+    captured = capsys.readouterr()
+    markdown = output.read_text(encoding="utf-8")
+    assert result == 0
+    assert "# cached-repo" in markdown
+    assert "# repo" in markdown
+    assert "rows: 1" in captured.out
+    assert "report_rows: 2" in captured.out
+    assert "total_tokens: 456" in captured.out
+    assert "report_total_tokens: 756" in captured.out
 
 
 def test_cmd_costs_all_ignores_cd_filter(monkeypatch, tmp_path: Path) -> None:
