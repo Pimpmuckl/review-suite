@@ -5,7 +5,6 @@ import json
 import statistics
 import subprocess
 import sys
-import tempfile
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -13,7 +12,15 @@ from hashlib import blake2s
 from pathlib import Path
 from typing import Any
 
-from review_suite_core import format_command, gate_config, utc_now, utc_now_iso, wrapper_launch_cwd, write_text
+from review_suite_core import (
+    format_command,
+    gate_config,
+    launch_captured_child_process,
+    utc_now,
+    utc_now_iso,
+    wrapper_launch_cwd,
+    write_text,
+)
 from review_suite_local import (
     CAPACITY_RETRY_DELAY_SECONDS,
     CAPACITY_RETRY_MAX_ATTEMPTS,
@@ -899,10 +906,6 @@ def _launch_gate_run(
     retry_attempts: int,
 ) -> dict[str, Any]:
     manual_prompt = prompt if not uses_native_base_review(review_scope) else ""
-    stdout_tmp = tempfile.NamedTemporaryFile(prefix=f"{gate_task_class}-{slot}-", suffix=".stdout.txt", delete=False)
-    stderr_tmp = tempfile.NamedTemporaryFile(prefix=f"{gate_task_class}-{slot}-", suffix=".stderr.txt", delete=False)
-    stdout_path = Path(stdout_tmp.name)
-    stderr_path = Path(stderr_tmp.name)
     title = _gate_run_title(
         gate_task_class=gate_task_class,
         round_id=round_id,
@@ -920,25 +923,16 @@ def _launch_gate_run(
         prompt=prompt,
         allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
     )
-    proc = subprocess.Popen(
-        command,
-        cwd=str(
+    child = launch_captured_child_process(
+        command=command,
+        cwd=(
             wrapper_launch_cwd()
             if use_unsafe_windows_wsl_fallback(review_cwd, allow_unsafe_windows_wsl_fallback)
             else review_cwd
         ),
-        stdin=subprocess.PIPE if manual_prompt else None,
-        stdout=stdout_tmp,
-        stderr=stderr_tmp,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
+        stdin_text=manual_prompt or None,
+        stdout_prefix=f"{gate_task_class}-{slot}-",
     )
-    if manual_prompt and proc.stdin is not None:
-        proc.stdin.write(manual_prompt)
-        proc.stdin.close()
-    stdout_tmp.close()
-    stderr_tmp.close()
     return {
         "slot": slot,
         "variant": dict(variant),
@@ -946,12 +940,12 @@ def _launch_gate_run(
         "service_tier": variant_service_tier(variant),
         "title": title,
         "command": command,
-        "process": proc,
-        "pid": proc.pid,
+        "process": child.process,
+        "pid": child.process.pid,
         "started_at": utc_now_iso(),
-        "started_monotonic": time.monotonic(),
-        "stdout_path": stdout_path,
-        "stderr_path": stderr_path,
+        "started_monotonic": child.started_monotonic,
+        "stdout_path": child.stdout_path,
+        "stderr_path": child.stderr_path,
         "retry_attempts": retry_attempts,
         "timed_out": False,
     }

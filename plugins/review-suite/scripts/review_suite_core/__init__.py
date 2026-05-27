@@ -20,6 +20,12 @@ from .lens_runtime import (
     run_codex,
 )
 from .paths import cwd_path_from_normalized, normalize_cwd, resolve_repo_root, utc_now, utc_now_iso
+from .process_runtime import (
+    CapturedChildProcess,
+    CapturedChildWaitResult,
+    launch_captured_child_process,
+    wait_for_captured_child_process,
+)
 from .workflow_state import (
     anchor_updates_branch_state,
     branch_diff_paths,
@@ -50,6 +56,8 @@ __all__ = [
     "DEFAULT_TIMEOUT_SECONDS",
     "WRAPPER_SESSION_LOG_FILENAME",
     "AxiArgumentParser",
+    "CapturedChildProcess",
+    "CapturedChildWaitResult",
     "GateConfig",
     "LensModelConfig",
     "effective_execution_cwd",
@@ -74,6 +82,7 @@ __all__ = [
     "is_windows_wsl_unc_path",
     "lens_model_config",
     "load_config",
+    "launch_captured_child_process",
     "merge_base",
     "normalize_cwd",
     "progress_heartbeat_line",
@@ -92,6 +101,7 @@ __all__ = [
     "utc_now",
     "utc_now_iso",
     "validate_codex_runtime",
+    "wait_for_captured_child_process",
     "workflow_state_path",
     "wrapper_launch_cwd",
     "write_text",
