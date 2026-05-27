@@ -29,6 +29,7 @@ from review_suite_core import (
     merge_base,
     record_review_anchor,
     resolve_repo_root,
+    write_text,
 )
 from review_suite_core.config import default_state_dir, load_config
 from review_suite_core.orchestrator_profiles import RESTART_MODE_ORDER, SUPPORTED_MODES, resolve_orchestrator_profile
@@ -65,6 +66,7 @@ from review_suite_core.orchestrator_store import (
     save_cycle,
     state_dir_for_public_id,
 )
+from review_suite_local import load_round, print_reviewer_output_section, public_task_name
 
 
 FOLLOWUP_LANE = "review-followup"
@@ -89,6 +91,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--focused-validation", choices=CLI_VALIDATION_STATUSES)
     parser.add_argument("--full-suite", choices=CLI_VALIDATION_STATUSES)
     parser.add_argument("--ci", choices=CLI_VALIDATION_STATUSES)
+    parser.add_argument("--show-findings", action="store_true", help="Print stored reviewer output for --id without running review.")
     parser.add_argument("--state-dir", default=str(default_state_dir()), help=argparse.SUPPRESS)
     return parser
 
@@ -264,6 +267,155 @@ def _gate_output_refs(runs: list[object]) -> list[str]:
         if ref:
             refs.append(ref)
     return refs
+
+
+def _orchestrator_review_state_dir(state_dir: Path) -> Path:
+    return state_dir / "orchestrator" / "review-rounds"
+
+
+def _unique_paths(paths: list[Path]) -> list[Path]:
+    seen: set[str] = set()
+    result: list[Path] = []
+    for path in paths:
+        resolved = path.resolve(strict=False)
+        key = str(resolved).lower() if sys.platform == "win32" else str(resolved)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(path)
+    return result
+
+
+def _round_state_dir_candidates(state_dir: Path, round_record: dict[str, Any]) -> list[Path]:
+    candidates: list[Path] = []
+    round_state_dir = str(round_record.get("round_state_dir") or "").strip()
+    if round_state_dir:
+        candidates.append(Path(round_state_dir))
+    candidates.extend([_orchestrator_review_state_dir(state_dir), state_dir])
+    return _unique_paths(candidates)
+
+
+def _task_class_for_lane(lane: str) -> str:
+    return {
+        "review_t1": "phase_review",
+        "review_t2": "phase_gate",
+        "review_t3": "pr_review",
+        "review_t4": "pr_gate",
+        FOLLOWUP_LANE: "phase_review",
+    }.get(lane, lane)
+
+
+def _fallback_round_payload(round_record: dict[str, Any]) -> dict[str, Any]:
+    lane = str(round_record.get("lane") or "").strip()
+    payload = dict(round_record)
+    payload["task_class"] = str(payload.get("task_class") or _task_class_for_lane(lane))
+    payload["status"] = str(payload.get("status") or payload.get("review_status") or "unknown")
+    runs = []
+    for raw_run in list(payload.get("runs") or []):
+        if not isinstance(raw_run, dict):
+            continue
+        run = dict(raw_run)
+        if not str(run.get("review_status") or "").strip() and str(run.get("status") or "").strip():
+            run["review_status"] = run.get("status")
+        if not str(run.get("reviewer_output") or "").strip() and str(run.get("summary") or "").strip():
+            run["reviewer_output"] = run.get("summary")
+        if not str(run.get("reviewer_output_ref") or "").strip() and str(run.get("ref") or "").strip():
+            run["reviewer_output_ref"] = run.get("ref")
+        runs.append(run)
+    payload["runs"] = runs
+    return payload
+
+
+def _round_record_by_id(state: dict[str, Any], round_id: str) -> dict[str, Any]:
+    for item in list(state.get("rounds") or []):
+        if isinstance(item, dict) and str(item.get("round_id") or "") == round_id:
+            return dict(item)
+    return {}
+
+
+def _load_output_round_payload(state_dir: Path, round_record: dict[str, Any]) -> dict[str, Any]:
+    round_id = str(round_record.get("round_id") or "").strip()
+    if not round_id:
+        return _fallback_round_payload(round_record)
+    for candidate in _round_state_dir_candidates(state_dir, round_record):
+        try:
+            return load_round(candidate, round_id)
+        except ValueError:
+            continue
+    gate_record = load_gate_record(state_dir, round_id)
+    if gate_record is not None:
+        return gate_record
+    return _fallback_round_payload(round_record)
+
+
+def _payload_has_reviewer_output(payload: dict[str, Any]) -> bool:
+    for run in list(payload.get("runs") or []):
+        if not isinstance(run, dict):
+            continue
+        for key in ("reviewer_output", "status_summary", "summary"):
+            if str(run.get(key) or "").strip():
+                return True
+    return False
+
+
+def _output_round_candidates(state: dict[str, Any]) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def add_round_id(round_id: str) -> None:
+        value = str(round_id or "").strip()
+        if not value or value in seen:
+            return
+        seen.add(value)
+        record = _round_record_by_id(state, value)
+        if record:
+            candidates.append(record)
+        else:
+            candidates.append({"round_id": value})
+
+    pending = dict(state.get("pending_action") or {})
+    if str(pending.get("kind") or "") in {"collect-review-step", "decision"}:
+        add_round_id(str(pending.get("round_id") or ""))
+    active = state.get("active_findings")
+    if isinstance(active, dict):
+        add_round_id(str(active.get("round_id") or ""))
+    for item in reversed(list(state.get("rounds") or [])):
+        if isinstance(item, dict):
+            add_round_id(str(item.get("round_id") or ""))
+    return candidates
+
+
+def _show_findings(state: dict[str, Any], *, state_dir: Path) -> int:
+    public_id = str(state.get("public_id") or "").strip()
+    candidates = _output_round_candidates(state)
+    if not candidates:
+        write_text(f"review: {public_id}")
+        write_text("no stored reviewer output found")
+        return 0
+    selected = candidates[0]
+    payload = _load_output_round_payload(state_dir, selected)
+    for candidate in candidates:
+        candidate_payload = _load_output_round_payload(state_dir, candidate)
+        if _payload_has_reviewer_output(candidate_payload):
+            selected = candidate
+            payload = candidate_payload
+            break
+    round_id = str(payload.get("round_id") or selected.get("round_id") or "").strip()
+    lane = str(selected.get("lane") or payload.get("public_task") or "").strip()
+    task = public_task_name(str(payload.get("task_class") or ""))
+    write_text(f"review: {public_id}")
+    write_text(f"round_id: {round_id}")
+    if lane:
+        write_text(f"lane: {lane}")
+    if task:
+        write_text(f"task: {task}")
+    status = str(payload.get("status") or selected.get("status") or "").strip()
+    if status:
+        write_text(f"status: {status}")
+    write_text("")
+    if not print_reviewer_output_section([run for run in list(payload.get("runs") or []) if isinstance(run, dict)]):
+        write_text("no stored reviewer output found for this round")
+    return 0
 
 
 def _record_gate_decision(
@@ -775,9 +927,23 @@ def main() -> int:
             raise ValueError("--github-note requires --github-result")
         if has_validation_status and not args.id:
             raise ValueError("validation status flags require --id")
+        if args.show_findings and not args.id:
+            raise ValueError("--show-findings requires --id")
+        if args.show_findings and (
+            args.restart_mode
+            or args.decision
+            or args.github_review
+            or args.github_force
+            or args.github_result
+            or args.github_note
+            or has_validation_status
+        ):
+            raise ValueError("--show-findings cannot be combined with decisions, GitHub review, GitHub results, validation status flags, or restart")
         if args.id:
             state_dir, state = _load_cycle_and_state_dir(state_dir, str(args.id))
             _reject_id_creation_args(args, state)
+            if args.show_findings:
+                return _show_findings(state, state_dir=state_dir)
             if args.restart_mode:
                 state = _restart_cycle(
                     state,

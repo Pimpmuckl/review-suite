@@ -48,6 +48,7 @@ To explicitly replace an existing local review ladder with a stricter one, use t
 ```powershell
 <python> <review-suite-plugin-root>/scripts/review.py --mode brief|normal|deep|emergency --cd <repo-root> --base main
 <python> <review-suite-plugin-root>/scripts/review.py --id <id> --decision clean|findings
+<python> <review-suite-plugin-root>/scripts/review.py --id <id> --show-findings
 <python> <review-suite-plugin-root>/scripts/review.py --id <id> --github-review
 <python> <review-suite-plugin-root>/scripts/review.py --id <id> --github-result clean|findings
 <python> <review-suite-plugin-root>/scripts/review.py --id <id> --github-result waived --github-note "why"
@@ -60,6 +61,7 @@ To explicitly replace an existing local review ladder with a stricter one, use t
 
 - Long runs emit `OK <minutes>m: ...` about every 60s.
 - Reviewer text prints once in the final `Output:` block.
+- If the calling Codex session was restarted after reviewers completed, recover the stored reviewer text with `review.py --id <id> --show-findings`; this does not launch or collect another review round.
 - If GitHub review finds issues, record them on the owning review id with `--github-result findings`; after the fix follow-up is clean, that id reruns the final local signoff step before requesting GitHub again.
 - If GitHub cannot run or the parent workflow approves no GitHub review, record the explicit escape hatch with `--github-result waived --github-note "why"`.
 

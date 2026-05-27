@@ -1813,13 +1813,28 @@ def _load_gate_round_payload(state_dir: Path, round_id: str) -> dict[str, object
     return None
 
 
+def _recoverable_round_state_dirs(state_dir: Path) -> list[Path]:
+    candidates = [state_dir, _orchestrator_review_state_dir(state_dir)]
+    seen: set[str] = set()
+    result: list[Path] = []
+    for candidate in candidates:
+        resolved = candidate.resolve(strict=False)
+        key = str(resolved).lower() if sys.platform == "win32" else str(resolved)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(candidate)
+    return result
+
+
 def _iter_recoverable_round_outputs(state_dir: Path) -> list[dict[str, object]]:
     payloads: list[dict[str, object]] = []
     gate_decisions = gate_signoff_decisions_by_round(state_dir)
-    for payload in iter_round_payloads(state_dir):
-        task_class = str(payload.get("task_class") or "")
-        if task_class in {"phase_review", "pr_review"}:
-            payloads.append(payload)
+    for round_state_dir in _recoverable_round_state_dirs(state_dir):
+        for payload in iter_round_payloads(round_state_dir):
+            task_class = str(payload.get("task_class") or "")
+            if task_class in {"phase_review", "pr_review"}:
+                payloads.append(payload)
     for record in read_jsonl(state_dir / "gate_runs.jsonl"):
         task_class = str(record.get("task_class") or "")
         if task_class in {"phase_gate", "pr_gate"}:
@@ -1852,12 +1867,18 @@ def _last_round_outputs(
 
 def cmd_show_round(args: argparse.Namespace) -> int:
     state_dir = Path(args.state_dir)
-    try:
-        payload = load_round(state_dir, args.round_id)
-    except ValueError:
+    payload: dict[str, object] | None = None
+    load_error: ValueError | None = None
+    for round_state_dir in _recoverable_round_state_dirs(state_dir):
+        try:
+            payload = load_round(round_state_dir, args.round_id)
+            break
+        except ValueError as exc:
+            load_error = exc
+    if payload is None:
         payload = _load_gate_round_payload(state_dir, args.round_id)
         if payload is None:
-            raise
+            raise load_error or ValueError(f"unknown round: {args.round_id}")
     if bool(getattr(args, "json", False)):
         write_text(json.dumps(_round_output_payload(payload), indent=2, ensure_ascii=False))
         return 0

@@ -524,6 +524,50 @@ def test_cmd_show_last_prints_latest_outputs_per_local_lane(tmp_path: Path, caps
     assert "Latest T2" in captured.out
 
 
+def test_cmd_show_round_finds_orchestrator_review_rounds(tmp_path: Path, capsys) -> None:
+    write_round(
+        tmp_path / "orchestrator" / "review-rounds",
+        {
+            "round_id": "orchestrator-round",
+            "task_class": "phase_review",
+            "status": "completed",
+            "runs": [{"slot": "alpha", "review_status": "completed", "reviewer_output": "Orchestrator finding"}],
+        },
+    )
+
+    result = cmd_show_round(Namespace(round_id="orchestrator-round", state_dir=str(tmp_path), json=False))
+
+    captured = capsys.readouterr()
+    assert result == 0
+    assert "round_id: orchestrator-round" in captured.out
+    assert "Orchestrator finding" in captured.out
+
+
+def test_cmd_show_last_filters_orchestrator_review_rounds_by_repo(monkeypatch, tmp_path: Path, capsys) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.setattr("review_suite_arena.resolve_repo_root", lambda cd: repo)
+    write_round(
+        tmp_path / "orchestrator" / "review-rounds",
+        {
+            "round_id": "orchestrator-latest",
+            "task_class": "phase_review",
+            "status": "completed",
+            "sampled_at": "2026-05-27T10:00:00Z",
+            "review_cwd": str(repo),
+            "review_cwd_normalized": str(repo),
+            "runs": [{"slot": "alpha", "review_status": "completed", "reviewer_output": "Nested latest"}],
+        },
+    )
+
+    result = cmd_show_last(Namespace(cd=str(repo), task="review_t1", state_dir=str(tmp_path), json=False))
+
+    captured = capsys.readouterr()
+    assert result == 0
+    assert "round_id: orchestrator-latest" in captured.out
+    assert "Nested latest" in captured.out
+
+
 def test_print_findings_prints_blocked_body_after_completion_status(capsys) -> None:
     _print_findings(
         {

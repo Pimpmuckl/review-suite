@@ -16,6 +16,7 @@ if str(SCRIPT_DIR) not in sys.path:
 import review
 import review_suite_arena
 from review_suite_core import orchestrator_runner
+from review_suite_local import write_round
 
 
 @pytest.fixture(autouse=True)
@@ -504,6 +505,86 @@ def test_create_resume_and_id_reprint_use_one_pending_action(monkeypatch: pytest
     assert state["validation"]["ci"] == "classified"
     assert len(deslop_calls) == 1
     assert len(review_calls) == 2
+
+
+def test_id_show_findings_reads_orchestrator_round_payload_without_running(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _stub_deslop(monkeypatch)
+    review_calls = _stub_review(monkeypatch, "phase_review-round-1")
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/show-findings")
+    _commit_file(repo, "app.txt", "feature\n", "feature")
+
+    args = ["--mode", "brief", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)]
+    _, created = _run_review(monkeypatch, args)
+    public_id = str(created["review"])
+    _run_review(monkeypatch, args)
+    state = _cycle_payload(state_dir, public_id)
+    round_id = str(state["rounds"][0]["round_id"])
+    round_state_dir = state_dir / "orchestrator" / "review-rounds"
+    state["rounds"][0]["round_state_dir"] = str(round_state_dir)
+    state["rounds"][0]["status"] = "selected-round-status"
+    state["rounds"].append(
+        {
+            "round_id": "empty-later-round",
+            "lane": "review_t2",
+            "status": "decision-pending",
+            "round_state_dir": str(round_state_dir),
+            "runs": [],
+        }
+    )
+    state["pending_action"] = {"kind": "decision", "round_id": "empty-later-round", "lane": "review_t2"}
+    _write_cycle_payload(state_dir, public_id, state)
+    write_round(
+        round_state_dir,
+        {
+            "round_id": round_id,
+            "task_class": "phase_review",
+            "public_task": "review_t1",
+            "review_cwd": str(repo),
+            "runs": [
+                {
+                    "slot": "alpha",
+                    "review_status": "completed",
+                    "reviewer_output": "Alpha recovered finding",
+                    "reviewer_output_ref": "rollout://phase_review-round-1/alpha",
+                }
+            ],
+        },
+    )
+    write_round(
+        round_state_dir,
+        {
+            "round_id": "empty-later-round",
+            "task_class": "phase_gate",
+            "status": "completed",
+            "runs": [],
+        },
+    )
+    before_calls = len(review_calls)
+    monkeypatch.setattr(review, "emit_toon", lambda payload: (_ for _ in ()).throw(AssertionError("should not emit status")))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["review.py", "--id", public_id, "--show-findings", "--state-dir", str(state_dir)],
+    )
+
+    exit_code = review.main()
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert f"review: {public_id}" in captured.out
+    assert f"round_id: {round_id}" in captured.out
+    assert "status: selected-round-status" in captured.out
+    assert "status: decision-pending" not in captured.out
+    assert "Alpha recovered finding" in captured.out
+    assert len(review_calls) == before_calls
 
 
 def test_id_collects_running_round_without_spawning_duplicate(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
