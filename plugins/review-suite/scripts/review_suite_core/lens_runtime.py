@@ -6,11 +6,11 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import time
 from pathlib import Path
 
 from .axi_output import emit_toon
 from .codex_runtime import use_unsafe_windows_wsl_fallback, validate_codex_runtime, wrapper_launch_cwd
+from .process_runtime import CapturedChildProcess, launch_captured_child_process, wait_for_captured_child_process
 
 
 DEFAULT_MODEL = "gpt-5.5"
@@ -168,13 +168,10 @@ def run_codex(
     progress_interval_seconds: int,
     timeout_seconds: int,
     allow_unsafe_windows_wsl_fallback: bool,
-) -> dict[str, str | int | None]:
+) -> dict[str, object]:
     with tempfile.NamedTemporaryFile(prefix=f"{tool_name}-message-", suffix=".txt", delete=False) as handle:
         output_path = Path(handle.name)
-    with tempfile.NamedTemporaryFile(prefix=f"{tool_name}-stdout-", suffix=".txt", delete=False) as handle:
-        stdout_path = Path(handle.name)
-    with tempfile.NamedTemporaryFile(prefix=f"{tool_name}-stderr-", suffix=".txt", delete=False) as handle:
-        stderr_path = Path(handle.name)
+    child: CapturedChildProcess | None = None
     try:
         command = codex_exec_command(
             tool_name=tool_name,
@@ -186,61 +183,44 @@ def run_codex(
             review_root=review_root,
             allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
         )
-        start = time.monotonic()
-        last_progress = start
-        timed_out = False
-        with stdout_path.open("w", encoding="utf-8") as stdout_handle, stderr_path.open("w", encoding="utf-8") as stderr_handle:
-            proc = subprocess.Popen(
-                command,
-                cwd=str(wrapper_launch_cwd()),
-                stdin=subprocess.PIPE if prompt.strip() else None,
-                stdout=stdout_handle,
-                stderr=stderr_handle,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-            )
-            print(
-                f"{compact_tool_label(tool_name)} started; waiting for review result.",
-                file=sys.stderr,
-                flush=True,
-            )
-            if prompt.strip() and proc.stdin is not None:
-                proc.stdin.write(prompt)
-                proc.stdin.close()
-            while proc.poll() is None:
-                now = time.monotonic()
-                elapsed = int(now - start)
-                if timeout_seconds > 0 and elapsed >= timeout_seconds:
-                    proc.kill()
-                    timed_out = True
-                    print(f"[{tool_name}] timed out after {elapsed}s", file=sys.stderr, flush=True)
-                    break
-                if now - last_progress >= progress_interval_seconds:
-                    print(progress_heartbeat_line(tool_name, elapsed), file=sys.stderr, flush=True)
-                    last_progress = now
-                time.sleep(1.0)
-            returncode = proc.wait()
-        stderr_text = stderr_path.read_text(encoding="utf-8", errors="replace") if stderr_path.exists() else ""
-        elapsed_seconds = round(time.monotonic() - start, 3)
+        child = launch_captured_child_process(
+            command=command,
+            cwd=wrapper_launch_cwd(),
+            stdin_text=prompt if prompt.strip() else None,
+            stdout_prefix=f"{tool_name}-stdout-",
+            stderr_prefix=f"{tool_name}-stderr-",
+            stdout_suffix=".txt",
+            stderr_suffix=".txt",
+        )
+        wait_result = wait_for_captured_child_process(
+            process=child.process,
+            started_monotonic=child.started_monotonic,
+            start_line=f"{compact_tool_label(tool_name)} started; waiting for review result.",
+            heartbeat_line=lambda elapsed: progress_heartbeat_line(tool_name, elapsed),
+            timeout_line=lambda elapsed: f"[{tool_name}] timed out after {elapsed}s",
+            progress_interval_seconds=progress_interval_seconds,
+            timeout_seconds=timeout_seconds,
+        )
+        stderr_text = child.stderr_path.read_text(encoding="utf-8", errors="replace") if child.stderr_path.exists() else ""
         session_id = extract_session_id(stderr_text)
         record_wrapper_session(
             session_id=session_id,
             tool_name=tool_name,
             review_root=review_root,
-            elapsed_seconds=elapsed_seconds,
+            elapsed_seconds=wait_result.elapsed_seconds,
         )
         return {
-            "returncode": returncode,
-            "stdout": stdout_path.read_text(encoding="utf-8", errors="replace") if stdout_path.exists() else "",
+            "returncode": wait_result.returncode,
+            "stdout": child.stdout_path.read_text(encoding="utf-8", errors="replace") if child.stdout_path.exists() else "",
             "stderr": stderr_text,
             "final_message": output_path.read_text(encoding="utf-8").strip() if output_path.exists() else "",
             "session_id": session_id,
-            "elapsed_seconds": elapsed_seconds,
-            "timed_out": timed_out,
+            "elapsed_seconds": wait_result.elapsed_seconds,
+            "timed_out": wait_result.timed_out,
         }
     finally:
-        for path in (output_path, stdout_path, stderr_path):
+        child_paths = (child.stdout_path, child.stderr_path) if child is not None else ()
+        for path in (output_path, *child_paths):
             try:
                 path.unlink(missing_ok=True)
             except OSError:

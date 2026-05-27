@@ -214,6 +214,30 @@ def test_runner_executes_one_deslop_step_and_marks_done(monkeypatch, tmp_path: P
     assert len(review_calls) == 1
 
 
+def test_deslop_subprocess_emits_parent_progress_without_leaking_child_stderr(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    proc = orchestrator_runner.run_deslop_subprocess(
+        command=[
+            sys.executable,
+            "-c",
+            "import sys, time; print('deslop result'); print('child stderr', file=sys.stderr); time.sleep(0.05)",
+        ],
+        cwd=tmp_path,
+        progress_interval_seconds=0,
+        poll_interval_seconds=0.01,
+    )
+    captured = capsys.readouterr()
+
+    assert proc.returncode == 0
+    assert "deslop result" in proc.stdout
+    assert "child stderr" in proc.stderr
+    assert "[review-suite] running review-deslop; waiting for result." in captured.err
+    assert "OK 1m: deslop" in captured.err
+    assert "child stderr" not in captured.err
+
+
 def test_runner_walks_profile_steps_after_clean_decisions(monkeypatch, tmp_path: Path) -> None:
     review_calls = _stub_review(monkeypatch, "phase_review-round-1", "phase_review-round-2")
     state = _cycle(tmp_path, deslop_enabled=False, step_names=("broad-discovery", "precision-signoff"))

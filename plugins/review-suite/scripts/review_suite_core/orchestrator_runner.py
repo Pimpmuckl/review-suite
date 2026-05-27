@@ -17,7 +17,7 @@ from review_suite_local import build_local_review_request, build_phase_instructi
 
 from .axi_output import format_command, write_text
 from .config import lens_model_config
-from .lens_runtime import DEFAULT_PROGRESS_INTERVAL_SECONDS, DEFAULT_TIMEOUT_SECONDS
+from .lens_runtime import DEFAULT_PROGRESS_INTERVAL_SECONDS, DEFAULT_TIMEOUT_SECONDS, progress_heartbeat_line
 from .orchestrator_state import (
     STAGE_CREATED,
     STAGE_DECISION_PENDING,
@@ -37,6 +37,7 @@ from .orchestrator_state import (
     review_profile_has_next_step,
 )
 from .paths import cwd_path_from_normalized
+from .process_runtime import CapturedChildProcess, launch_captured_child_process, wait_for_captured_child_process
 from .workflow_state import current_head, diff_artifact, diff_paths_between, dirty_worktree_scope, merge_base
 
 
@@ -82,16 +83,43 @@ def deslop_command(state: dict[str, Any]) -> list[str]:
     ]
 
 
-def run_deslop_subprocess(*, command: list[str], cwd: Path) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        command,
-        cwd=str(cwd),
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        check=False,
-    )
+def run_deslop_subprocess(
+    *,
+    command: list[str],
+    cwd: Path,
+    progress_interval_seconds: int = DEFAULT_PROGRESS_INTERVAL_SECONDS,
+    poll_interval_seconds: float = 1.0,
+) -> subprocess.CompletedProcess:
+    child: CapturedChildProcess | None = None
+    try:
+        child = launch_captured_child_process(
+            command=command,
+            cwd=cwd,
+            stdout_prefix="review-deslop-stdout-",
+            stderr_prefix="review-deslop-stderr-",
+            stdout_suffix=".txt",
+            stderr_suffix=".txt",
+        )
+        wait_result = wait_for_captured_child_process(
+            process=child.process,
+            started_monotonic=child.started_monotonic,
+            start_line="[review-suite] running review-deslop; waiting for result.",
+            heartbeat_line=lambda elapsed: progress_heartbeat_line("review-deslop", elapsed),
+            timeout_line=lambda elapsed: f"[review-deslop] timed out after {elapsed}s",
+            progress_interval_seconds=progress_interval_seconds,
+            timeout_seconds=DEFAULT_TIMEOUT_SECONDS,
+            poll_interval_seconds=poll_interval_seconds,
+        )
+        stdout = child.stdout_path.read_text(encoding="utf-8", errors="replace") if child.stdout_path.exists() else ""
+        stderr = child.stderr_path.read_text(encoding="utf-8", errors="replace") if child.stderr_path.exists() else ""
+        return subprocess.CompletedProcess(command, wait_result.returncode, stdout=stdout, stderr=stderr)
+    finally:
+        if child is not None:
+            for path in (child.stdout_path, child.stderr_path):
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    pass
 
 
 def _print_step_output(*, label: str, body: str, status: str = "completed") -> bool:

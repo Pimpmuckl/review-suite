@@ -9,7 +9,6 @@ import shutil
 import statistics
 import subprocess
 import sys
-import tempfile
 import time
 import uuid
 from contextlib import contextmanager
@@ -34,6 +33,7 @@ from review_suite_core import (
     format_command,
     has_worktree_changes,
     inspect_workflow_status,
+    launch_captured_child_process,
     meaningful_worktree_status_entries,
     normalize_cwd,
     use_unsafe_windows_wsl_fallback,
@@ -3053,10 +3053,6 @@ def _launch_reviewer_process(
         variant_id=str(run["variant_id"]),
         capacity_retry_attempts=retry_attempts,
     )
-    stdout_tmp = tempfile.NamedTemporaryFile(prefix=f"review-suite-{run['slot']}-", suffix=".stdout.txt", delete=False)
-    stderr_tmp = tempfile.NamedTemporaryFile(prefix=f"review-suite-{run['slot']}-", suffix=".stderr.txt", delete=False)
-    stdout_path = Path(stdout_tmp.name)
-    stderr_path = Path(stderr_tmp.name)
     command = build_review_command(
         model=variant["model"],
         reasoning_effort=variant["reasoning_effort"],
@@ -3067,34 +3063,25 @@ def _launch_reviewer_process(
         prompt=prompt,
         allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
     )
-    proc = subprocess.Popen(
-        command,
-        cwd=str(
+    child = launch_captured_child_process(
+        command=command,
+        cwd=(
             wrapper_launch_cwd()
             if _use_unsafe_windows_wsl_fallback(review_cwd, allow_unsafe_windows_wsl_fallback)
             else review_cwd
         ),
-        stdin=subprocess.PIPE if manual_prompt else None,
-        stdout=stdout_tmp,
-        stderr=stderr_tmp,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
+        stdin_text=manual_prompt or None,
+        stdout_prefix=f"review-suite-{run['slot']}-",
     )
-    if manual_prompt and proc.stdin is not None:
-        proc.stdin.write(manual_prompt)
-        proc.stdin.close()
-    stdout_tmp.close()
-    stderr_tmp.close()
     run.update(
         {
             "title": title,
             "command": command,
             "service_tier": variant_service_tier(variant),
-            "pid": proc.pid,
+            "pid": child.process.pid,
             "started_at": utc_now_iso(),
-            "stdout_path": str(stdout_path),
-            "stderr_path": str(stderr_path),
+            "stdout_path": str(child.stdout_path),
+            "stderr_path": str(child.stderr_path),
         }
     )
     return run
