@@ -1,3 +1,4 @@
+import json
 import sys
 from pathlib import Path
 
@@ -14,7 +15,7 @@ from review_suite_core.codex_runtime import (
     use_unsafe_windows_wsl_fallback,
     validate_codex_runtime,
 )
-from review_suite_core.lens_runtime import codex_exec_command, progress_heartbeat_line
+from review_suite_core.lens_runtime import codex_exec_command, progress_heartbeat_line, record_wrapper_session
 
 
 def test_codex_exec_command_includes_service_tier_when_configured(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -54,6 +55,28 @@ def test_progress_heartbeat_line_keeps_elapsed_for_interactive_output(monkeypatc
     monkeypatch.setattr("review_suite_core.lens_runtime.sys.stderr", Stderr())
 
     assert progress_heartbeat_line("review-deslop", 120) == "deslop running (120s)"
+
+
+def test_record_wrapper_session_writes_timestamped_entry(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    monkeypatch.setattr("review_suite_core.lens_runtime.default_review_suite_state_dir", lambda: state_dir)
+    monkeypatch.setattr("review_suite_core.lens_runtime._caller_thread_id", lambda: "thread-123")
+    monkeypatch.setattr("review_suite_core.lens_runtime._review_branch", lambda review_root: "feature/test")
+
+    record_wrapper_session(
+        session_id="sess-123",
+        tool_name="review-deslop",
+        review_root=tmp_path / "repo",
+        elapsed_seconds=12.3456,
+    )
+
+    payload = json.loads((state_dir / "wrapper_sessions.jsonl").read_text(encoding="utf-8"))
+    assert payload["session_id"] == "sess-123"
+    assert payload["tool_name"] == "review-deslop"
+    assert payload["caller_thread_id"] == "thread-123"
+    assert payload["branch"] == "feature/test"
+    assert payload["elapsed_seconds"] == 12.346
+    assert payload["recorded_at"].endswith("Z")
 
 
 def test_unsafe_windows_wsl_fallback_requested_honors_env(monkeypatch: pytest.MonkeyPatch) -> None:
