@@ -10,10 +10,19 @@ from review_gate import run_gate_round
 from review_followup import build_followup_prompt
 from review_suite_arena import (
     resume_orchestrator_review_step,
+    run_orchestrated_arena_round,
     run_orchestrator_followup_review_step,
     run_orchestrator_review_step,
 )
-from review_suite_local import build_local_review_request, build_phase_instructions, default_roster_path
+from review_suite_local import (
+    build_local_review_request,
+    build_phase_instructions,
+    default_roster_path,
+    iter_round_payloads,
+    load_round,
+    payload_has_blocked_runs,
+    round_needs_caller_grade,
+)
 
 from .axi_output import format_command, write_text
 from .config import lens_model_config
@@ -23,16 +32,20 @@ from .orchestrator_state import (
     STAGE_DECISION_PENDING,
     STAGE_FOLLOWUP_PENDING,
     STAGE_GATE_RERUN_NEEDED,
+    STAGE_RETRY_REQUESTED,
     STAGE_RUNNING,
     deslop_is_ready,
     deslop_should_run,
+    mark_arena_recovery_requested,
     mark_blocked,
     mark_deslop_done,
     mark_deslop_failed,
+    mark_recovery_resolved,
     mark_followup_review_pending,
     mark_gate_step_pending,
     mark_review_step_running,
     mark_review_step_pending,
+    mark_review_step_retry,
     next_review_profile_step,
     review_profile_has_next_step,
 )
@@ -43,6 +56,11 @@ from .workflow_state import current_head, diff_artifact, diff_paths_between, dir
 
 INITIAL_REVIEW_LANE = "review_t1"
 FOLLOWUP_REVIEW_LANE = "review-followup"
+ARENA_BLOCKED_REASON = "arena review round blocked before caller grading; reroll or dismiss the arena round before continuing"
+ARENA_LANES_BY_TASK_CLASS = {
+    "phase_review": "review_t1",
+    "pr_review": "review_t3",
+}
 GATE_LANES_BY_TASK_CLASS = {
     "phase_gate": "review_t2",
     "pr_gate": "review_t4",
@@ -202,8 +220,26 @@ def _next_profile_step(state: dict[str, Any]) -> tuple[int, dict[str, Any]]:
         step["kind"] = kind
         step["gate"] = gate
         return step_index, step
+    if kind == "arena":
+        task_class = str(step.get("task_class") or "").strip()
+        if task_class not in ARENA_LANES_BY_TASK_CLASS:
+            raise ValueError(
+                f"state.review_plan.steps[{step_index}].task_class must be one of: {', '.join(ARENA_LANES_BY_TASK_CLASS)}"
+            )
+        lane = str(step.get("lane") or ARENA_LANES_BY_TASK_CLASS[task_class]).strip()
+        if lane not in set(ARENA_LANES_BY_TASK_CLASS.values()):
+            raise ValueError(
+                f"state.review_plan.steps[{step_index}].lane must be one of: {', '.join(ARENA_LANES_BY_TASK_CLASS.values())}"
+            )
+        expected_lane = ARENA_LANES_BY_TASK_CLASS[task_class]
+        if lane != expected_lane:
+            raise ValueError(f"state.review_plan.steps[{step_index}].lane must be {expected_lane} for task_class {task_class}")
+        step["kind"] = kind
+        step["task_class"] = task_class
+        step["lane"] = lane
+        return step_index, step
     if kind != "review":
-        raise ValueError(f"state.review_plan.steps[{step_index}].kind must be review or gate")
+        raise ValueError(f"state.review_plan.steps[{step_index}].kind must be review, arena, or gate")
     for key in ("count", "model", "reasoning_effort"):
         if not str(step.get(key) or "").strip():
             raise ValueError(f"state.review_plan.steps[{step_index}].{key} is required")
@@ -243,7 +279,7 @@ def _task_id(state: dict[str, Any]) -> str | None:
 
 def _review_step_position(state: dict[str, Any], step_index: int) -> tuple[int | None, int | None]:
     steps = [item for item in list(dict(state.get("review_plan") or {}).get("steps") or []) if isinstance(item, dict)]
-    review_indices = [index for index, item in enumerate(steps) if _step_kind(item) == "review"]
+    review_indices = [index for index, item in enumerate(steps) if _step_kind(item) in {"review", "arena"}]
     if step_index not in review_indices:
         return None, None
     return review_indices.index(step_index) + 1, len(review_indices)
@@ -273,14 +309,132 @@ def _attach_review_result(state: dict[str, Any], review_result: dict[str, object
             item["round_state_dir"] = round_state_dir
         if bool(review_result.get("grading_required")):
             item["grading_required"] = True
+        if bool(review_result.get("arena_round")):
+            item["arena_round"] = True
+        if "needs_grade" in review_result:
+            item["needs_grade"] = bool(review_result.get("needs_grade"))
+        if "graded" in review_result:
+            item["graded"] = bool(review_result.get("graded"))
         if bool(review_result.get("signoff_required")):
             item["signoff_required"] = True
         break
     return state
 
 
+def _mark_arena_recovery(
+    state: dict[str, Any],
+    *,
+    round_id: str,
+    lane: str,
+    step_index: int,
+    step_name: str,
+    round_state_dir: str | None,
+) -> dict[str, Any]:
+    return mark_arena_recovery_requested(
+        state,
+        reason=ARENA_BLOCKED_REASON,
+        round_id=round_id,
+        lane=lane,
+        step_index=step_index,
+        step_name=step_name,
+        round_state_dir=round_state_dir,
+    )
+
+
+def _orchestrator_review_state_dir(state_dir: Path) -> Path:
+    return state_dir / "orchestrator" / "review-rounds"
+
+
+def _load_arena_recovery_payload(state: dict[str, Any], *, state_dir: Path, round_id: str) -> dict[str, object]:
+    round_record = _round_by_id(state, round_id)
+    candidates: list[Path] = []
+    round_state_dir = str(round_record.get("round_state_dir") or "").strip()
+    if round_state_dir:
+        candidates.append(Path(round_state_dir))
+    candidates.extend([_orchestrator_review_state_dir(state_dir), state_dir])
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = str(candidate.resolve(strict=False)).lower() if sys.platform == "win32" else str(candidate.resolve(strict=False))
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            return load_round(candidate, round_id)
+        except ValueError:
+            continue
+    return round_record
+
+
+def _arena_replacement_sort_key(payload: dict[str, object]) -> tuple[str, str]:
+    return (
+        str(payload.get("sampled_at") or payload.get("started_at") or payload.get("completed_at") or ""),
+        str(payload.get("round_id") or ""),
+    )
+
+
+def _latest_arena_recovery_payload(state: dict[str, Any], *, state_dir: Path, round_id: str) -> tuple[str, dict[str, object]]:
+    current_id = round_id
+    current = _load_arena_recovery_payload(state, state_dir=state_dir, round_id=current_id)
+    seen = {current_id}
+    while True:
+        replacements = [
+            payload
+            for payload in iter_round_payloads(state_dir)
+            if str(payload.get("rerolled_from_round_id") or "").strip() == current_id
+        ]
+        if not replacements:
+            return current_id, current
+        current = max(replacements, key=_arena_replacement_sort_key)
+        current_id = str(current.get("round_id") or "").strip()
+        if not current_id or current_id in seen:
+            return current_id or round_id, current
+        seen.add(current_id)
+
+
+def _arena_round_ready_for_decision(payload: dict[str, object]) -> bool:
+    if str(payload.get("status") or "") != "completed":
+        return False
+    if payload_has_blocked_runs(dict(payload)):
+        return False
+    return bool(round_needs_caller_grade(dict(payload)) or str(payload.get("graded_at") or "").strip())
+
+
+def _output_refs_from_payload(payload: dict[str, object]) -> list[str]:
+    refs: list[str] = []
+    for run in list(payload.get("runs") or []):
+        if not isinstance(run, dict):
+            continue
+        ref = str(run.get("reviewer_output_ref") or run.get("ref") or "").strip()
+        if ref:
+            refs.append(ref)
+    return refs
+
+
+def _arena_recovery_review_result(payload: dict[str, object], *, lane: str, state_dir: Path) -> dict[str, object]:
+    review_scope = dict(payload.get("review_scope") or {})
+    return {
+        "round_id": str(payload.get("round_id") or ""),
+        "lane": lane,
+        "kind": "review",
+        "status": payload.get("status"),
+        "blocked": payload_has_blocked_runs(dict(payload)),
+        "reviewed_head": str(payload.get("reviewed_head") or review_scope.get("reviewed_head") or review_scope.get("commit_end") or ""),
+        "output_refs": _output_refs_from_payload(payload),
+        "runs": [dict(run) for run in list(payload.get("runs") or []) if isinstance(run, dict)],
+        "round_state_dir": str(state_dir),
+        "grading_required": True,
+        "arena_round": True,
+        "needs_grade": bool(round_needs_caller_grade(dict(payload))),
+        "graded": bool(str(payload.get("graded_at") or "").strip()),
+    }
+
+
 def run_review_step(**kwargs: Any) -> dict[str, object]:
     return run_orchestrator_review_step(**kwargs)
+
+
+def run_arena_step(**kwargs: Any) -> dict[str, object]:
+    return run_orchestrated_arena_round(**kwargs)
 
 
 def resume_review_step(**kwargs: Any) -> dict[str, object]:
@@ -307,6 +461,7 @@ def _run_profile_review_once(
         step_index, step = _next_profile_step(state)
     if _step_kind(step) != "review":
         raise ValueError("profile step is not a review step")
+    lane = str(step.get("lane") or INITIAL_REVIEW_LANE).strip() or INITIAL_REVIEW_LANE
     cwd = _identity_cwd(state)
     scope = _review_scope(state, cwd)
     step_position, step_total = _review_step_position(state, step_index)
@@ -317,11 +472,12 @@ def _run_profile_review_once(
         running_state = mark_review_step_running(
             state,
             round_id=str(round_info.get("round_id") or ""),
-            lane=INITIAL_REVIEW_LANE,
+            lane=lane,
             step_index=step_index,
             step_name=str(step["name"]),
             reviewed_head=str(round_info.get("reviewed_head") or scope.get("reviewed_head") or "").strip() or None,
             round_state_dir=str(round_info.get("round_state_dir") or "").strip() or None,
+            grading_required=bool(dict(state.get("grading") or {}).get("required")),
         )
         if persist_state is not None:
             saved = persist_state(running_state)
@@ -330,7 +486,7 @@ def _run_profile_review_once(
         running_base_state = running_state
 
     review_result = run_review_step(
-        lane=INITIAL_REVIEW_LANE,
+        lane=lane,
         step_name=str(step["name"]),
         step_position=step_position,
         step_total=step_total,
@@ -356,7 +512,7 @@ def _run_profile_review_once(
     next_state = mark_review_step_pending(
         running_base_state,
         round_id=round_id,
-        lane=INITIAL_REVIEW_LANE,
+        lane=lane,
         step_index=step_index,
         step_name=str(step["name"]),
         reviewed_head=reviewed_head,
@@ -365,6 +521,94 @@ def _run_profile_review_once(
         _attach_review_result(next_state, review_result),
         ran_step=True,
         step="review",
+    )
+
+
+def _run_profile_arena_once(
+    state: dict[str, Any],
+    *,
+    state_dir: Path,
+    step_index: int | None = None,
+    step: dict[str, Any] | None = None,
+    persist_state: StatePersister | None = None,
+) -> OrchestratorRunnerResult:
+    if step_index is None or step is None:
+        step_index, step = _next_profile_step(state)
+    if _step_kind(step) != "arena":
+        raise ValueError("profile step is not an arena step")
+    lane = str(step["lane"])
+    cwd = _identity_cwd(state)
+    scope = _review_scope(state, cwd)
+    step_position, step_total = _review_step_position(state, step_index)
+    running_base_state = state
+
+    def on_round_started(round_info: dict[str, object]) -> None:
+        nonlocal running_base_state
+        running_state = mark_review_step_running(
+            state,
+            round_id=str(round_info.get("round_id") or ""),
+            lane=lane,
+            step_index=step_index,
+            step_name=str(step["name"]),
+            reviewed_head=str(round_info.get("reviewed_head") or scope.get("reviewed_head") or "").strip() or None,
+            round_state_dir=str(round_info.get("round_state_dir") or "").strip() or None,
+            grading_required=True,
+            arena_round=True,
+        )
+        if persist_state is not None:
+            saved = persist_state(running_state)
+            if saved is not None:
+                running_state = saved
+        running_base_state = running_state
+
+    review_result = run_arena_step(
+        lane=lane,
+        task_class=str(step["task_class"]),
+        step_name=str(step["name"]),
+        review_cwd=cwd,
+        state_dir=state_dir,
+        sqlite_path=Path.home() / ".codex" / "state_5.sqlite",
+        review_scope=scope,
+        task_id=_task_id(state),
+        allow_dirty=False,
+        progress_interval_seconds=DEFAULT_PROGRESS_INTERVAL_SECONDS,
+        allow_unsafe_windows_wsl_fallback=False,
+        step_position=step_position,
+        step_total=step_total,
+        on_round_started=on_round_started,
+    )
+    round_id = str(review_result.get("round_id") or "").strip()
+    if not round_id:
+        raise ValueError("arena step did not return a round_id")
+    reviewed_head = str(review_result.get("reviewed_head") or scope.get("reviewed_head") or "").strip() or None
+    next_state = mark_review_step_pending(
+        running_base_state,
+        round_id=round_id,
+        lane=lane,
+        step_index=step_index,
+        step_name=str(step["name"]),
+        reviewed_head=reviewed_head,
+        grading_required=True,
+        arena_round=True,
+    )
+    next_state = _attach_review_result(next_state, review_result)
+    if bool(review_result.get("blocked")):
+        return OrchestratorRunnerResult(
+            _mark_arena_recovery(
+                next_state,
+                round_id=round_id,
+                lane=lane,
+                step_index=step_index,
+                step_name=str(step["name"]),
+                round_state_dir=str(review_result.get("round_state_dir") or "").strip() or None,
+            ),
+            ran_step=True,
+            step="arena",
+        )
+    return OrchestratorRunnerResult(
+        next_state,
+        ran_step=True,
+        step="arena",
     )
 
 
@@ -381,6 +625,12 @@ def _collect_running_review_once(state: dict[str, Any], *, state_dir: Path) -> O
     round_payload = _round_by_id(state, round_id)
     round_state_dir_text = str(pending.get("round_state_dir") or round_payload.get("round_state_dir") or "").strip()
     round_state_dir = Path(round_state_dir_text) if round_state_dir_text else None
+    grading_required = (
+        bool(dict(state.get("grading") or {}).get("required"))
+        or bool(pending.get("grading_required"))
+        or bool(round_payload.get("grading_required"))
+    )
+    arena_round = bool(pending.get("arena_round")) or bool(round_payload.get("arena_round"))
     review_result = resume_review_step(
         round_id=round_id,
         lane=lane,
@@ -391,7 +641,7 @@ def _collect_running_review_once(state: dict[str, Any], *, state_dir: Path) -> O
         sqlite_path=Path.home() / ".codex" / "state_5.sqlite",
         task_id=_task_id(state),
         progress_interval_seconds=DEFAULT_PROGRESS_INTERVAL_SECONDS,
-        grading_required=bool(dict(state.get("grading") or {}).get("required")),
+        grading_required=grading_required,
     )
     step_index = int(pending.get("step_index") if pending.get("step_index") is not None else 0)
     reviewed_head = str(review_result.get("reviewed_head") or round_payload.get("reviewed_head") or "").strip() or None
@@ -402,12 +652,89 @@ def _collect_running_review_once(state: dict[str, Any], *, state_dir: Path) -> O
         step_index=step_index,
         step_name=step_name,
         reviewed_head=reviewed_head,
+        grading_required=grading_required,
+        arena_round=arena_round,
     )
+    next_state = _attach_review_result(next_state, review_result)
+    if arena_round and bool(review_result.get("blocked")):
+        return OrchestratorRunnerResult(
+            _mark_arena_recovery(
+                next_state,
+                round_id=round_id,
+                lane=lane,
+                step_index=step_index,
+                step_name=step_name,
+                round_state_dir=str(review_result.get("round_state_dir") or round_payload.get("round_state_dir") or "").strip() or None,
+            ),
+            ran_step=True,
+            step="review",
+        )
     return OrchestratorRunnerResult(
-        _attach_review_result(next_state, review_result),
+        next_state,
         ran_step=True,
         step="review",
     )
+
+
+def _recover_blocked_arena_once(state: dict[str, Any], *, state_dir: Path) -> OrchestratorRunnerResult:
+    pending = dict(state.get("pending_action") or {})
+    if state.get("stage") != STAGE_RETRY_REQUESTED or str(pending.get("kind") or "") != "arena-blocked":
+        return OrchestratorRunnerResult(state, ran_step=False)
+    round_id = str(pending.get("round_id") or "").strip()
+    lane = str(pending.get("lane") or "").strip()
+    step_name = str(pending.get("step") or "").strip()
+    if not round_id or not lane or not step_name:
+        raise ValueError("arena recovery is missing round_id, lane, or step")
+    step_index = int(pending.get("step_index") if pending.get("step_index") is not None else 0)
+    target_round_id, payload = _latest_arena_recovery_payload(state, state_dir=state_dir, round_id=round_id)
+    status = str(payload.get("status") or "").strip()
+    if status == "dismissed" or bool(payload.get("dismissed")):
+        return OrchestratorRunnerResult(
+            mark_review_step_retry(state, step_index=step_index, step_name=step_name),
+            ran_step=True,
+            step="arena-recovery",
+        )
+    reviewed_head = str(
+        payload.get("reviewed_head") or dict(payload.get("review_scope") or {}).get("reviewed_head") or ""
+    ).strip() or None
+    if not _arena_round_ready_for_decision(payload):
+        if target_round_id != round_id:
+            next_state = mark_review_step_pending(
+                mark_recovery_resolved(state),
+                round_id=target_round_id,
+                lane=lane,
+                step_index=step_index,
+                step_name=step_name,
+                reviewed_head=reviewed_head,
+                grading_required=True,
+                arena_round=True,
+            )
+            next_state = _attach_review_result(next_state, _arena_recovery_review_result(payload, lane=lane, state_dir=state_dir))
+            return OrchestratorRunnerResult(
+                _mark_arena_recovery(
+                    next_state,
+                    round_id=target_round_id,
+                    lane=lane,
+                    step_index=step_index,
+                    step_name=step_name,
+                    round_state_dir=str(state_dir),
+                ),
+                ran_step=True,
+                step="arena-recovery",
+            )
+        return OrchestratorRunnerResult(state, ran_step=False)
+    next_state = mark_review_step_pending(
+        mark_recovery_resolved(state),
+        round_id=target_round_id,
+        lane=lane,
+        step_index=step_index,
+        step_name=step_name,
+        reviewed_head=reviewed_head,
+        grading_required=True,
+        arena_round=True,
+    )
+    next_state = _attach_review_result(next_state, _arena_recovery_review_result(payload, lane=lane, state_dir=state_dir))
+    return OrchestratorRunnerResult(next_state, ran_step=True, step="arena-recovery")
 
 
 def _gate_output_refs(runs: list[object]) -> list[str]:
@@ -661,10 +988,20 @@ def run_one_expensive_step(
         return _run_deslop_once(state)
     if state.get("stage") == STAGE_RUNNING:
         return _collect_running_review_once(state, state_dir=resolved_state_dir)
+    if state.get("stage") == STAGE_RETRY_REQUESTED and dict(state.get("pending_action") or {}).get("kind") == "arena-blocked":
+        return _recover_blocked_arena_once(state, state_dir=resolved_state_dir)
     if _review_should_run(state):
         step_index, step = _next_profile_step(state)
         if _step_kind(step) == "gate":
             return _run_profile_gate_once(state, state_dir=resolved_state_dir, step_index=step_index, step=step)
+        if _step_kind(step) == "arena":
+            return _run_profile_arena_once(
+                state,
+                state_dir=resolved_state_dir,
+                step_index=step_index,
+                step=step,
+                persist_state=persist_state,
+            )
         return _run_profile_review_once(
             state,
             state_dir=resolved_state_dir,

@@ -38,6 +38,7 @@ GITHUB_RESULT_COMMANDS = {GITHUB_RESULT_CLEAN, GITHUB_RESULT_FINDINGS, GITHUB_RE
 DESLOP_STATUS_TRACKED = "tracked"
 DESLOP_STATUS_DONE = "done"
 DESLOP_STATUS_FAILED = "failed"
+DESLOP_STATUS_CLOSED = "closed"
 DESLOP_STATUS_SKIPPED_EMERGENCY = "skipped-emergency"
 
 GATE_LANES = {"review_t2", "review_t4"}
@@ -420,6 +421,8 @@ def mark_review_step_pending(
     step_index: int,
     step_name: str,
     reviewed_head: str | None = None,
+    grading_required: bool = False,
+    arena_round: bool = False,
 ) -> dict[str, Any]:
     index = _nonnegative_int(step_index, field="step_index")
     name = _required_text(step_name, field="step_name")
@@ -436,6 +439,10 @@ def mark_review_step_pending(
             "step": name,
         },
     )
+    if grading_required:
+        next_state["pending_action"]["grading_required"] = True
+    if arena_round:
+        next_state["pending_action"]["arena_round"] = True
     profile_step = {
         "index": index,
         "name": name,
@@ -444,13 +451,21 @@ def mark_review_step_pending(
     }
     if _review_step_rerun_on_findings(next_state, index):
         profile_step["rerun_on_findings"] = True
+    if grading_required:
+        profile_step["grading_required"] = True
+    if arena_round:
+        profile_step["arena_round"] = True
     for item in list(next_state.get("rounds") or []):
         if isinstance(item, dict) and item.get("round_id") == round_id:
             item["profile_step"] = {
                 key: profile_step[key]
-                for key in ("index", "name", "rerun_on_findings")
+                for key in ("index", "name", "rerun_on_findings", "grading_required", "arena_round")
                 if key in profile_step
             }
+            if grading_required:
+                item["grading_required"] = True
+            if arena_round:
+                item["arena_round"] = True
             break
     _set_review_progress(next_state, next_step_index=index, current_step=profile_step)
     return next_state
@@ -523,6 +538,10 @@ def _profile_step_for_round(state: dict[str, Any], round_id: str) -> dict[str, A
         if pending.get("gate"):
             payload["kind"] = "gate"
             payload["gate"] = pending.get("gate")
+        if pending.get("arena_round"):
+            payload["arena_round"] = True
+        if pending.get("grading_required"):
+            payload["grading_required"] = True
         return payload
     for item in list(state.get("rounds") or []):
         if not isinstance(item, dict) or item.get("round_id") != round_id:
@@ -537,6 +556,14 @@ def _profile_step_for_round(state: dict[str, Any], round_id: str) -> dict[str, A
             }
             if bool(profile_step.get("rerun_on_findings")):
                 payload["rerun_on_findings"] = True
+            if bool(profile_step.get("arena_round")):
+                payload["arena_round"] = True
+            if bool(profile_step.get("grading_required")):
+                payload["grading_required"] = True
+            if bool(item.get("arena_round")):
+                payload["arena_round"] = True
+            if bool(item.get("grading_required")):
+                payload["grading_required"] = True
             if profile_step.get("gate"):
                 payload["kind"] = "gate"
                 payload["gate"] = profile_step.get("gate")
@@ -580,6 +607,7 @@ def _complete_profile_step_from_metadata(
             "kind": step_kind if step_kind != "review" else None,
             "gate": gate,
             "reviewed_head": reviewed_head,
+            "arena_round": True if profile_step.get("arena_round") else None,
         }
     )
     for item in completed:
@@ -603,6 +631,25 @@ def _complete_profile_step(state: dict[str, Any], *, round_id: str, lane: str, r
         lane=lane,
         reviewed_head=reviewed_head,
     )
+
+
+def _profile_step_is_discovery(profile_step: dict[str, Any]) -> bool:
+    name = str(profile_step.get("name") or "").strip()
+    return "discovery" in name and not bool(profile_step.get("arena_round"))
+
+
+def _skip_remaining_discovery_to_signoff(state: dict[str, Any], profile_step: dict[str, Any]) -> None:
+    if not _profile_step_is_discovery(profile_step):
+        return
+    index = _nonnegative_int(profile_step.get("index"), field="profile_step.index")
+    steps = _review_plan_steps(state)
+    for next_index in range(index + 1, len(steps)):
+        name = str(steps[next_index].get("name") or "").strip()
+        if "signoff" in name:
+            progress = _review_progress(state)
+            if int(progress["next_step_index"]) < next_index:
+                _set_review_progress(state, next_step_index=next_index, current_step=None)
+            return
 
 
 def _profile_step_reruns_after_findings(state: dict[str, Any], profile_step: dict[str, Any]) -> bool:
@@ -673,6 +720,26 @@ def mark_deslop_done(state: dict[str, Any], *, command: str) -> dict[str, Any]:
     return next_state
 
 
+def mark_deslop_closed(state: dict[str, Any]) -> dict[str, Any]:
+    next_state = _copy_state(state)
+    deslop = dict(next_state.get("deslop") or {})
+    if not bool(deslop.get("tracked")):
+        return next_state
+    next_state["deslop"] = {
+        **deslop,
+        "tracked": False,
+        "status": DESLOP_STATUS_CLOSED,
+    }
+    if next_state.get("stage") == STAGE_RETRY_REQUESTED and dict(next_state.get("pending_action") or {}).get("kind") == "run-deslop":
+        recovery = dict(next_state.get("recovery") or {})
+        next_state["recovery"] = {
+            "status": "none",
+            "retry_count": int(recovery.get("retry_count") or 0),
+        }
+        _set_stage(next_state, STAGE_CREATED, {"kind": "resume-after-deslop"})
+    return next_state
+
+
 def mark_deslop_failed(state: dict[str, Any], *, command: str, returncode: int | None, reason: str) -> dict[str, Any]:
     next_state = _copy_state(state)
     next_state["deslop"] = {
@@ -723,6 +790,8 @@ def mark_review_step_running(
     step_name: str,
     reviewed_head: str | None = None,
     round_state_dir: str | None = None,
+    grading_required: bool = False,
+    arena_round: bool = False,
 ) -> dict[str, Any]:
     index = _nonnegative_int(step_index, field="step_index")
     name = _required_text(step_name, field="step_name")
@@ -735,6 +804,10 @@ def mark_review_step_running(
         "step": name,
         "round_state_dir": _optional_text(round_state_dir),
     }
+    if grading_required:
+        action["grading_required"] = True
+    if arena_round:
+        action["arena_round"] = True
     _set_stage(next_state, STAGE_RUNNING, action)
     profile_step = {
         "index": index,
@@ -744,15 +817,23 @@ def mark_review_step_running(
     }
     if _review_step_rerun_on_findings(next_state, index):
         profile_step["rerun_on_findings"] = True
+    if grading_required:
+        profile_step["grading_required"] = True
+    if arena_round:
+        profile_step["arena_round"] = True
     for item in list(next_state.get("rounds") or []):
         if isinstance(item, dict) and item.get("round_id") == round_id:
             item["profile_step"] = {
                 key: profile_step[key]
-                for key in ("index", "name", "rerun_on_findings")
+                for key in ("index", "name", "rerun_on_findings", "grading_required", "arena_round")
                 if key in profile_step
             }
             if action.get("round_state_dir"):
                 item["round_state_dir"] = action["round_state_dir"]
+            if grading_required:
+                item["grading_required"] = True
+            if arena_round:
+                item["arena_round"] = True
             break
     _set_review_progress(next_state, next_step_index=index, current_step=profile_step)
     return next_state
@@ -1078,7 +1159,16 @@ def record_clean_decision(
             )
         next_state["active_findings"] = None
     else:
-        completed_profile_step = _complete_profile_step(next_state, round_id=round_id, lane=resolved_lane, reviewed_head=head)
+        profile_step = _profile_step_for_round(next_state, round_id)
+        if profile_step:
+            completed_profile_step = _complete_profile_step_from_metadata(
+                next_state,
+                profile_step=profile_step,
+                round_id=round_id,
+                lane=resolved_lane,
+                reviewed_head=head,
+            )
+            _skip_remaining_discovery_to_signoff(next_state, profile_step)
     if completed_profile_step and review_profile_has_next_step(next_state):
         _set_review_green(next_state, "unknown")
         _set_stage(next_state, STAGE_CREATED, _next_profile_step_action(next_state))
@@ -1173,6 +1263,61 @@ def mark_blocked(
     if round_id:
         next_state["recovery"]["round_id"] = round_id
     _set_stage(next_state, STAGE_BLOCKED)
+    return next_state
+
+
+def mark_arena_recovery_requested(
+    state: dict[str, Any],
+    *,
+    reason: str,
+    round_id: str,
+    lane: str,
+    step_index: int,
+    step_name: str,
+    round_state_dir: str | None = None,
+) -> dict[str, Any]:
+    index = _nonnegative_int(step_index, field="step_index")
+    name = _required_text(step_name, field="step_name")
+    next_state = _copy_state(state)
+    recovery = dict(next_state.get("recovery") or {})
+    next_state["recovery"] = {
+        **recovery,
+        "status": STAGE_RETRY_REQUESTED,
+        "reason": _required_text(reason, field="reason"),
+        "round_id": _required_text(round_id, field="round_id"),
+        "retry_count": int(recovery.get("retry_count") or 0) + 1,
+    }
+    _set_stage(
+        next_state,
+        STAGE_RETRY_REQUESTED,
+        {
+            "kind": "arena-blocked",
+            "round_id": round_id,
+            "lane": lane,
+            "step_index": index,
+            "step": name,
+            "round_state_dir": _optional_text(round_state_dir),
+        },
+    )
+    return next_state
+
+
+def mark_recovery_resolved(state: dict[str, Any]) -> dict[str, Any]:
+    next_state = _copy_state(state)
+    recovery = dict(next_state.get("recovery") or {})
+    next_state["recovery"] = {
+        "status": "none",
+        "retry_count": int(recovery.get("retry_count") or 0),
+    }
+    return next_state
+
+
+def mark_review_step_retry(state: dict[str, Any], *, step_index: int, step_name: str) -> dict[str, Any]:
+    index = _nonnegative_int(step_index, field="step_index")
+    name = _required_text(step_name, field="step_name")
+    next_state = mark_recovery_resolved(state)
+    _set_review_progress(next_state, next_step_index=index, current_step=None)
+    _set_stage(next_state, STAGE_CREATED, {"kind": "run-review-step", "step_index": index, "step": name})
     return next_state
 
 

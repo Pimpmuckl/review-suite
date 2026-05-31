@@ -19,6 +19,7 @@ def test_default_public_config_loads(tmp_path: Path) -> None:
     config = load_config(state_dir)
 
     assert config["privacy"]["arena_external_publish_enabled"] is False
+    assert config["arena"]["enabled"] is False
     assert lens_model_config("review-plan", state_dir=state_dir).model == "gpt-5.5"
     assert lens_model_config("review-plan", state_dir=state_dir).reasoning_effort == "medium"
     assert gate_config("phase_gate", state_dir=state_dir).discovery_variant_id == "gpt-5.4-medium"
@@ -33,6 +34,10 @@ def test_default_public_config_loads(tmp_path: Path) -> None:
         "discovery_brief_model": "gpt-5.4-medium",
         "discovery_deep_model": "gpt-5.4-xhigh",
         "discovery_loops": 1,
+        "normal_discovery_loops": 3,
+        "normal_arena_loops": 0,
+        "deep_discovery_loops": 2,
+        "deep_arena_loops": 0,
         "signoff_brief_model": "gpt-5.5-medium",
         "signoff_deep_model": "gpt-5.5-xhigh",
     }

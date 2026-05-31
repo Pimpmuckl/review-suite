@@ -22,7 +22,7 @@ codex plugin add review-suite@review-suite
 Modes are built from one phased stack. Discovery uses GPT 5.4 for high-recall bug finding; signoff uses GPT 5.5 for relevance, convergence, and current-head green checks.
 Deslop passes are folded into any review that isn't using `emergency` as target; close the sidecar with `review.py --id <id> --deslop-done`.
 
-Arena loops are only used when user config opts in with `arena.enabled: true`.
+Arena loops are only used when user config opts in with `arena.enabled` plus a nonzero `normal_arena_loops` or `deep_arena_loops` budget.
 When enabled, arena loops spend discovery budget first. Each discovery phase still keeps at least one fixed GPT 5.4 pass as the safety net.
 
 ```text
