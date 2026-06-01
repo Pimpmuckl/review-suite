@@ -15,7 +15,7 @@ from review_suite_core.codex_runtime import (
     use_unsafe_windows_wsl_fallback,
     validate_codex_runtime,
 )
-from review_suite_core.lens_runtime import codex_exec_command, codex_review_command, progress_heartbeat_line, record_wrapper_session
+from review_suite_core.lens_runtime import codex_exec_command, progress_heartbeat_line, record_wrapper_session
 
 
 def test_codex_exec_command_includes_service_tier_when_configured(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -35,50 +35,6 @@ def test_codex_exec_command_includes_service_tier_when_configured(monkeypatch: p
 
     assert 'service_tier="fast"' in command
     assert command.index('service_tier="fast"') < command.index("--color")
-
-
-def test_codex_review_command_targets_base_with_stdin_prompt(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setattr("review_suite_core.lens_runtime.shutil.which", lambda name: "codex")
-    monkeypatch.setattr("review_suite_core.lens_runtime.validate_codex_runtime", lambda **kwargs: None)
-
-    command = codex_review_command(
-        tool_name="review-deslop",
-        model="gpt-5.5",
-        reasoning_effort="medium",
-        service_tier="fast",
-        title="review-suite::deslop",
-        prompt="Review for simplification.",
-        review_root=tmp_path,
-        base="main",
-        allow_unsafe_windows_wsl_fallback=False,
-    )
-
-    assert command[:2] == ["codex", "review"]
-    assert 'service_tier="fast"' in command
-    assert command[-3:] == ["--base", "main", "-"]
-
-
-def test_codex_review_command_uses_exec_review_for_wsl_fallback(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.setattr("review_suite_core.lens_runtime.shutil.which", lambda name: "codex")
-    monkeypatch.setattr("review_suite_core.lens_runtime.validate_codex_runtime", lambda **kwargs: None)
-    monkeypatch.setattr("review_suite_core.lens_runtime.use_unsafe_windows_wsl_fallback", lambda *args: True)
-
-    command = codex_review_command(
-        tool_name="review-deslop",
-        model="gpt-5.5",
-        reasoning_effort="medium",
-        title="review-suite::deslop",
-        prompt="Review for simplification.",
-        review_root=tmp_path,
-        commit="abc123",
-        allow_unsafe_windows_wsl_fallback=True,
-    )
-
-    assert command[:5] == ["codex", "exec", "-C", str(tmp_path), "review"]
-    assert "--dangerously-bypass-approvals-and-sandbox" in command
-    assert command[-3:] == ["--commit", "abc123", "-"]
 
 
 def test_progress_heartbeat_line_is_sparse_for_agent_output(monkeypatch: pytest.MonkeyPatch) -> None:

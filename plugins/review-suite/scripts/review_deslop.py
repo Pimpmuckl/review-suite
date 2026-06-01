@@ -18,9 +18,9 @@ from review_suite_core import (
     emit_result,
     format_command,
     lens_model_config,
+    merge_base,
     resolve_repo_root,
     run_codex,
-    run_codex_review,
     use_unsafe_windows_wsl_fallback,
     write_text,
 )
@@ -125,6 +125,20 @@ def _with_effective_returncode(result: dict[str, object]) -> dict[str, object]:
     return result
 
 
+def target_diff_artifact(
+    *,
+    review_root: Path,
+    base: str,
+    commit: str | None,
+    commit_end: str | None,
+) -> str:
+    if commit and commit_end:
+        return diff_artifact(review_root, commit, commit_end)
+    if commit:
+        return diff_artifact(review_root, f"{commit}^", commit)
+    return diff_artifact(review_root, merge_base(review_root, base, "HEAD"), "HEAD")
+
+
 def _result_returncode(result: dict[str, object]) -> int:
     value = result.get("returncode")
     if value is None:
@@ -163,35 +177,24 @@ def main() -> int:
             commit=commit,
             commit_end=commit_end,
             focus=args.focus,
-            diff_text=diff_artifact(review_root, commit, commit_end) if commit and commit_end else None,
-        )
-        if commit and commit_end:
-            result = run_codex(
-                tool_name="review-deslop",
-                prompt=prompt,
-                model=model_config.model,
-                reasoning_effort=model_config.reasoning_effort,
-                service_tier=model_config.service_tier,
+            diff_text=target_diff_artifact(
                 review_root=review_root,
-                progress_interval_seconds=DEFAULT_PROGRESS_INTERVAL_SECONDS,
-                timeout_seconds=DEFAULT_TIMEOUT_SECONDS,
-                allow_unsafe_windows_wsl_fallback=bool(args.wsl),
-            )
-        else:
-            result = run_codex_review(
-                tool_name="review-deslop",
-                prompt=prompt,
-                model=model_config.model,
-                reasoning_effort=model_config.reasoning_effort,
-                service_tier=model_config.service_tier,
-                title="review-suite::deslop",
-                review_root=review_root,
-                base=None if commit else args.base,
+                base=args.base,
                 commit=commit,
-                progress_interval_seconds=DEFAULT_PROGRESS_INTERVAL_SECONDS,
-                timeout_seconds=DEFAULT_TIMEOUT_SECONDS,
-                allow_unsafe_windows_wsl_fallback=bool(args.wsl),
-            )
+                commit_end=commit_end,
+            ),
+        )
+        result = run_codex(
+            tool_name="review-deslop",
+            prompt=prompt,
+            model=model_config.model,
+            reasoning_effort=model_config.reasoning_effort,
+            service_tier=model_config.service_tier,
+            review_root=review_root,
+            progress_interval_seconds=DEFAULT_PROGRESS_INTERVAL_SECONDS,
+            timeout_seconds=DEFAULT_TIMEOUT_SECONDS,
+            allow_unsafe_windows_wsl_fallback=bool(args.wsl),
+        )
         if args.output_only:
             return emit_output_only(tool_name="review-deslop", result=result)
         return emit_result(
