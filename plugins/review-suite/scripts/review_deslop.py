@@ -13,14 +13,28 @@ from review_suite_core import (
     AxiArgumentParser,
     DEFAULT_PROGRESS_INTERVAL_SECONDS,
     DEFAULT_TIMEOUT_SECONDS,
+    diff_artifact,
     emit_error,
     emit_result,
     format_command,
     lens_model_config,
     resolve_repo_root,
     run_codex,
+    run_codex_review,
     use_unsafe_windows_wsl_fallback,
     write_text,
+)
+
+UNUSABLE_REVIEW_MARKERS = (
+    "could not inspect",
+    "couldn't inspect",
+    "couldn't perform the review",
+    "cannot inspect",
+    "local process execution is blocked",
+    "powershell and node repl failed",
+    "windows sandbox failed",
+    "spawn setup refresh",
+    "no mcp workspace resource",
 )
 
 
@@ -49,7 +63,14 @@ def normalize_commit_spec(commit_values: list[str] | None) -> tuple[str | None, 
     raise ValueError("--commit accepts one sha or two shas")
 
 
-def build_prompt(*, base: str | None, commit: str | None, commit_end: str | None, focus: str | None) -> str:
+def build_prompt(
+    *,
+    base: str | None,
+    commit: str | None,
+    commit_end: str | None,
+    focus: str | None,
+    diff_text: str | None = None,
+) -> str:
     focus_block = f"\nPay extra attention to this focus area:\n- {focus.strip()}\n" if focus else ""
     if commit and commit_end:
         target_block = (
@@ -63,7 +84,7 @@ def build_prompt(*, base: str | None, commit: str | None, commit_end: str | None
         )
     else:
         target_block = f"Review the current repository changes against base branch `{base}`.\n\n"
-    return (
+    prompt = (
         target_block
         + "Prefer the smallest correct shape.\n\n"
         + "Inspect for:\n"
@@ -77,6 +98,31 @@ def build_prompt(*, base: str | None, commit: str | None, commit_end: str | None
         + "\nReturn only concrete findings with severity, file path, and fix suggestion.\n"
         + "Skip style-only comments."
     )
+    if diff_text is None:
+        return prompt
+    return (
+        prompt
+        + "\n\nUse the following diff artifact as the primary review input.\n"
+        + "Do not fabricate findings beyond this diff.\n\n"
+        + "=== BEGIN DIFF ===\n"
+        + diff_text.strip()
+        + "\n=== END DIFF ==="
+    )
+
+
+def _review_output_text(result: dict[str, object]) -> str:
+    return "\n".join(str(result.get(key) or "") for key in ("final_message", "stdout", "stderr"))
+
+
+def _deslop_output_unusable(result: dict[str, object]) -> bool:
+    text = _review_output_text(result).lower().replace(chr(0x2019), "'").replace(chr(0xFFFD), "'")
+    return any(marker in text for marker in UNUSABLE_REVIEW_MARKERS)
+
+
+def _with_effective_returncode(result: dict[str, object]) -> dict[str, object]:
+    if _deslop_output_unusable(result) and int(result.get("returncode") or 0) == 0:
+        return {**result, "returncode": 1}
+    return result
 
 
 def _result_returncode(result: dict[str, object]) -> int:
@@ -87,6 +133,7 @@ def _result_returncode(result: dict[str, object]) -> int:
 
 
 def emit_output_only(*, tool_name: str, result: dict[str, object]) -> int:
+    result = _with_effective_returncode(result)
     returncode = _result_returncode(result)
     body = str(result.get("final_message") or "").strip()
     if not body and returncode != 0:
@@ -111,27 +158,45 @@ def main() -> int:
                 flush=True,
             )
         model_config = lens_model_config("review-deslop")
-        result = run_codex(
-            tool_name="review-deslop",
-            prompt=build_prompt(
+        prompt = build_prompt(
+            base=None if commit else args.base,
+            commit=commit,
+            commit_end=commit_end,
+            focus=args.focus,
+            diff_text=diff_artifact(review_root, commit, commit_end) if commit and commit_end else None,
+        )
+        if commit and commit_end:
+            result = run_codex(
+                tool_name="review-deslop",
+                prompt=prompt,
+                model=model_config.model,
+                reasoning_effort=model_config.reasoning_effort,
+                service_tier=model_config.service_tier,
+                review_root=review_root,
+                progress_interval_seconds=DEFAULT_PROGRESS_INTERVAL_SECONDS,
+                timeout_seconds=DEFAULT_TIMEOUT_SECONDS,
+                allow_unsafe_windows_wsl_fallback=bool(args.wsl),
+            )
+        else:
+            result = run_codex_review(
+                tool_name="review-deslop",
+                prompt=prompt,
+                model=model_config.model,
+                reasoning_effort=model_config.reasoning_effort,
+                service_tier=model_config.service_tier,
+                title="review-suite::deslop",
+                review_root=review_root,
                 base=None if commit else args.base,
                 commit=commit,
-                commit_end=commit_end,
-                focus=args.focus,
-            ),
-            model=model_config.model,
-            reasoning_effort=model_config.reasoning_effort,
-            service_tier=model_config.service_tier,
-            review_root=review_root,
-            progress_interval_seconds=DEFAULT_PROGRESS_INTERVAL_SECONDS,
-            timeout_seconds=DEFAULT_TIMEOUT_SECONDS,
-            allow_unsafe_windows_wsl_fallback=bool(args.wsl),
-        )
+                progress_interval_seconds=DEFAULT_PROGRESS_INTERVAL_SECONDS,
+                timeout_seconds=DEFAULT_TIMEOUT_SECONDS,
+                allow_unsafe_windows_wsl_fallback=bool(args.wsl),
+            )
         if args.output_only:
             return emit_output_only(tool_name="review-deslop", result=result)
         return emit_result(
             tool_name="review-deslop",
-            result=result,
+            result=_with_effective_returncode(result),
         )
     except ValueError as exc:
         return emit_error(

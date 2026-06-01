@@ -91,6 +91,61 @@ def codex_exec_command(
     return command
 
 
+def codex_review_command(
+    *,
+    tool_name: str,
+    model: str,
+    reasoning_effort: str,
+    service_tier: str | None = None,
+    title: str,
+    prompt: str,
+    review_root: Path,
+    base: str | None = None,
+    commit: str | None = None,
+    allow_unsafe_windows_wsl_fallback: bool,
+) -> list[str]:
+    if bool(base) == bool(commit):
+        raise ValueError("codex review target must be exactly one of base or commit")
+    codex_executable = shutil.which("codex") or shutil.which("codex.cmd") or "codex"
+    validate_codex_runtime(
+        tool_name=tool_name,
+        codex_executable=codex_executable,
+        review_root=review_root,
+        allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
+        unsafe_command_hint="codex exec review --dangerously-bypass-approvals-and-sandbox",
+    )
+    if use_unsafe_windows_wsl_fallback(review_root, allow_unsafe_windows_wsl_fallback):
+        command = [
+            codex_executable,
+            "exec",
+            "-C",
+            str(review_root),
+            "review",
+            "--dangerously-bypass-approvals-and-sandbox",
+        ]
+    else:
+        command = [codex_executable, "review"]
+    command.extend(
+        [
+            "-c",
+            f'model="{model}"',
+            "-c",
+            f'model_reasoning_effort="{reasoning_effort}"',
+        ]
+    )
+    normalized_service_tier = normalize_service_tier(service_tier)
+    if normalized_service_tier:
+        command.extend(["-c", f'service_tier="{normalized_service_tier}"'])
+    command.extend(["--title", title])
+    if base:
+        command.extend(["--base", str(base)])
+    else:
+        command.extend(["--commit", str(commit)])
+    if prompt.strip():
+        command.append("-")
+    return command
+
+
 def extract_session_id(stderr_text: str) -> str | None:
     marker = "session id:"
     for line in stderr_text.splitlines():
@@ -222,6 +277,82 @@ def run_codex(
     finally:
         child_paths = (child.stdout_path, child.stderr_path) if child is not None else ()
         for path in (output_path, *child_paths):
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
+def run_codex_review(
+    *,
+    tool_name: str,
+    prompt: str,
+    model: str,
+    reasoning_effort: str,
+    service_tier: str | None = None,
+    title: str,
+    review_root: Path,
+    base: str | None = None,
+    commit: str | None = None,
+    progress_interval_seconds: int,
+    timeout_seconds: int,
+    allow_unsafe_windows_wsl_fallback: bool,
+) -> dict[str, object]:
+    child: CapturedChildProcess | None = None
+    try:
+        command = codex_review_command(
+            tool_name=tool_name,
+            model=model,
+            reasoning_effort=reasoning_effort,
+            service_tier=service_tier,
+            title=title,
+            prompt=prompt,
+            review_root=review_root,
+            base=base,
+            commit=commit,
+            allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
+        )
+        child = launch_captured_child_process(
+            command=command,
+            cwd=wrapper_launch_cwd()
+            if use_unsafe_windows_wsl_fallback(review_root, allow_unsafe_windows_wsl_fallback)
+            else review_root.resolve(),
+            stdin_text=prompt if prompt.strip() else None,
+            stdout_prefix=f"{tool_name}-stdout-",
+            stderr_prefix=f"{tool_name}-stderr-",
+            stdout_suffix=".txt",
+            stderr_suffix=".txt",
+        )
+        wait_result = wait_for_captured_child_process(
+            process=child.process,
+            started_monotonic=child.started_monotonic,
+            start_line=f"{compact_tool_label(tool_name)} started; waiting for review result.",
+            heartbeat_line=lambda elapsed: progress_heartbeat_line(tool_name, elapsed),
+            timeout_line=lambda elapsed: f"[{tool_name}] timed out after {elapsed}s",
+            progress_interval_seconds=progress_interval_seconds,
+            timeout_seconds=timeout_seconds,
+        )
+        stdout_text = child.stdout_path.read_text(encoding="utf-8", errors="replace") if child.stdout_path.exists() else ""
+        stderr_text = child.stderr_path.read_text(encoding="utf-8", errors="replace") if child.stderr_path.exists() else ""
+        session_id = extract_session_id(stderr_text)
+        record_wrapper_session(
+            session_id=session_id,
+            tool_name=tool_name,
+            review_root=review_root,
+            elapsed_seconds=wait_result.elapsed_seconds,
+        )
+        return {
+            "returncode": wait_result.returncode,
+            "stdout": stdout_text,
+            "stderr": stderr_text,
+            "final_message": stdout_text.strip(),
+            "session_id": session_id,
+            "elapsed_seconds": wait_result.elapsed_seconds,
+            "timed_out": wait_result.timed_out,
+        }
+    finally:
+        child_paths = (child.stdout_path, child.stderr_path) if child is not None else ()
+        for path in child_paths:
             try:
                 path.unlink(missing_ok=True)
             except OSError:
