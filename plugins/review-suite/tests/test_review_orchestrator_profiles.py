@@ -14,9 +14,14 @@ if str(SCRIPT_DIR) not in sys.path:
 from review_suite_core.config import load_config
 from review_suite_core.orchestrator_profiles import (
     SUPPORTED_SELECTION_REASONS,
+    OrchestratorProfileStep,
     load_orchestrator_profiles,
     resolve_orchestrator_profile,
 )
+
+
+def _step_summary(step: OrchestratorProfileStep) -> tuple[str, str, int | None, str | None, str | None, bool]:
+    return (step.kind, step.name, step.count, step.model, step.reasoning_effort, step.rerun_on_findings)
 
 
 def test_default_stable_profiles_cover_all_modes(tmp_path: Path) -> None:
@@ -25,22 +30,45 @@ def test_default_stable_profiles_cover_all_modes(tmp_path: Path) -> None:
     profiles = load_orchestrator_profiles(config)
 
     assert set(profiles["stable"]) == {"brief", "normal", "deep", "emergency"}
+    assert config["arena"]["enabled"] is False
     assert config["orchestrator"]["calibration"]["auto_promotion_enabled"] is False
-    assert profiles["stable"]["brief"].steps[0].count == 2
-    assert profiles["stable"]["brief"].steps[0].model == "gpt-5.5"
-    assert profiles["stable"]["brief"].steps[0].reasoning_effort == "medium"
-    assert profiles["stable"]["brief"].deslop_enabled is False
-    assert profiles["stable"]["brief"].steps[0].rerun_on_findings is True
-    assert [step.model for step in profiles["stable"]["normal"].steps if step.kind == "review"] == ["gpt-5.4", "gpt-5.5"]
-    assert [step.count for step in profiles["stable"]["normal"].steps if step.kind == "review"] == [4, 2]
-    assert [step.model for step in profiles["stable"]["deep"].steps if step.kind == "review"] == ["gpt-5.4", "gpt-5.4", "gpt-5.5"]
-    assert [step.count for step in profiles["stable"]["deep"].steps if step.kind == "review"] == [4, 2, 2]
-    assert [step.reasoning_effort for step in profiles["stable"]["deep"].steps if step.kind == "review"] == ["medium", "xhigh", "xhigh"]
-    for mode in ("brief", "normal", "deep", "emergency"):
-        step = profiles["stable"][mode].steps[-1]
-        assert step.kind == "review"
-        assert step.rerun_on_findings is True
+    assert profiles["stable"]["brief"].deslop_enabled is True
+    assert [_step_summary(step) for step in profiles["stable"]["brief"].steps] == [
+        ("review", "broad-discovery", 4, "gpt-5.4", "medium", False),
+        ("review", "precision-signoff", 2, "gpt-5.5", "medium", True),
+    ]
+    assert [step.name for step in profiles["stable"]["normal"].steps] == [
+        "broad-discovery-1",
+        "broad-discovery-2",
+        "broad-discovery-3",
+        "precision-signoff",
+    ]
+    assert [step.count for step in profiles["stable"]["normal"].steps] == [4, 4, 4, 2]
+    assert [step.name for step in profiles["stable"]["deep"].steps] == [
+        "broad-discovery-1",
+        "broad-discovery-2",
+        "broad-discovery-3",
+        "precision-signoff",
+        "deep-discovery-1",
+        "deep-discovery-2",
+        "deep-signoff",
+    ]
+    assert [step.reasoning_effort for step in profiles["stable"]["deep"].steps] == [
+        "medium",
+        "medium",
+        "medium",
+        "medium",
+        "xhigh",
+        "xhigh",
+        "xhigh",
+    ]
+    assert profiles["stable"]["normal"].steps[-1].rerun_on_findings is True
+    assert profiles["stable"]["deep"].steps[3].rerun_on_findings is True
+    assert profiles["stable"]["deep"].steps[-1].rerun_on_findings is True
     assert profiles["stable"]["emergency"].deslop_enabled is False
+    assert [_step_summary(step) for step in profiles["stable"]["emergency"].steps] == [
+        ("review", "urgent-signoff", 2, "gpt-5.5", "medium", False)
+    ]
 
 
 def test_profile_step_kind_defaults_to_review(tmp_path: Path) -> None:
@@ -71,35 +99,134 @@ def test_stable_model_defaults_drive_profile_steps(tmp_path: Path) -> None:
     deep = profiles["stable"]["deep"].steps
     assert [(step.model, step.reasoning_effort) for step in normal] == [
         ("gpt-5.5", "medium"),
+        ("gpt-5.5", "medium"),
+        ("gpt-5.5", "medium"),
         ("gpt-5.4", "high"),
     ]
     assert [(step.model, step.reasoning_effort) for step in deep] == [
         ("gpt-5.5", "medium"),
+        ("gpt-5.5", "medium"),
+        ("gpt-5.5", "medium"),
+        ("gpt-5.4", "high"),
+        ("gpt-5.5", "xhigh"),
         ("gpt-5.5", "xhigh"),
         ("gpt-5.4", "xhigh"),
     ]
 
 
-def test_stable_discovery_loops_repeat_discovery_block(tmp_path: Path) -> None:
+def test_stable_discovery_loop_budgets_repeat_discovery_blocks(tmp_path: Path) -> None:
     config = deepcopy(load_config(tmp_path / "state"))
-    config["orchestrator"]["stable_defaults"]["discovery_loops"] = 2
+    config["orchestrator"]["stable_defaults"]["normal_discovery_loops"] = 2
+    config["orchestrator"]["stable_defaults"]["deep_discovery_loops"] = 3
 
     profiles = load_orchestrator_profiles(config)
 
     assert [step.name for step in profiles["stable"]["deep"].steps] == [
         "broad-discovery-1",
-        "deep-discovery-1",
         "broad-discovery-2",
+        "precision-signoff",
+        "deep-discovery-1",
         "deep-discovery-2",
+        "deep-discovery-3",
         "deep-signoff",
     ]
     assert [step.rerun_on_findings for step in profiles["stable"]["deep"].steps] == [
         False,
         False,
+        True,
+        False,
         False,
         False,
         True,
     ]
+
+
+def test_arena_disabled_omits_arena_steps_even_with_loop_budgets(tmp_path: Path) -> None:
+    config = deepcopy(load_config(tmp_path / "state"))
+    config["orchestrator"]["stable_defaults"]["normal_arena_loops"] = 2
+    config["orchestrator"]["stable_defaults"]["deep_arena_loops"] = 1
+
+    profiles = load_orchestrator_profiles(config)
+
+    assert [step.kind for step in profiles["stable"]["normal"].steps] == ["review", "review", "review", "review"]
+    assert [step.name for step in profiles["stable"]["normal"].steps] == [
+        "broad-discovery-1",
+        "broad-discovery-2",
+        "broad-discovery-3",
+        "precision-signoff",
+    ]
+    assert all(step.kind != "arena" for step in profiles["stable"]["deep"].steps)
+
+
+def test_disabled_first_step_in_loop_block_does_not_drop_enabled_steps(tmp_path: Path) -> None:
+    config = deepcopy(load_config(tmp_path / "state"))
+    config["arena"]["enabled"] = False
+    config["orchestrator"]["stable_defaults"]["normal_discovery_loops"] = 2
+    config["orchestrator"]["profiles"]["stable"]["normal"]["steps"] = [
+        {
+            "kind": "arena",
+            "name": "arena-phase-review",
+            "lane": "review_t1",
+            "task_class": "phase_review",
+            "loop_ref": "normal_discovery_loops",
+            "enabled_ref": "arena.enabled",
+        },
+        {
+            "name": "broad-discovery",
+            "count": 1,
+            "model_ref": "discovery_brief_model",
+            "loop_ref": "normal_discovery_loops",
+        },
+    ]
+
+    profiles = load_orchestrator_profiles(config)
+
+    assert [step.name for step in profiles["stable"]["normal"].steps] == ["broad-discovery-1", "broad-discovery-2"]
+
+
+def test_arena_enabled_inserts_arena_steps_and_keeps_minimum_discovery(tmp_path: Path) -> None:
+    config = deepcopy(load_config(tmp_path / "state"))
+    config["arena"]["enabled"] = True
+    config["orchestrator"]["stable_defaults"].update(
+        {
+            "normal_arena_loops": 2,
+            "deep_arena_loops": 3,
+        }
+    )
+
+    profiles = load_orchestrator_profiles(config)
+
+    normal = profiles["stable"]["normal"].steps
+    assert [(step.kind, step.name, step.lane, step.task_class) for step in normal] == [
+        ("arena", "arena-phase-review-1", "review_t1", "phase_review"),
+        ("arena", "arena-phase-review-2", "review_t1", "phase_review"),
+        ("review", "broad-discovery", None, None),
+        ("review", "precision-signoff", None, None),
+    ]
+
+    deep = profiles["stable"]["deep"].steps
+    assert [(step.kind, step.name, step.lane, step.task_class) for step in deep] == [
+        ("arena", "arena-phase-review-1", "review_t1", "phase_review"),
+        ("arena", "arena-phase-review-2", "review_t1", "phase_review"),
+        ("review", "broad-discovery", None, None),
+        ("review", "precision-signoff", None, None),
+        ("arena", "arena-pr-review-1", "review_t3", "pr_review"),
+        ("arena", "arena-pr-review-2", "review_t3", "pr_review"),
+        ("arena", "arena-pr-review-3", "review_t3", "pr_review"),
+        ("review", "deep-discovery", None, None),
+        ("review", "deep-signoff", None, None),
+    ]
+
+
+def test_arena_steps_reject_mismatched_lane_and_task_class(tmp_path: Path) -> None:
+    config = deepcopy(load_config(tmp_path / "state"))
+    config["arena"]["enabled"] = True
+    config["orchestrator"]["stable_defaults"]["normal_arena_loops"] = 1
+    config["orchestrator"]["profiles"]["stable"]["normal"]["steps"][0]["lane"] = "review_t1"
+    config["orchestrator"]["profiles"]["stable"]["normal"]["steps"][0]["task_class"] = "pr_review"
+
+    with pytest.raises(ValueError, match="lane must be review_t3 for task_class pr_review"):
+        load_orchestrator_profiles(config)
 
 
 def test_stable_model_refs_require_model_effort_labels(tmp_path: Path) -> None:

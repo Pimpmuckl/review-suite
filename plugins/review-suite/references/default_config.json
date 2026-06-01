@@ -14,7 +14,7 @@
     "review-followup": {}
   },
   "arena": {
-    "enabled": true
+    "enabled": false
   },
   "orchestrator": {
     "selection": "auto",
@@ -25,15 +25,20 @@
       "discovery_brief_model": "gpt-5.4-medium",
       "discovery_deep_model": "gpt-5.4-xhigh",
       "discovery_loops": 1,
+      "normal_discovery_loops": 3,
+      "normal_arena_loops": 0,
+      "deep_discovery_loops": 2,
+      "deep_arena_loops": 0,
       "signoff_brief_model": "gpt-5.5-medium",
       "signoff_deep_model": "gpt-5.5-xhigh"
     },
     "profiles": {
       "stable": {
         "brief": {
-          "deslop_enabled": false,
+          "deslop_enabled": true,
           "requires_grading": false,
           "steps": [
+            {"name": "broad-discovery", "count": 4, "model_ref": "discovery_brief_model"},
             {"name": "precision-signoff", "count": 2, "model_ref": "signoff_brief_model", "rerun_on_findings": true}
           ]
         },
@@ -41,7 +46,8 @@
           "deslop_enabled": true,
           "requires_grading": false,
           "steps": [
-            {"name": "broad-discovery", "count": 4, "model_ref": "discovery_brief_model", "loop_ref": "discovery_loops"},
+            {"kind": "arena", "name": "arena-phase-review", "lane": "review_t1", "task_class": "phase_review", "loop_ref": "normal_arena_loops", "enabled_ref": "arena.enabled"},
+            {"name": "broad-discovery", "count": 4, "model_ref": "discovery_brief_model", "loop_ref": "normal_discovery_loops", "subtract_loop_ref": "normal_arena_loops", "subtract_if": "arena.enabled", "min_loops": 1},
             {"name": "precision-signoff", "count": 2, "model_ref": "signoff_brief_model", "rerun_on_findings": true}
           ]
         },
@@ -49,8 +55,11 @@
           "deslop_enabled": true,
           "requires_grading": false,
           "steps": [
-            {"name": "broad-discovery", "count": 4, "model_ref": "discovery_brief_model", "loop_ref": "discovery_loops"},
-            {"name": "deep-discovery", "count": 2, "model_ref": "discovery_deep_model", "loop_ref": "discovery_loops"},
+            {"kind": "arena", "name": "arena-phase-review", "lane": "review_t1", "task_class": "phase_review", "loop_ref": "normal_arena_loops", "enabled_ref": "arena.enabled"},
+            {"name": "broad-discovery", "count": 4, "model_ref": "discovery_brief_model", "loop_ref": "normal_discovery_loops", "subtract_loop_ref": "normal_arena_loops", "subtract_if": "arena.enabled", "min_loops": 1},
+            {"name": "precision-signoff", "count": 2, "model_ref": "signoff_brief_model", "rerun_on_findings": true},
+            {"kind": "arena", "name": "arena-pr-review", "lane": "review_t3", "task_class": "pr_review", "loop_ref": "deep_arena_loops", "enabled_ref": "arena.enabled"},
+            {"name": "deep-discovery", "count": 2, "model_ref": "discovery_deep_model", "loop_ref": "deep_discovery_loops", "subtract_loop_ref": "deep_arena_loops", "subtract_if": "arena.enabled", "min_loops": 1},
             {"name": "deep-signoff", "count": 2, "model_ref": "signoff_deep_model", "rerun_on_findings": true}
           ]
         },
@@ -58,7 +67,7 @@
           "deslop_enabled": false,
           "requires_grading": false,
           "steps": [
-            {"name": "urgent-signoff", "count": 2, "model_ref": "signoff_brief_model", "rerun_on_findings": true}
+            {"name": "urgent-signoff", "count": 2, "model_ref": "signoff_brief_model"}
           ]
         }
       },

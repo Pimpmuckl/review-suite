@@ -38,6 +38,7 @@ from review_suite_local import (
     _base_branch_review_artifact,
     build_manual_review_prompt,
     build_phase_instructions,
+    build_pr_instructions,
     build_record_from_grade,
     build_reroll_slot_payload,
     compact_benchmark_record,
@@ -776,12 +777,53 @@ def _review_output_refs(runs: list[dict[str, object]]) -> list[str]:
     return refs
 
 
+def _is_orchestrated_round_payload(payload: dict[str, object]) -> bool:
+    return bool(payload.get("arena_round")) and bool(str(payload.get("orchestrator_step") or "").strip())
+
+
+def _round_is_graded(payload: dict[str, object]) -> bool:
+    return bool(str(payload.get("graded_at") or "").strip())
+
+
+def _record_standalone_review_anchor_for_round(
+    *,
+    state_dir: Path,
+    review_cwd: Path,
+    lane: str,
+    base: str | None,
+    review_scope: dict[str, object],
+    round_payload: dict[str, object],
+    completed_payload: dict[str, object],
+    round_id: str,
+    task_id: str,
+) -> bool:
+    anchor_payload = {**round_payload, **completed_payload}
+    if _is_orchestrated_round_payload(anchor_payload):
+        return False
+    try:
+        record_review_anchor(
+            state_dir=state_dir,
+            review_cwd=review_cwd,
+            lane=lane,
+            base=base,
+            review_scope=review_scope,
+            round_id=round_id,
+            task_id=task_id,
+            output_refs=_review_output_refs(list(completed_payload.get("runs") or [])),
+        )
+    except Exception as exc:  # pragma: no cover - warning path only
+        _record_anchor_warning(exc)
+        return False
+    return True
+
+
 def _orchestrator_review_state_dir(state_dir: Path) -> Path:
     return state_dir / "orchestrator" / "review-rounds"
 
 
 def _orchestrator_roster_from_round(payload: dict[str, object]) -> dict[str, object]:
     variants: dict[str, dict[str, object]] = {}
+    task_class = str(payload.get("task_class") or "phase_review").strip() or "phase_review"
     for run in list(payload.get("runs") or []):
         if not isinstance(run, dict):
             continue
@@ -795,7 +837,7 @@ def _orchestrator_roster_from_round(payload: dict[str, object]) -> dict[str, obj
             "state": "active",
             "model": model,
             "reasoning_effort": reasoning_effort,
-            "task_classes": ["phase_review"],
+            "task_classes": [task_class],
         }
         service_tier = str(run.get("service_tier") or "").strip()
         if service_tier:
@@ -843,6 +885,9 @@ def _completed_orchestrator_review_result(
         "runs": list(result.get("runs") or []),
         "round_state_dir": str(round_state_dir),
         "grading_required": bool(grading_required),
+        "arena_round": bool(completed.get("arena_round")),
+        "needs_grade": bool(grading_required or completed.get("arena_round")) and bool(round_needs_caller_grade(completed)),
+        "graded": _round_is_graded(completed),
     }
 
 
@@ -855,15 +900,26 @@ def _orchestrator_review_slots(count: int) -> list[str]:
 
 
 def _orchestrator_phase_review_request(*, review_cwd: Path, base: str):
+    return _orchestrator_review_request(review_cwd=review_cwd, base=base, task_class="phase_review")
+
+
+def _orchestrator_review_request(*, review_cwd: Path, base: str, task_class: str):
+    instruction_builders = {
+        "phase_review": build_phase_instructions,
+        "pr_review": build_pr_instructions,
+    }
+    instruction_builder = instruction_builders.get(task_class)
+    if instruction_builder is None:
+        raise ValueError(f"unsupported orchestrator arena task_class: {task_class}")
     diff_text, review_scope, target_label = _base_branch_review_artifact(review_cwd=review_cwd, base=base)
     request = _manual_review_request(
         review_scope=review_scope,
         target_label=target_label,
-        instructions=build_phase_instructions(target_label),
+        instructions=instruction_builder(target_label),
         diff_text=diff_text,
     )
     if not request.prompt.strip():
-        raise ValueError("orchestrator review requires a non-empty phase-review prompt")
+        raise ValueError(f"orchestrator review requires a non-empty {task_class} prompt")
     return request
 
 
@@ -915,6 +971,124 @@ def run_orchestrator_review_step(
         step_total=step_total,
         on_round_started=on_round_started,
     )
+
+
+def run_orchestrated_arena_round(
+    *,
+    lane: str,
+    task_class: str,
+    step_name: str,
+    review_cwd: Path,
+    state_dir: Path,
+    sqlite_path: Path,
+    review_scope: dict[str, object],
+    task_id: str | None,
+    allow_dirty: bool,
+    progress_interval_seconds: int,
+    allow_unsafe_windows_wsl_fallback: bool,
+    step_position: int | None = None,
+    step_total: int | None = None,
+    on_round_started: Callable[[dict[str, object]], None] | None = None,
+) -> dict[str, object]:
+    base = str(review_scope.get("base") or "").strip()
+    if not base:
+        raise ValueError("review_scope.base is required")
+    request = _orchestrator_review_request(review_cwd=review_cwd, base=base, task_class=task_class)
+    ensure_clean_git_worktree(review_cwd, allow_dirty=allow_dirty, review_scope=request.review_scope)
+    _validate_benchmarked_review_runtime(
+        review_cwd=review_cwd,
+        allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
+    )
+    roster_path = default_roster_path()
+    rubric_path = default_rubric_path()
+    roster = load_roster(roster_path)
+    records = read_jsonl(state_dir / RUN_LOG_FILENAME) + ungraded_round_exposure_records(state_dir)
+    operational_state = load_operational_state(state_dir / OPERATIONAL_STATE_FILENAME)
+    payload = select_pair(
+        roster=roster,
+        operational_state=operational_state,
+        records=records,
+        task_class=task_class,
+        review_cwd=review_cwd,
+        seed=None,
+        caller_id=None,
+        caller_id_source=None,
+        excluded_variant_ids=set(),
+    )
+    branch_default = task_id or _current_branch_name(review_cwd) or payload["round_id"]
+    payload["task_class"] = task_class
+    payload["task_id_hint"] = branch_default
+    payload["roster_path"] = str(roster_path)
+    payload["rubric_path"] = str(rubric_path)
+    payload["public_task"] = lane
+    payload["orchestrator_step"] = step_name
+    payload["arena_round"] = True
+    payload["grading_required"] = True
+    payload.setdefault("sampled_at", utc_now_iso())
+    payload["review_cwd_normalized"] = normalize_review_cwd_value(review_cwd)
+    payload["review_cwd"] = str(review_cwd)
+    payload["review_scope"] = dict(request.review_scope)
+    payload["requested_prompt"] = request.prompt
+    payload["allow_dirty"] = allow_dirty
+    payload["allow_unsafe_windows_wsl_fallback"] = allow_unsafe_windows_wsl_fallback
+    payload["progress_interval_seconds"] = progress_interval_seconds
+    if step_position is not None and step_total is not None:
+        payload["orchestrator_step_position"] = step_position
+        payload["orchestrator_step_total"] = step_total
+    write_round(state_dir, payload)
+    if on_round_started is not None:
+        on_round_started(
+            {
+                "round_id": str(payload.get("round_id") or ""),
+                "round_state_dir": str(state_dir),
+                "reviewed_head": str(request.review_scope.get("reviewed_head") or request.review_scope.get("commit_end") or ""),
+            }
+        )
+    _print_round_banner(
+        task_name=_orchestrator_banner_task_name(
+            lane,
+            step_name=step_name,
+            step_position=step_position,
+            step_total=step_total,
+        ),
+        round_id=str(payload["round_id"]),
+    )
+    if includes_deep_review_effort(list(payload.get("runs") or [])):
+        print_deep_review_wait_note()
+    completed = run_round(
+        round_payload=payload,
+        roster=roster,
+        state_dir=state_dir,
+        review_cwd=review_cwd,
+        prompt=request.prompt,
+        review_scope=request.review_scope,
+        sqlite_path=sqlite_path,
+        progress_interval_seconds=progress_interval_seconds,
+        allow_dirty=allow_dirty,
+        allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
+    )
+    completed["task_id_hint"] = branch_default
+    completed["task_class"] = task_class
+    completed["arena_round"] = True
+    completed["roster_path"] = str(roster_path)
+    completed["rubric_path"] = str(rubric_path)
+    completed["grading_required"] = True
+    return _completed_orchestrator_review_result(
+        completed=completed,
+        lane=lane,
+        step_name=step_name,
+        review_cwd=review_cwd,
+        state_dir=state_dir,
+        round_state_dir=state_dir,
+        task_id=branch_default,
+        grading_required=True,
+        step_position=step_position,
+        step_total=step_total,
+    )
+
+
+def run_orchestrator_arena_step(**kwargs) -> dict[str, object]:
+    return run_orchestrated_arena_round(**kwargs)
 
 
 def _run_orchestrator_manual_review_step(
@@ -1269,19 +1443,17 @@ def run_benchmarked_round(
     write_round(state_dir, completed)
     refresh_review_cost_report_best_effort(state_dir=state_dir, review_cwd=review_cwd)
     if not bool(round_result.get("blocked")):
-        try:
-            record_review_anchor(
-                state_dir=state_dir,
-                review_cwd=review_cwd,
-                lane=public_task,
-                base=str(review_scope.get("base") or "") or None,
-                review_scope=review_scope,
-                round_id=str(payload["round_id"]),
-                task_id=branch_default,
-                output_refs=_review_output_refs(list(completed.get("runs") or [])),
-            )
-        except Exception as exc:  # pragma: no cover - warning path only
-            _record_anchor_warning(exc)
+        _record_standalone_review_anchor_for_round(
+            state_dir=state_dir,
+            review_cwd=review_cwd,
+            lane=public_task,
+            base=str(review_scope.get("base") or "") or None,
+            review_scope=review_scope,
+            round_payload=payload,
+            completed_payload=completed,
+            round_id=str(payload["round_id"]),
+            task_id=branch_default,
+        )
     interactive_output = _output_isatty()
     if interactive_output:
         _print_next_steps(
@@ -1513,15 +1685,15 @@ def cmd_run_round(args: argparse.Namespace) -> int:
     roster = load_roster(Path(args.roster))
     state_dir = Path(args.state_dir)
     payload = load_round(state_dir, args.round_id)
-    review_scope = {
-        "base": args.base,
-    }
+    review_scope = copy.deepcopy(payload.get("review_scope") or {})
+    if args.base and not str(review_scope.get("base") or "").strip():
+        review_scope["base"] = args.base
     completed = run_round(
         round_payload=payload,
         roster=roster,
         state_dir=state_dir,
         review_cwd=review_cwd,
-        prompt="",
+        prompt=str(payload.get("requested_prompt") or ""),
         review_scope=review_scope,
         sqlite_path=Path(args.sqlite_path),
         progress_interval_seconds=DEFAULT_PROGRESS_INTERVAL_SECONDS,
@@ -1541,19 +1713,17 @@ def cmd_run_round(args: argparse.Namespace) -> int:
     )
     _print_findings(completed)
     if not bool(result.get("blocked")):
-        try:
-            record_review_anchor(
-                state_dir=state_dir,
-                review_cwd=review_cwd,
-                lane=_public_local_task_name(str(payload.get("task_class") or completed.get("task_class") or "")),
-                base=str(review_scope.get("base") or "") or None,
-                review_scope=review_scope,
-                round_id=str(completed.get("round_id") or payload["round_id"]),
-                task_id=str(completed["task_id_hint"]),
-                output_refs=_review_output_refs(list(completed.get("runs") or [])),
-            )
-        except Exception as exc:  # pragma: no cover - warning path only
-            _record_anchor_warning(exc)
+        _record_standalone_review_anchor_for_round(
+            state_dir=state_dir,
+            review_cwd=review_cwd,
+            lane=_public_local_task_name(str(payload.get("task_class") or completed.get("task_class") or "")),
+            base=str(review_scope.get("base") or "") or None,
+            review_scope=review_scope,
+            round_payload=payload,
+            completed_payload=completed,
+            round_id=str(completed.get("round_id") or payload["round_id"]),
+            task_id=str(completed["task_id_hint"]),
+        )
     if not _output_isatty():
         emit_toon(
             _completed_round_payload(
@@ -1578,6 +1748,32 @@ def cmd_reroll_slot(args: argparse.Namespace) -> int:
         seed=args.seed,
     )
     review_cwd = Path(args.cd).resolve() if args.cd else Path(str(original["review_cwd"])).resolve()
+    review_scope = copy.deepcopy(original.get("review_scope") or {})
+    if args.base:
+        review_scope["base"] = args.base
+    payload["review_scope"] = review_scope
+    payload["requested_prompt"] = str(original.get("requested_prompt") or "")
+    payload["review_cwd"] = str(review_cwd)
+    payload["review_cwd_normalized"] = (
+        normalize_review_cwd_value(review_cwd)
+        if args.cd
+        else str(original.get("review_cwd_normalized") or normalize_review_cwd_value(review_cwd))
+    )
+    for key in (
+        "allow_dirty",
+        "allow_unsafe_windows_wsl_fallback",
+        "progress_interval_seconds",
+        "public_task",
+        "orchestrator_step",
+        "orchestrator_step_position",
+        "orchestrator_step_total",
+        "arena_round",
+        "grading_required",
+        "roster_path",
+        "rubric_path",
+    ):
+        if key in original:
+            payload[key] = copy.deepcopy(original[key])
     if _output_isatty():
         _print_round_banner(
             task_name=_public_local_task_name(str(original.get("task_class") or payload.get("task_class") or "")),
@@ -1585,9 +1781,6 @@ def cmd_reroll_slot(args: argparse.Namespace) -> int:
         )
     print(f"[review-suite] reroll {args.slot}", file=sys.stderr, flush=True)
     write_round(state_dir, payload)
-    review_scope = copy.deepcopy(original.get("review_scope") or {})
-    if args.base:
-        review_scope["base"] = args.base
     completed = run_round(
         round_payload=payload,
         roster=roster,
@@ -1625,19 +1818,17 @@ def cmd_reroll_slot(args: argparse.Namespace) -> int:
         )
     completed["task_id_hint"] = _current_branch_name(review_cwd) or payload["round_id"]
     if not bool(result.get("blocked")):
-        try:
-            record_review_anchor(
-                state_dir=state_dir,
-                review_cwd=review_cwd,
-                lane=_public_local_task_name(str(original.get("task_class") or payload.get("task_class") or "")),
-                base=str(review_scope.get("base") or "") or None,
-                review_scope=review_scope,
-                round_id=str(payload["round_id"]),
-                task_id=str(completed["task_id_hint"]),
-                output_refs=_review_output_refs(list(completed.get("runs") or [])),
-            )
-        except Exception as exc:  # pragma: no cover - warning path only
-            _record_anchor_warning(exc)
+        _record_standalone_review_anchor_for_round(
+            state_dir=state_dir,
+            review_cwd=review_cwd,
+            lane=_public_local_task_name(str(original.get("task_class") or payload.get("task_class") or "")),
+            base=str(review_scope.get("base") or "") or None,
+            review_scope=review_scope,
+            round_payload=payload,
+            completed_payload=completed,
+            round_id=str(payload["round_id"]),
+            task_id=str(completed["task_id_hint"]),
+        )
     write_round(state_dir, completed)
     refresh_review_cost_report_best_effort(state_dir=state_dir, review_cwd=review_cwd)
     if not _output_isatty():
@@ -1693,20 +1884,18 @@ def cmd_resume_round(args: argparse.Namespace) -> int:
     _print_findings(completed)
     completed["task_id_hint"] = _current_branch_name(review_cwd) or str(payload["round_id"])
     if not bool(result.get("blocked")):
-        try:
-            review_scope = dict(completed.get("review_scope") or payload.get("review_scope") or {})
-            record_review_anchor(
-                state_dir=state_dir,
-                review_cwd=review_cwd,
-                lane=_public_local_task_name(str(payload.get("task_class") or completed.get("task_class") or "")),
-                base=str(review_scope.get("base") or "") or None,
-                review_scope=review_scope,
-                round_id=str(completed.get("round_id") or payload["round_id"]),
-                task_id=str(completed["task_id_hint"]),
-                output_refs=_review_output_refs(list(completed.get("runs") or [])),
-            )
-        except Exception as exc:  # pragma: no cover - warning path only
-            _record_anchor_warning(exc)
+        review_scope = dict(completed.get("review_scope") or payload.get("review_scope") or {})
+        _record_standalone_review_anchor_for_round(
+            state_dir=state_dir,
+            review_cwd=review_cwd,
+            lane=_public_local_task_name(str(payload.get("task_class") or completed.get("task_class") or "")),
+            base=str(review_scope.get("base") or "") or None,
+            review_scope=review_scope,
+            round_payload=payload,
+            completed_payload=completed,
+            round_id=str(completed.get("round_id") or payload["round_id"]),
+            task_id=str(completed["task_id_hint"]),
+        )
     if not _output_isatty():
         emit_toon(
             _completed_round_payload(

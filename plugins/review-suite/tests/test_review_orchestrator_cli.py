@@ -208,6 +208,16 @@ def _stub_gate(monkeypatch: pytest.MonkeyPatch, *round_ids: str) -> list[dict[st
     return calls
 
 
+def _use_compact_normal_profile(monkeypatch: pytest.MonkeyPatch, state_dir: Path, *, include_deep: bool = False) -> dict[str, object]:
+    config = deepcopy(review.load_config(state_dir))
+    defaults = config["orchestrator"]["stable_defaults"]
+    defaults["normal_discovery_loops"] = 1
+    if include_deep:
+        defaults["deep_discovery_loops"] = 1
+    monkeypatch.setattr(review, "load_config", lambda state_dir: config)
+    return config
+
+
 def _cycle_payload(state_dir: Path, public_id: str) -> dict[str, object]:
     index = json.loads((state_dir / "orchestrator" / "index.json").read_text(encoding="utf-8"))
     cycle_key = index["ids"][public_id]
@@ -341,11 +351,277 @@ def test_orchestrator_review_helper_uses_phase_prompt_without_predecision_anchor
     assert completion_events == ["findings", "cost"]
 
 
+def test_orchestrator_arena_helper_uses_pr_prompt_for_pr_review(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/orchestrator-arena-pr")
+    head = _commit_file(repo, "app.txt", "feature\n", "feature")
+    captured: dict[str, object] = {}
+    select_calls: list[dict[str, object]] = []
+    anchor_calls: list[dict[str, object]] = []
+
+    def fake_select_pair(**kwargs: object) -> dict[str, object]:
+        select_calls.append(dict(kwargs))
+        return {
+            "round_id": "arena-pr-round-1",
+            "task_class": kwargs["task_class"],
+            "status": "sampled",
+            "runs": [
+                {
+                    "slot": "alpha",
+                    "variant_id": "alpha-model",
+                    "model": "gpt-5.5",
+                    "reasoning_effort": "xhigh",
+                }
+            ],
+        }
+
+    def fake_run_round(
+        *,
+        round_payload: dict[str, object],
+        roster: dict[str, object],
+        state_dir: Path,
+        review_cwd: Path,
+        prompt: str,
+        review_scope: dict[str, object],
+        sqlite_path: Path,
+        progress_interval_seconds: int,
+        allow_dirty: bool,
+        allow_unsafe_windows_wsl_fallback: bool,
+    ) -> dict[str, object]:
+        captured["prompt"] = prompt
+        captured["review_scope"] = dict(review_scope)
+        captured["round_payload"] = dict(round_payload)
+        return {
+            **round_payload,
+            "status": "completed",
+            "review_scope": dict(review_scope),
+            "runs": [
+                {
+                    "slot": "alpha",
+                    "variant_id": "alpha-model",
+                    "review_status": "completed",
+                    "status_summary": "No findings.",
+                    "grade_blocked": False,
+                    "grade_block_reason": None,
+                    "reviewer_output": "No findings.",
+                    "reviewer_output_ref": "rollout://alpha",
+                }
+            ],
+        }
+
+    monkeypatch.setattr(review_suite_arena, "_validate_benchmarked_review_runtime", lambda **kwargs: None)
+    monkeypatch.setattr(review_suite_arena, "load_roster", lambda path: {"settings": {}, "variants": []})
+    monkeypatch.setattr(review_suite_arena, "load_operational_state", lambda path: {})
+    monkeypatch.setattr(review_suite_arena, "select_pair", fake_select_pair)
+    monkeypatch.setattr(review_suite_arena, "run_round", fake_run_round)
+    monkeypatch.setattr(review_suite_arena, "_print_round_banner", lambda **kwargs: None)
+    monkeypatch.setattr(review_suite_arena, "_print_findings", lambda result: False)
+    monkeypatch.setattr(review_suite_arena, "record_review_anchor", lambda **kwargs: anchor_calls.append(kwargs))
+    monkeypatch.setattr(review_suite_arena, "launch_review_cost_report_refresh_best_effort", lambda **kwargs: True)
+
+    result = review_suite_arena.run_orchestrated_arena_round(
+        lane="review_t3",
+        task_class="pr_review",
+        step_name="arena-pr-review",
+        review_cwd=repo,
+        state_dir=state_dir,
+        sqlite_path=tmp_path / "state.sqlite",
+        review_scope={"base": "main"},
+        task_id="feature/orchestrator-arena-pr",
+        allow_dirty=False,
+        progress_interval_seconds=1,
+        allow_unsafe_windows_wsl_fallback=False,
+        step_position=3,
+        step_total=4,
+    )
+
+    prompt = str(captured["prompt"])
+    assert "Review this PR-ready branch diff" in prompt
+    assert "Review this implementation slice" not in prompt
+    assert dict(captured["review_scope"])["manual_prompt_mode"] is True
+    assert dict(captured["round_payload"])["task_class"] == "pr_review"
+    assert dict(captured["round_payload"])["task_id_hint"] == "feature/orchestrator-arena-pr"
+    assert "Review this PR-ready branch diff" in str(dict(captured["round_payload"])["requested_prompt"])
+    assert dict(captured["round_payload"])["review_scope"] == dict(captured["review_scope"])
+    assert dict(captured["round_payload"])["review_cwd"] == str(repo)
+    assert dict(captured["round_payload"])["allow_dirty"] is False
+    assert dict(captured["round_payload"])["progress_interval_seconds"] == 1
+    assert select_calls[0]["task_class"] == "pr_review"
+    assert result["lane"] == "review_t3"
+    assert result["reviewed_head"] == head
+    assert result["arena_round"] is True
+    assert result["grading_required"] is True
+    assert result["needs_grade"] is True
+    assert result["graded"] is False
+    assert anchor_calls == []
+
+
+def test_decision_action_surfaces_arena_grade_command(tmp_path: Path) -> None:
+    state = {
+        "public_id": "rvw_example",
+        "stage": "decision-pending",
+        "pending_action": {"kind": "decision", "round_id": "arena-round-1", "lane": "review_t3"},
+        "identity": {"branch": "feature/arena"},
+        "deslop": {"tracked": False, "status": "closed"},
+        "rounds": [
+            {
+                "round_id": "arena-round-1",
+                "lane": "review_t3",
+                "grading_required": True,
+                "arena_round": True,
+                "status": "completed",
+                "task_id_hint": "feature/arena",
+            }
+        ],
+    }
+
+    action = review._action_payload(state, state_dir=tmp_path / "state")
+
+    assert action is not None
+    assert "review_suite_arena.py grade" in str(action["cmd"])
+    assert "--round-id arena-round-1" in str(action["cmd"])
+    assert "--task-id feature/arena" in str(action["cmd"])
+    assert "--state-dir" in str(action["cmd"])
+    assert "--id rvw_example" in str(action["next"])
+    assert "alt" not in action
+
+
+def test_arena_recovery_action_surfaces_reroll_and_dismiss(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    state = {
+        "public_id": "rvw_example",
+        "stage": "retry-requested",
+        "pending_action": {
+            "kind": "arena-blocked",
+            "round_id": "arena-round-1",
+            "lane": "review_t3",
+            "step_index": 0,
+            "step": "arena-discovery",
+        },
+        "identity": {"cwd": str(repo), "base": "main", "branch": "feature/arena"},
+        "deslop": {"tracked": False, "status": "closed"},
+        "rounds": [
+            {
+                "round_id": "arena-round-1",
+                "lane": "review_t3",
+                "grading_required": True,
+                "arena_round": True,
+                "status": "completed",
+                "runs": [{"slot": "alpha", "blocked": True}],
+            }
+        ],
+    }
+
+    action = review._action_payload(state, state_dir=tmp_path / "state")
+
+    assert action is not None
+    assert "review_suite_arena.py reroll-slot" in str(action["cmd"])
+    assert "--round-id arena-round-1" in str(action["cmd"])
+    assert "--slot alpha" in str(action["cmd"])
+    assert "review_suite_arena.py dismiss-round" in str(action["dismiss"])
+    assert "--id rvw_example" in str(action["next"])
+
+
+def test_arena_recovery_action_surfaces_run_for_sampled_replacement(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    state = {
+        "public_id": "rvw_example",
+        "stage": "retry-requested",
+        "pending_action": {
+            "kind": "arena-blocked",
+            "round_id": "arena-round-2",
+            "lane": "review_t3",
+            "step_index": 0,
+            "step": "arena-discovery",
+        },
+        "identity": {"cwd": str(repo), "base": "main", "branch": "feature/arena"},
+        "deslop": {"tracked": False, "status": "closed"},
+        "rounds": [
+            {
+                "round_id": "arena-round-2",
+                "lane": "review_t3",
+                "grading_required": True,
+                "arena_round": True,
+                "status": "sampled",
+                "runs": [{"slot": "alpha"}],
+            }
+        ],
+    }
+
+    action = review._action_payload(state, state_dir=tmp_path / "state")
+
+    assert action is not None
+    assert "review_suite_arena.py run-round" in str(action["cmd"])
+    assert "--round-id arena-round-2" in str(action["cmd"])
+    assert "review_suite_arena.py dismiss-round" in str(action["dismiss"])
+    assert "--id rvw_example" in str(action["next"])
+
+
+def test_decision_rejects_ungraded_arena_round(tmp_path: Path) -> None:
+    state = {
+        "public_id": "rvw_example",
+        "stage": "decision-pending",
+        "pending_action": {"kind": "decision", "round_id": "arena-round-1", "lane": "review_t3"},
+        "identity": {"branch": "feature/arena"},
+        "review_progress": {"next_step_index": 1, "completed_steps": []},
+        "rounds": [
+            {
+                "round_id": "arena-round-1",
+                "lane": "review_t3",
+                "grading_required": True,
+                "arena_round": True,
+                "status": "completed",
+                "reviewed_head": "head-1",
+            }
+        ],
+    }
+
+    with pytest.raises(ValueError, match="grade the arena round"):
+        review._apply_decision(state, "clean", state_dir=tmp_path / "state")
+
+
+def test_benchmark_grading_required_round_does_not_use_arena_grade_gate(tmp_path: Path) -> None:
+    state = {
+        "public_id": "rvw_example",
+        "stage": "decision-pending",
+        "pending_action": {"kind": "decision", "round_id": "benchmark-round-1", "lane": "review_t1"},
+        "identity": {"branch": "feature/benchmark"},
+        "review_progress": {"next_step_index": 1, "completed_steps": []},
+        "review_plan": {"steps": [{"name": "benchmark", "count": 1, "model": "gpt-5.5", "reasoning_effort": "medium"}]},
+        "rounds": [
+            {
+                "round_id": "benchmark-round-1",
+                "lane": "review_t1",
+                "grading_required": True,
+                "status": "completed",
+                "reviewed_head": "head-1",
+            }
+        ],
+    }
+
+    action = review._action_payload(state, state_dir=tmp_path / "state")
+    clean = review._apply_decision(state, "clean", state_dir=tmp_path / "state")
+
+    assert action is not None
+    assert "--decision clean" in str(action["cmd"])
+    assert "review_suite_arena.py grade" not in str(action)
+    assert clean["stage"] == "review-green"
+
+
 def test_create_resume_and_id_reprint_use_one_pending_action(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     deslop_calls = _stub_deslop(monkeypatch)
     review_calls = _stub_review(monkeypatch, "phase_review-round-1", "phase_review-round-2")
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
+    _use_compact_normal_profile(monkeypatch, state_dir)
     _init_repo(repo)
     _commit_file(repo, "app.txt", "base\n", "base")
     _git(repo, "checkout", "-b", "feature/review-shell")
@@ -361,9 +637,10 @@ def test_create_resume_and_id_reprint_use_one_pending_action(monkeypatch: pytest
     assert "mode" not in payload
     assert "selection" not in payload
     assert "grading" not in payload
-    assert set(dict(payload["Action"])) == {"cmd"}
+    assert set(dict(payload["Action"])) == {"cmd", "deslop_done"}
     assert f"--id {public_id}" in str(payload["Action"]["cmd"])
     assert "--decision" not in str(payload["Action"]["cmd"])
+    assert "--deslop-done" in str(payload["Action"]["deslop_done"])
     assert len(deslop_calls) == 1
     locator = json.loads((tmp_path / "default-state" / "orchestrator" / "state_dirs.json").read_text(encoding="utf-8"))
     assert locator["ids"][public_id] == str(state_dir.resolve())
@@ -381,7 +658,7 @@ def test_create_resume_and_id_reprint_use_one_pending_action(monkeypatch: pytest
     assert exit_code == 0
     assert resumed["review"] == public_id
     assert "stage" not in resumed
-    assert set(dict(resumed["Action"])) == {"cmd", "alt"}
+    assert set(dict(resumed["Action"])) == {"cmd", "alt", "deslop_done"}
     assert "--decision clean" in str(resumed["Action"]["cmd"])
     assert "--decision findings" in str(resumed["Action"]["alt"])
     assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 1
@@ -405,7 +682,7 @@ def test_create_resume_and_id_reprint_use_one_pending_action(monkeypatch: pytest
     assert exit_code == 0
     assert first_clean["review"] == public_id
     assert "stage" not in first_clean
-    assert set(dict(first_clean["Action"])) == {"cmd"}
+    assert set(dict(first_clean["Action"])) == {"cmd", "deslop_done"}
     assert f"--id {public_id}" in str(first_clean["Action"]["cmd"])
     assert "--decision" not in str(first_clean["Action"]["cmd"])
     state = _cycle_payload(state_dir, public_id)
@@ -665,6 +942,7 @@ def test_restart_mode_supersedes_cycle_and_starts_fresh_deep_ladder(
     review_calls = _stub_review(monkeypatch, "normal-round-1", "deep-round-1")
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
+    _use_compact_normal_profile(monkeypatch, state_dir, include_deep=True)
     _init_repo(repo)
     _commit_file(repo, "app.txt", "base\n", "base")
     _git(repo, "checkout", "-b", "feature/restart-deep")
@@ -718,6 +996,7 @@ def test_restart_mode_supersedes_cycle_and_starts_fresh_deep_ladder(
     assert new_state["restart"]["from_mode"] == "normal"
     assert [step["name"] for step in new_state["review_plan"]["steps"]] == [
         "broad-discovery",
+        "precision-signoff",
         "deep-discovery",
         "deep-signoff",
     ]
@@ -751,7 +1030,7 @@ def test_restart_mode_supersedes_cycle_and_starts_fresh_deep_ladder(
     assert len(review_calls) == 2
     assert review_calls[1]["step_name"] == "broad-discovery"
     assert review_calls[1]["step_position"] == 1
-    assert review_calls[1]["step_total"] == 3
+    assert review_calls[1]["step_total"] == 4
 
 
 def test_restart_mode_requires_escalation_reason_and_stricter_mode(
@@ -858,6 +1137,101 @@ def test_review_orchestrator_help_hides_internal_selection() -> None:
     assert "--restart-mode" in help_text
     assert "--selection" not in help_text
     assert "--state-dir" not in help_text
+
+
+def test_deslop_done_closes_tracked_sidecar_without_rerunning_deslop(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    deslop_calls = _stub_deslop(monkeypatch)
+    review_calls = _stub_review(monkeypatch, "phase_review-round-1")
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+
+    _, created = _run_review(
+        monkeypatch,
+        ["--mode", "normal", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)],
+    )
+    public_id = str(created["review"])
+
+    assert "--deslop-done" in str(created["Action"]["deslop_done"])
+    assert len(deslop_calls) == 1
+
+    exit_code, closed = _run_review(
+        monkeypatch,
+        ["--id", public_id, "--deslop-done", "--state-dir", str(state_dir)],
+    )
+
+    assert exit_code == 0
+    assert closed["review"] == public_id
+    assert "deslop_done" not in dict(closed["Action"])
+    state = _cycle_payload(state_dir, public_id)
+    assert state["deslop"]["tracked"] is False
+    assert state["deslop"]["status"] == "closed"
+
+    exit_code, resumed = _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+
+    assert exit_code == 0
+    assert "--decision clean" in str(resumed["Action"]["cmd"])
+    assert "deslop_done" not in dict(resumed["Action"])
+    assert len(deslop_calls) == 1
+    assert len(review_calls) == 1
+
+
+def test_deslop_done_is_primary_action_when_no_other_action_remains() -> None:
+    state = {"deslop": {"tracked": True, "status": "done"}}
+
+    action = review._with_deslop_done_action(state, None, "rvw_example")
+
+    assert action == {"cmd": review._review_command("rvw_example", "--deslop-done")}
+
+
+def test_deslop_done_requires_id_and_rejects_other_actions(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    errors: list[str] = []
+    monkeypatch.setattr(review, "emit_error", lambda message, **kwargs: errors.append(str(message)) or 2)
+    monkeypatch.setattr(sys, "argv", ["review.py", "--deslop-done", "--state-dir", str(tmp_path / "state")])
+
+    assert review.main() == 2
+    assert errors[-1] == "--deslop-done requires --id"
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["review.py", "--id", "rvw_example", "--deslop-done", "--show-findings", "--state-dir", str(tmp_path / "state")],
+    )
+
+    assert review.main() == 2
+    assert "--deslop-done cannot be combined" in errors[-1]
+
+
+def test_deslop_done_is_noop_for_emergency_cycle(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    def fail_deslop(*, command: list[str], cwd: Path) -> subprocess.CompletedProcess:
+        raise AssertionError("emergency mode must not run deslop")
+
+    monkeypatch.setattr(orchestrator_runner, "run_deslop_subprocess", fail_deslop)
+    _stub_review(monkeypatch, "phase_review-round-1")
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+
+    _, created = _run_review(
+        monkeypatch,
+        ["--mode", "emergency", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)],
+    )
+    public_id = str(created["review"])
+
+    exit_code, closed = _run_review(
+        monkeypatch,
+        ["--id", public_id, "--deslop-done", "--state-dir", str(state_dir)],
+    )
+
+    assert exit_code == 0
+    assert "--decision clean" in str(closed["Action"]["cmd"])
+    state = _cycle_payload(state_dir, public_id)
+    assert state["deslop"] == {"tracked": False, "status": "skipped-emergency"}
 
 
 def test_deslop_step_prints_output_once(
@@ -1285,6 +1659,7 @@ def test_findings_fix_progression_and_clean_decision(monkeypatch: pytest.MonkeyP
     followup_calls = _stub_followup(monkeypatch, "followup-round-1")
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
+    _use_compact_normal_profile(monkeypatch, state_dir)
     _init_repo(repo)
     _commit_file(repo, "app.txt", "base\n", "base")
     _git(repo, "checkout", "-b", "feature/findings")
@@ -1424,6 +1799,7 @@ def test_findings_fix_progression_keeps_unrelated_dirty_work_in_fix_pending(
     followup_calls = _stub_followup(monkeypatch, "followup-round-1")
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
+    _use_compact_normal_profile(monkeypatch, state_dir)
     _init_repo(repo)
     _commit_file(repo, "app.txt", "base\n", "base")
     _git(repo, "checkout", "-b", "feature/dirty-new-file-fix")
@@ -1453,6 +1829,7 @@ def test_signoff_findings_require_direct_clean_rerun(monkeypatch: pytest.MonkeyP
     followup_calls = _stub_followup(monkeypatch, "followup-round-1")
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
+    _use_compact_normal_profile(monkeypatch, state_dir)
     _init_repo(repo)
     _commit_file(repo, "app.txt", "base\n", "base")
     _git(repo, "checkout", "-b", "feature/signoff-rerun")
@@ -1508,6 +1885,7 @@ def test_clean_followup_note_does_not_leak_to_later_review_steps(monkeypatch: py
     _stub_review(monkeypatch, "phase_review-round-1", "phase_review-round-2", "phase_review-round-3")
     _stub_followup(monkeypatch, "followup-round-1")
     config = deepcopy(review.load_config(tmp_path / "state"))
+    config["orchestrator"]["stable_defaults"]["normal_discovery_loops"] = 1
     config["orchestrator"]["profiles"]["stable"]["normal"]["steps"].append(
         {"name": "final-sweep", "count": 1, "model_ref": "signoff_brief_model"}
     )
@@ -1541,7 +1919,7 @@ def test_clean_followup_note_does_not_leak_to_later_review_steps(monkeypatch: py
     _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
     _, final_step_ready = _run_review(monkeypatch, ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)])
 
-    assert set(dict(final_step_ready["Action"])) == {"cmd"}
+    assert set(dict(final_step_ready["Action"])) == {"cmd", "deslop_done"}
     state = _cycle_payload(state_dir, public_id)
     assert state["pending_action"] == {"kind": "run-review-step", "step_index": 2, "step": "final-sweep"}
 
@@ -1554,6 +1932,7 @@ def test_gate_findings_flow_requires_followup_and_same_gate_rerun(monkeypatch: p
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
     config = deepcopy(review.load_config(state_dir))
+    config["orchestrator"]["stable_defaults"]["normal_discovery_loops"] = 1
     config["orchestrator"]["profiles"]["stable"]["normal"]["steps"].append(
         {"name": "local-signoff", "kind": "gate", "gate": "phase_gate"}
     )

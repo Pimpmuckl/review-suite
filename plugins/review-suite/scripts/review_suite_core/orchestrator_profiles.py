@@ -14,8 +14,14 @@ SUPPORTED_SELECTION_REASONS = (
 )
 SUPPORTED_REASONING_EFFORTS = {"low", "medium", "high", "xhigh"}
 SUPPORTED_SERVICE_TIERS = {"fast", "flex"}
-SUPPORTED_STEP_KINDS = ("review", "gate")
+SUPPORTED_STEP_KINDS = ("review", "gate", "arena")
 SUPPORTED_GATE_TASK_CLASSES = ("phase_gate", "pr_gate")
+SUPPORTED_ARENA_LANES = ("review_t1", "review_t3")
+SUPPORTED_ARENA_TASK_CLASSES = ("phase_review", "pr_review")
+ARENA_LANES_BY_TASK_CLASS = {
+    "phase_review": "review_t1",
+    "pr_review": "review_t3",
+}
 
 
 @dataclass(frozen=True)
@@ -27,6 +33,8 @@ class OrchestratorProfileStep:
     reasoning_effort: str | None = None
     service_tier: str | None = None
     gate: str | None = None
+    lane: str | None = None
+    task_class: str | None = None
     rerun_on_findings: bool = False
 
 
@@ -71,6 +79,16 @@ def _positive_int(value: Any, *, field: str) -> int:
         raise ValueError(f"{field} must be an integer") from exc
     if number <= 0:
         raise ValueError(f"{field} must be > 0")
+    return number
+
+
+def _non_negative_int(value: Any, *, field: str) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field} must be an integer") from exc
+    if number < 0:
+        raise ValueError(f"{field} must be >= 0")
     return number
 
 
@@ -156,20 +174,93 @@ def _normalize_gate(value: Any, *, field: str) -> str:
     return gate
 
 
+def _normalize_arena_lane(value: Any, *, field: str) -> str:
+    lane = _non_empty_text(value, field=f"{field}.lane")
+    if lane not in SUPPORTED_ARENA_LANES:
+        raise ValueError(f"{field}.lane must be one of: {', '.join(SUPPORTED_ARENA_LANES)}")
+    return lane
+
+
+def _normalize_arena_task_class(value: Any, *, field: str) -> str:
+    task_class = _non_empty_text(value, field=f"{field}.task_class")
+    if task_class not in SUPPORTED_ARENA_TASK_CLASSES:
+        raise ValueError(f"{field}.task_class must be one of: {', '.join(SUPPORTED_ARENA_TASK_CLASSES)}")
+    return task_class
+
+
+def _normalize_arena_pair(raw_step: dict[str, Any], *, field: str) -> tuple[str, str]:
+    lane = _normalize_arena_lane(raw_step.get("lane"), field=field)
+    task_class = _normalize_arena_task_class(raw_step.get("task_class"), field=field)
+    expected_lane = ARENA_LANES_BY_TASK_CLASS[task_class]
+    if lane != expected_lane:
+        raise ValueError(f"{field}.lane must be {expected_lane} for task_class {task_class}")
+    return lane, task_class
+
+
 def _raw_loop_ref(raw_step: Any) -> str:
     if not isinstance(raw_step, dict):
         return ""
     return str(raw_step.get("loop_ref") or "").strip()
 
 
-def _loop_count(stable_defaults: dict[str, Any], *, loop_ref: str) -> int:
-    return _positive_int(stable_defaults.get(loop_ref), field=f"orchestrator.stable_defaults.{loop_ref}")
+def _config_ref(config: dict[str, Any], ref: str, *, field: str) -> Any:
+    current: Any = config
+    for part in ref.split("."):
+        key = part.strip()
+        if not key or not isinstance(current, dict) or key not in current:
+            raise ValueError(f"{field} references unknown config value {ref}")
+        current = current[key]
+    return current
+
+
+def _config_bool_ref(config: dict[str, Any], ref: str, *, field: str) -> bool:
+    value = _config_ref(config, ref, field=field)
+    if not isinstance(value, bool):
+        raise ValueError(f"{field} must reference a true or false config value")
+    return value
+
+
+def _step_enabled(raw_step: dict[str, Any], *, config: dict[str, Any], field: str) -> bool:
+    enabled_ref = str(raw_step.get("enabled_ref") or "").strip()
+    if not enabled_ref:
+        return True
+    return _config_bool_ref(config, enabled_ref, field=f"{field}.enabled_ref")
+
+
+def _loop_count(
+    raw_step: dict[str, Any],
+    *,
+    config: dict[str, Any],
+    stable_defaults: dict[str, Any],
+    loop_ref: str,
+    field: str,
+) -> int:
+    if not _step_enabled(raw_step, config=config, field=field):
+        return 0
+    allow_zero = _normalize_step_kind(raw_step.get("kind"), field=field) == "arena" or "enabled_ref" in raw_step
+    if allow_zero:
+        loops = _non_negative_int(stable_defaults.get(loop_ref), field=f"orchestrator.stable_defaults.{loop_ref}")
+    else:
+        loops = _positive_int(stable_defaults.get(loop_ref), field=f"orchestrator.stable_defaults.{loop_ref}")
+
+    subtract_ref = str(raw_step.get("subtract_loop_ref") or "").strip()
+    if subtract_ref:
+        subtract_if = str(raw_step.get("subtract_if") or "").strip()
+        if not subtract_if or _config_bool_ref(config, subtract_if, field=f"{field}.subtract_if"):
+            loops -= _non_negative_int(
+                stable_defaults.get(subtract_ref),
+                field=f"orchestrator.stable_defaults.{subtract_ref}",
+            )
+        min_loops = _positive_int(raw_step.get("min_loops", 1), field=f"{field}.min_loops")
+        loops = max(min_loops, loops)
+    return loops
 
 
 def _normalize_step(
     raw_step: Any,
     *,
     field: str,
+    config: dict[str, Any],
     stable_defaults: dict[str, Any],
     name_suffix: str = "",
 ) -> OrchestratorProfileStep:
@@ -182,6 +273,14 @@ def _normalize_step(
             kind=kind,
             name=name,
             gate=_normalize_gate(raw_step.get("gate"), field=field),
+        )
+    if kind == "arena":
+        lane, task_class = _normalize_arena_pair(raw_step, field=field)
+        return OrchestratorProfileStep(
+            kind=kind,
+            name=name,
+            lane=lane,
+            task_class=task_class,
         )
     model, effort, default_service_tier = _model_from_step(raw_step, stable_defaults=stable_defaults, field=field)
     return OrchestratorProfileStep(
@@ -199,6 +298,7 @@ def _normalize_steps(
     raw_steps: list[Any],
     *,
     field: str,
+    config: dict[str, Any],
     stable_defaults: dict[str, Any],
 ) -> tuple[OrchestratorProfileStep, ...]:
     steps: list[OrchestratorProfileStep] = []
@@ -206,10 +306,14 @@ def _normalize_steps(
     while index < len(raw_steps):
         loop_ref = _raw_loop_ref(raw_steps[index])
         if not loop_ref:
+            if isinstance(raw_steps[index], dict) and not _step_enabled(raw_steps[index], config=config, field=f"{field}[{index}]"):
+                index += 1
+                continue
             steps.append(
                 _normalize_step(
                     raw_steps[index],
                     field=f"{field}[{index}]",
+                    config=config,
                     stable_defaults=stable_defaults,
                 )
             )
@@ -219,14 +323,28 @@ def _normalize_steps(
         while index < len(raw_steps) and _raw_loop_ref(raw_steps[index]) == loop_ref:
             block.append((index, raw_steps[index]))
             index += 1
-        loops = _loop_count(stable_defaults, loop_ref=loop_ref)
+        enabled_block = [
+            (raw_index, raw_step)
+            for raw_index, raw_step in block
+            if not isinstance(raw_step, dict) or _step_enabled(raw_step, config=config, field=f"{field}[{raw_index}]")
+        ]
+        if not enabled_block:
+            continue
+        loops = _loop_count(
+            enabled_block[0][1],
+            config=config,
+            stable_defaults=stable_defaults,
+            loop_ref=loop_ref,
+            field=f"{field}[{enabled_block[0][0]}]",
+        )
         for loop_index in range(loops):
             suffix = f"-{loop_index + 1}" if loops > 1 else ""
-            for raw_index, raw_step in block:
+            for raw_index, raw_step in enabled_block:
                 steps.append(
                     _normalize_step(
                         raw_step,
                         field=f"{field}[{raw_index}]",
+                        config=config,
                         stable_defaults=stable_defaults,
                         name_suffix=suffix,
                     )
@@ -239,6 +357,7 @@ def _normalize_profile(
     *,
     mode: str,
     profile: str,
+    config: dict[str, Any],
     stable_defaults: dict[str, Any],
 ) -> OrchestratorProfile:
     if not isinstance(raw_profile, dict):
@@ -249,6 +368,7 @@ def _normalize_profile(
     steps = _normalize_steps(
         raw_steps,
         field=f"orchestrator.profiles.{profile}.{mode}.steps",
+        config=config,
         stable_defaults=stable_defaults,
     )
     requires_grading = profile == "benchmark"
@@ -298,6 +418,7 @@ def load_orchestrator_profiles(config: dict[str, Any]) -> dict[str, dict[str, Or
                 raw_modes[mode],
                 mode=mode,
                 profile=profile,
+                config=config,
                 stable_defaults=stable_defaults if profile == "stable" else {},
             )
             for mode in SUPPORTED_MODES

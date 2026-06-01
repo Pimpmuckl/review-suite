@@ -19,8 +19,10 @@ from review_suite_core.orchestrator_state import (
     STAGE_REVIEW_GREEN,
     STAGE_RETRY_REQUESTED,
     create_cycle,
+    mark_arena_recovery_requested,
     mark_fix_detected,
     mark_review_step_pending,
+    mark_review_step_running,
     record_clean_decision,
     record_findings_decision,
 )
@@ -128,6 +130,56 @@ def _stub_followup(monkeypatch, *round_ids: str) -> list[dict[str, object]]:
         }
 
     monkeypatch.setattr(orchestrator_runner, "run_followup_review_step", fake_run)
+    return calls
+
+
+def _stub_arena(monkeypatch, *round_ids: str) -> list[dict[str, object]]:
+    calls: list[dict[str, object]] = []
+    ids = list(round_ids) or ["pr_review-round-1"]
+
+    def fake_run(**kwargs: object) -> dict[str, object]:
+        calls.append(dict(kwargs))
+        round_id = ids[min(len(calls) - 1, len(ids) - 1)]
+        on_round_started = kwargs.get("on_round_started")
+        if callable(on_round_started):
+            on_round_started(
+                {
+                    "round_id": round_id,
+                    "round_state_dir": "state/rounds",
+                    "reviewed_head": "head-1",
+                }
+            )
+        return {
+            "round_id": round_id,
+            "lane": kwargs.get("lane"),
+            "kind": "review",
+            "status": "completed",
+            "blocked": False,
+            "reviewed_head": "head-1",
+            "output_refs": ["rollout://thread/arena-alpha"],
+            "runs": [
+                {
+                    "slot": "alpha",
+                    "status": "completed",
+                    "summary": "No findings.",
+                    "ref": "rollout://thread/arena-alpha",
+                    "blocked": False,
+                    "block": None,
+                },
+                {
+                    "slot": "bravo",
+                    "status": "completed",
+                    "summary": "No findings.",
+                    "ref": "rollout://thread/arena-bravo",
+                    "blocked": False,
+                    "block": None,
+                },
+            ],
+            "round_state_dir": "state/rounds",
+            "grading_required": True,
+        }
+
+    monkeypatch.setattr(orchestrator_runner, "run_arena_step", fake_run)
     return calls
 
 
@@ -365,6 +417,384 @@ def test_runner_runs_gate_profile_step_once_after_review_steps(monkeypatch, tmp_
 
     assert reprint.ran_step is False
     assert len(gate_calls) == 1
+
+
+def test_runner_executes_arena_step_with_configured_lane(monkeypatch, tmp_path: Path) -> None:
+    arena_calls = _stub_arena(monkeypatch)
+    state = _cycle(tmp_path, deslop_enabled=False, step_names=("arena-discovery", "broad-discovery", "precision-signoff"))
+    state["review_plan"]["steps"][0] = {
+        "kind": "arena",
+        "name": "arena-discovery",
+        "task_class": "pr_review",
+        "lane": "review_t3",
+    }
+    persisted: list[dict[str, object]] = []
+
+    result = orchestrator_runner.run_one_expensive_step(
+        state,
+        state_dir=tmp_path / "state",
+        persist_state=lambda next_state: persisted.append(json.loads(json.dumps(next_state))) or next_state,
+    )
+
+    assert result.ran_step is True
+    assert result.step == "arena"
+    assert persisted[0]["pending_action"]["grading_required"] is True
+    assert persisted[0]["pending_action"]["arena_round"] is True
+    assert persisted[0]["rounds"][0]["grading_required"] is True
+    assert persisted[0]["rounds"][0]["arena_round"] is True
+    assert persisted[0]["review_progress"]["current_step"]["grading_required"] is True
+    assert persisted[0]["review_progress"]["current_step"]["arena_round"] is True
+    assert arena_calls[0]["task_class"] == "pr_review"
+    assert arena_calls[0]["lane"] == "review_t3"
+    assert arena_calls[0]["step_position"] == 1
+    assert arena_calls[0]["step_total"] == 3
+    assert result.state["pending_action"] == {
+        "kind": "decision",
+        "round_id": "pr_review-round-1",
+        "lane": "review_t3",
+        "step_index": 0,
+        "step": "arena-discovery",
+        "grading_required": True,
+        "arena_round": True,
+    }
+    assert result.state["rounds"][0]["lane"] == "review_t3"
+    assert result.state["rounds"][0]["profile_step"]["grading_required"] is True
+    assert result.state["rounds"][0]["profile_step"]["arena_round"] is True
+    assert result.state["rounds"][0]["grading_required"] is True
+    assert result.state["rounds"][0]["arena_round"] is True
+
+    queued = record_clean_decision(result.state, round_id="pr_review-round-1", lane="review_t3", reviewed_head="head-1")
+
+    assert queued["pending_action"] == {"kind": "run-review-step", "step_index": 1, "step": "broad-discovery"}
+
+
+def test_runner_blocks_instead_of_deciding_blocked_arena_round(monkeypatch, tmp_path: Path) -> None:
+    def fake_run(**kwargs: object) -> dict[str, object]:
+        on_round_started = kwargs.get("on_round_started")
+        if callable(on_round_started):
+            on_round_started(
+                {
+                    "round_id": "pr_review-round-1",
+                    "round_state_dir": "state/rounds",
+                    "reviewed_head": "head-1",
+                }
+            )
+        return {
+            "round_id": "pr_review-round-1",
+            "lane": "review_t3",
+            "kind": "review",
+            "status": "completed",
+            "blocked": True,
+            "reviewed_head": "head-1",
+            "output_refs": [],
+            "runs": [{"slot": "alpha", "blocked": True}],
+            "round_state_dir": "state/rounds",
+            "grading_required": True,
+            "arena_round": True,
+        }
+
+    monkeypatch.setattr(orchestrator_runner, "run_arena_step", fake_run)
+    state = _cycle(tmp_path, deslop_enabled=False, step_names=("arena-discovery", "broad-discovery", "precision-signoff"))
+    state["review_plan"]["steps"][0] = {
+        "kind": "arena",
+        "name": "arena-discovery",
+        "task_class": "pr_review",
+        "lane": "review_t3",
+    }
+
+    result = orchestrator_runner.run_one_expensive_step(state, state_dir=tmp_path / "state")
+
+    assert result.ran_step is True
+    assert result.state["stage"] == STAGE_RETRY_REQUESTED
+    assert result.state["pending_action"]["kind"] == "arena-blocked"
+    assert result.state["pending_action"]["round_id"] == "pr_review-round-1"
+    assert result.state["recovery"]["round_id"] == "pr_review-round-1"
+    assert result.state["rounds"][0]["review_blocked"] is True
+
+
+def test_runner_preserves_arena_metadata_when_collecting_running_step(monkeypatch, tmp_path: Path) -> None:
+    calls: list[dict[str, object]] = []
+
+    def fake_resume(**kwargs: object) -> dict[str, object]:
+        calls.append(dict(kwargs))
+        return {
+            "round_id": "pr_review-round-1",
+            "lane": "review_t3",
+            "kind": "review",
+            "status": "completed",
+            "blocked": False,
+            "reviewed_head": "head-1",
+            "output_refs": ["rollout://thread/arena-alpha"],
+            "runs": [],
+            "round_state_dir": "state/rounds",
+            "grading_required": True,
+        }
+
+    monkeypatch.setattr(orchestrator_runner, "resume_review_step", fake_resume)
+    state = _cycle(tmp_path, deslop_enabled=False, step_names=("arena-discovery", "broad-discovery", "precision-signoff"))
+    state["review_plan"]["steps"][0] = {
+        "kind": "arena",
+        "name": "arena-discovery",
+        "task_class": "pr_review",
+        "lane": "review_t3",
+    }
+    running = mark_review_step_running(
+        state,
+        round_id="pr_review-round-1",
+        lane="review_t3",
+        step_index=0,
+        step_name="arena-discovery",
+        reviewed_head="head-1",
+        round_state_dir="state/rounds",
+        grading_required=True,
+        arena_round=True,
+    )
+
+    result = orchestrator_runner.run_one_expensive_step(running, state_dir=tmp_path / "state")
+
+    assert calls[0]["grading_required"] is True
+    assert result.state["pending_action"]["grading_required"] is True
+    assert result.state["pending_action"]["arena_round"] is True
+    assert result.state["rounds"][0]["profile_step"]["grading_required"] is True
+    assert result.state["rounds"][0]["profile_step"]["arena_round"] is True
+
+    queued = record_clean_decision(result.state, round_id="pr_review-round-1", lane="review_t3", reviewed_head="head-1")
+
+    assert queued["pending_action"] == {"kind": "run-review-step", "step_index": 1, "step": "broad-discovery"}
+
+
+def test_runner_blocks_when_collecting_blocked_arena_round(monkeypatch, tmp_path: Path) -> None:
+    def fake_resume(**kwargs: object) -> dict[str, object]:
+        return {
+            "round_id": "pr_review-round-1",
+            "lane": "review_t3",
+            "kind": "review",
+            "status": "completed",
+            "blocked": True,
+            "reviewed_head": "head-1",
+            "output_refs": [],
+            "runs": [{"slot": "alpha", "blocked": True}],
+            "round_state_dir": "state/rounds",
+            "grading_required": True,
+        }
+
+    monkeypatch.setattr(orchestrator_runner, "resume_review_step", fake_resume)
+    state = _cycle(tmp_path, deslop_enabled=False, step_names=("arena-discovery", "broad-discovery", "precision-signoff"))
+    state["review_plan"]["steps"][0] = {
+        "kind": "arena",
+        "name": "arena-discovery",
+        "task_class": "pr_review",
+        "lane": "review_t3",
+    }
+    running = mark_review_step_running(
+        state,
+        round_id="pr_review-round-1",
+        lane="review_t3",
+        step_index=0,
+        step_name="arena-discovery",
+        reviewed_head="head-1",
+        round_state_dir="state/rounds",
+        grading_required=True,
+        arena_round=True,
+    )
+
+    result = orchestrator_runner.run_one_expensive_step(running, state_dir=tmp_path / "state")
+
+    assert result.ran_step is True
+    assert result.state["stage"] == STAGE_RETRY_REQUESTED
+    assert result.state["pending_action"]["kind"] == "arena-blocked"
+    assert result.state["pending_action"]["round_id"] == "pr_review-round-1"
+    assert result.state["recovery"]["round_id"] == "pr_review-round-1"
+    assert result.state["rounds"][0]["review_blocked"] is True
+
+
+def test_runner_recovers_blocked_arena_round_after_successful_reroll(monkeypatch, tmp_path: Path) -> None:
+    state = _cycle(tmp_path, deslop_enabled=False, step_names=("arena-discovery", "broad-discovery", "precision-signoff"))
+    state["review_plan"]["steps"][0] = {
+        "kind": "arena",
+        "name": "arena-discovery",
+        "task_class": "pr_review",
+        "lane": "review_t3",
+    }
+    pending = mark_review_step_pending(
+        state,
+        round_id="pr_review-round-1",
+        lane="review_t3",
+        step_index=0,
+        step_name="arena-discovery",
+        reviewed_head="head-1",
+        grading_required=True,
+        arena_round=True,
+    )
+    blocked = mark_arena_recovery_requested(
+        pending,
+        reason="blocked",
+        round_id="pr_review-round-1",
+        lane="review_t3",
+        step_index=0,
+        step_name="arena-discovery",
+        round_state_dir="state/rounds",
+    )
+    monkeypatch.setattr(
+        orchestrator_runner,
+        "load_round",
+        lambda state_dir, round_id: {
+            "round_id": round_id,
+            "status": "completed",
+            "review_scope": {"reviewed_head": "head-1"},
+            "runs": [{"slot": "alpha", "review_status": "timeout", "grade_blocked": True}],
+        },
+    )
+    monkeypatch.setattr(
+        orchestrator_runner,
+        "iter_round_payloads",
+        lambda state_dir: [
+            {
+                "round_id": "pr_review-round-2",
+                "rerolled_from_round_id": "pr_review-round-1",
+                "status": "completed",
+                "review_scope": {"reviewed_head": "head-1"},
+                "runs": [
+                    {
+                        "slot": "alpha",
+                        "review_status": "completed",
+                        "grade_blocked": False,
+                        "reviewer_output": "No findings.",
+                        "reviewer_output_ref": "rollout://pr_review-round-2/alpha",
+                    },
+                    {
+                        "slot": "bravo",
+                        "review_status": "completed",
+                        "grade_blocked": False,
+                        "reviewer_output": "No findings.",
+                        "reviewer_output_ref": "rollout://pr_review-round-2/bravo",
+                    },
+                ],
+            }
+        ],
+    )
+
+    result = orchestrator_runner.run_one_expensive_step(blocked, state_dir=tmp_path / "state")
+
+    assert result.ran_step is True
+    assert result.state["stage"] == STAGE_DECISION_PENDING
+    assert result.state["pending_action"]["kind"] == "decision"
+    assert result.state["pending_action"]["round_id"] == "pr_review-round-2"
+    assert result.state["pending_action"]["grading_required"] is True
+    assert result.state["pending_action"]["arena_round"] is True
+    assert result.state["rounds"][1]["round_id"] == "pr_review-round-2"
+    assert result.state["rounds"][1]["output_refs"] == ["rollout://pr_review-round-2/alpha", "rollout://pr_review-round-2/bravo"]
+    assert result.state["rounds"][1]["runs"][0]["reviewer_output_ref"] == "rollout://pr_review-round-2/alpha"
+    assert result.state["recovery"]["status"] == "none"
+
+
+def test_runner_retargets_recovery_to_blocked_reroll_replacement(monkeypatch, tmp_path: Path) -> None:
+    state = _cycle(tmp_path, deslop_enabled=False, step_names=("arena-discovery", "broad-discovery", "precision-signoff"))
+    state["review_plan"]["steps"][0] = {
+        "kind": "arena",
+        "name": "arena-discovery",
+        "task_class": "pr_review",
+        "lane": "review_t3",
+    }
+    pending = mark_review_step_pending(
+        state,
+        round_id="pr_review-round-1",
+        lane="review_t3",
+        step_index=0,
+        step_name="arena-discovery",
+        reviewed_head="head-1",
+        grading_required=True,
+        arena_round=True,
+    )
+    blocked = mark_arena_recovery_requested(
+        pending,
+        reason="blocked",
+        round_id="pr_review-round-1",
+        lane="review_t3",
+        step_index=0,
+        step_name="arena-discovery",
+        round_state_dir="state/rounds",
+    )
+    monkeypatch.setattr(
+        orchestrator_runner,
+        "load_round",
+        lambda state_dir, round_id: {"round_id": round_id, "status": "completed", "runs": [{"slot": "alpha", "grade_blocked": True}]},
+    )
+    monkeypatch.setattr(
+        orchestrator_runner,
+        "iter_round_payloads",
+        lambda state_dir: [
+            {
+                "round_id": "pr_review-round-2",
+                "rerolled_from_round_id": "pr_review-round-1",
+                "status": "completed",
+                "runs": [{"slot": "bravo", "review_status": "timeout", "grade_blocked": True}],
+            }
+        ],
+    )
+
+    result = orchestrator_runner.run_one_expensive_step(blocked, state_dir=tmp_path / "state")
+
+    assert result.ran_step is True
+    assert result.state["stage"] == STAGE_RETRY_REQUESTED
+    assert result.state["pending_action"]["kind"] == "arena-blocked"
+    assert result.state["pending_action"]["round_id"] == "pr_review-round-2"
+
+
+def test_runner_reruns_arena_step_after_blocked_round_is_dismissed(monkeypatch, tmp_path: Path) -> None:
+    state = _cycle(tmp_path, deslop_enabled=False, step_names=("arena-discovery", "broad-discovery", "precision-signoff"))
+    state["review_plan"]["steps"][0] = {
+        "kind": "arena",
+        "name": "arena-discovery",
+        "task_class": "pr_review",
+        "lane": "review_t3",
+    }
+    pending = mark_review_step_pending(
+        state,
+        round_id="pr_review-round-1",
+        lane="review_t3",
+        step_index=0,
+        step_name="arena-discovery",
+        reviewed_head="head-1",
+        grading_required=True,
+        arena_round=True,
+    )
+    blocked = mark_arena_recovery_requested(
+        pending,
+        reason="blocked",
+        round_id="pr_review-round-1",
+        lane="review_t3",
+        step_index=0,
+        step_name="arena-discovery",
+        round_state_dir="state/rounds",
+    )
+    monkeypatch.setattr(
+        orchestrator_runner,
+        "load_round",
+        lambda state_dir, round_id: {"round_id": round_id, "status": "dismissed", "runs": []},
+    )
+
+    result = orchestrator_runner.run_one_expensive_step(blocked, state_dir=tmp_path / "state")
+
+    assert result.ran_step is True
+    assert result.state["stage"] == STAGE_CREATED
+    assert result.state["pending_action"] == {"kind": "run-review-step", "step_index": 0, "step": "arena-discovery"}
+    assert result.state["review_progress"]["next_step_index"] == 0
+    assert result.state["recovery"]["status"] == "none"
+
+
+def test_runner_rejects_mismatched_arena_lane_and_task_class(monkeypatch, tmp_path: Path) -> None:
+    _stub_arena(monkeypatch)
+    state = _cycle(tmp_path, deslop_enabled=False, step_names=("arena-discovery",))
+    state["review_plan"]["steps"][0] = {
+        "kind": "arena",
+        "name": "arena-discovery",
+        "task_class": "pr_review",
+        "lane": "review_t1",
+    }
+
+    with pytest.raises(ValueError, match="lane must be review_t3 for task_class pr_review"):
+        orchestrator_runner.run_one_expensive_step(state, state_dir=tmp_path / "state")
 
 
 def test_runner_skips_emergency_deslop(monkeypatch, tmp_path: Path) -> None:
