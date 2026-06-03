@@ -67,7 +67,7 @@
           "deslop_enabled": false,
           "requires_grading": false,
           "steps": [
-            {"name": "urgent-signoff", "count": 2, "model_ref": "signoff_brief_model"}
+            {"name": "urgent-signoff", "count": 2, "model_ref": "signoff_brief_model", "max_review_rounds": 2}
           ]
         }
       },
@@ -97,7 +97,7 @@
           "deslop_enabled": false,
           "requires_grading": true,
           "steps": [
-            {"name": "benchmark", "count": 1, "model": "gpt-5.5", "reasoning_effort": "medium"}
+            {"name": "benchmark", "count": 1, "model": "gpt-5.5", "reasoning_effort": "medium", "max_review_rounds": 2}
           ]
         }
       }

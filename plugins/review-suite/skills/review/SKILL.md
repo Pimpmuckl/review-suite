@@ -17,7 +17,7 @@ Path rules:
 - Follow emitted `Action.cmd` even when it points at `%USERPROFILE%\.codex\plugin-runtimes\review-suite\<version-hash>\scripts\...`; that runtime path is expected after bootstrap.
 
 Mode:
-- `emergency`: urgent GPT 5.5 medium signoff only; deslop disabled.
+- `emergency`: urgent GPT 5.5 medium signoff only; deslop disabled; no more than two local review rounds.
 - `brief`: one GPT 5.4 medium discovery pass, then GPT 5.5 medium signoff.
 - `normal`: GPT 5.4 medium discovery budget, then GPT 5.5 medium signoff.
 - `deep`: normal stack, GPT 5.4 xhigh discovery budget, GPT 5.5 xhigh signoff, then GitHub when required.

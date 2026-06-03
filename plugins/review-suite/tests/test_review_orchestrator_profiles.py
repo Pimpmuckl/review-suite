@@ -69,6 +69,8 @@ def test_default_stable_profiles_cover_all_modes(tmp_path: Path) -> None:
     assert [_step_summary(step) for step in profiles["stable"]["emergency"].steps] == [
         ("review", "urgent-signoff", 2, "gpt-5.5", "medium", False)
     ]
+    assert profiles["stable"]["emergency"].steps[0].max_review_rounds == 2
+    assert profiles["benchmark"]["emergency"].steps[0].max_review_rounds == 2
 
 
 def test_profile_step_kind_defaults_to_review(tmp_path: Path) -> None:
@@ -80,6 +82,23 @@ def test_profile_step_kind_defaults_to_review(tmp_path: Path) -> None:
     profiles = load_orchestrator_profiles(config)
 
     assert profiles["stable"]["brief"].steps[0].kind == "review"
+
+
+def test_profile_step_rejects_conflicting_findings_policies(tmp_path: Path) -> None:
+    config = deepcopy(load_config(tmp_path / "state"))
+    config["orchestrator"]["profiles"]["stable"]["brief"]["steps"] = [
+        {
+            "name": "precision",
+            "count": 1,
+            "model": "gpt-5.5",
+            "reasoning_effort": "medium",
+            "rerun_on_findings": True,
+            "max_review_rounds": 2,
+        }
+    ]
+
+    with pytest.raises(ValueError, match="cannot combine rerun_on_findings with max_review_rounds"):
+        load_orchestrator_profiles(config)
 
 
 def test_stable_model_defaults_drive_profile_steps(tmp_path: Path) -> None:
