@@ -60,7 +60,8 @@ When enabled, arena loops spend discovery budget first. Each discovery phase sti
 |
 |--- Github Phase ----
      |--- GitHub - Until: Green/Waived
-          |- findings -> fix -> follow-up -> rerun Deep Signoff
+          |- findings -> fix -> rerun local signoff
+          |- deep findings -> fix -> follow-up -> rerun Deep Signoff
 ```
 
 To explicitly replace an existing local review ladder with a stricter one, use the selected review id:
@@ -101,7 +102,7 @@ To explicitly replace an existing local review ladder with a stricter one, use t
 - Long runs emit `OK <minutes>m: ...` about every 60s.
 - Reviewer text prints once in the final `Output:` block.
 - If the calling Codex session was restarted after reviewers completed, recover the stored reviewer text with `review.py --id <id> --show-findings`; this does not launch or collect another review round.
-- If GitHub review finds issues, record them on the owning review id with `--github-result findings`; after the fix follow-up is clean, that id reruns the final local signoff step before requesting GitHub again.
+- If GitHub review finds issues, record them on the owning review id with `--github-result findings`; after the fix, non-deep reviews rerun the final local signoff step directly, while deep reviews run a follow-up before rerunning Deep Signoff.
 - If GitHub cannot run or the parent workflow approves no GitHub review, record the explicit escape hatch with `--github-result waived --github-note "why"`.
 
 ## Runtime Copies

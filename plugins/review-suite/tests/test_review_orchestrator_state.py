@@ -43,7 +43,7 @@ from review_suite_core.orchestrator_state import (
 )
 
 
-def _cycle(tmp_path: Path) -> dict[str, object]:
+def _cycle(tmp_path: Path, *, mode: str = "normal") -> dict[str, object]:
     repo = tmp_path / "repo"
     repo.mkdir(exist_ok=True)
     return create_cycle(
@@ -52,8 +52,8 @@ def _cycle(tmp_path: Path) -> dict[str, object]:
         branch="feature/orchestrator",
         head="head-1",
         merge_base="base-1",
-        requested_mode="normal",
-        effective_mode="normal",
+        requested_mode=mode,
+        effective_mode=mode,
         selection="auto",
         effective_selection="stable",
     )
@@ -353,7 +353,7 @@ def test_clean_gate_profile_step_records_pending_signoff_and_completes(tmp_path:
 
 
 def test_followup_clean_completes_source_profile_step_and_continues(tmp_path: Path) -> None:
-    state = _cycle(tmp_path)
+    state = _cycle(tmp_path, mode="deep")
     state["review_plan"] = {
         "steps": [
             {"name": "broad-discovery", "count": 1, "model": "gpt-5.4", "reasoning_effort": "medium"},
@@ -394,7 +394,7 @@ def test_followup_clean_completes_source_profile_step_and_continues(tmp_path: Pa
 
 
 def test_followup_clean_after_discovery_findings_keeps_discovery_budget(tmp_path: Path) -> None:
-    state = _cycle(tmp_path)
+    state = _cycle(tmp_path, mode="deep")
     state["review_plan"] = {
         "steps": [
             {"name": "broad-discovery-1", "count": 1, "model": "gpt-5.4", "reasoning_effort": "medium"},
@@ -426,7 +426,7 @@ def test_followup_clean_after_discovery_findings_keeps_discovery_budget(tmp_path
 
 
 def test_followup_clean_reruns_sticky_signoff_step(tmp_path: Path) -> None:
-    state = _cycle(tmp_path)
+    state = _cycle(tmp_path, mode="deep")
     state["review_plan"] = {
         "steps": [
             {
@@ -485,8 +485,138 @@ def test_followup_clean_reruns_sticky_signoff_step(tmp_path: Path) -> None:
     ]
 
 
-def test_github_findings_followup_reruns_last_local_signoff_step(tmp_path: Path) -> None:
+def test_non_deep_terminal_findings_rerun_profile_without_followup(tmp_path: Path) -> None:
     state = _cycle(tmp_path)
+    state["review_plan"] = {
+        "steps": [
+            {
+                "name": "urgent-signoff",
+                "count": 1,
+                "model": "gpt-5.5",
+                "reasoning_effort": "medium",
+            },
+        ]
+    }
+    pending = mark_review_step_pending(
+        state,
+        round_id="signoff-1",
+        lane="review_t1",
+        step_index=0,
+        step_name="urgent-signoff",
+        reviewed_head="head-1",
+    )
+    findings = record_findings_decision(pending, round_id="signoff-1", lane="review_t1", reviewed_head="head-1")
+
+    fixed = mark_fix_detected(findings, head="head-2")
+
+    assert fixed["stage"] == STAGE_CREATED
+    assert fixed["active_findings"] is None
+    assert fixed["validation"]["review_green"] == "unknown"
+    assert fixed["pending_action"] == {
+        "kind": "run-review-step",
+        "step_index": 0,
+        "step": "urgent-signoff",
+        "fix_verification": {
+            "source_round_id": "signoff-1",
+            "source_lane": "review_t1",
+            "findings_reviewed_head": "head-1",
+            "fix_head": "head-2",
+        },
+    }
+    assert fixed["review_progress"]["next_step_index"] == 0
+    assert fixed["review_progress"]["completed_steps"] == []
+    assert fixed["review_heads"]["last_fix_head"] == "head-2"
+
+
+def test_non_deep_intermediate_findings_rerun_source_without_followup(tmp_path: Path) -> None:
+    state = _cycle(tmp_path)
+    state["review_plan"] = {
+        "steps": [
+            {"name": "broad-discovery", "count": 1, "model": "gpt-5.4", "reasoning_effort": "medium"},
+            {"name": "precision-signoff", "count": 1, "model": "gpt-5.5", "reasoning_effort": "medium"},
+        ]
+    }
+    pending = mark_review_step_pending(
+        state,
+        round_id="round-1",
+        lane="review_t1",
+        step_index=0,
+        step_name="broad-discovery",
+        reviewed_head="head-1",
+    )
+    findings = record_findings_decision(pending, round_id="round-1", lane="review_t1", reviewed_head="head-1")
+
+    fixed = mark_fix_detected(findings, head="head-2")
+
+    assert fixed["stage"] == STAGE_CREATED
+    assert fixed["active_findings"] is None
+    assert fixed["validation"]["review_green"] == "unknown"
+    assert fixed["pending_action"] == {
+        "kind": "run-review-step",
+        "step_index": 0,
+        "step": "broad-discovery",
+        "fix_verification": {
+            "source_round_id": "round-1",
+            "source_lane": "review_t1",
+            "findings_reviewed_head": "head-1",
+            "fix_head": "head-2",
+        },
+    }
+    assert fixed["review_progress"]["next_step_index"] == 0
+    assert fixed["review_progress"]["completed_steps"] == []
+    assert fixed["review_heads"]["last_fix_head"] == "head-2"
+
+
+def test_non_deep_post_findings_discovery_rerun_preserves_remaining_discovery(tmp_path: Path) -> None:
+    state = _cycle(tmp_path)
+    state["review_plan"] = {
+        "steps": [
+            {"name": "broad-discovery-1", "count": 1, "model": "gpt-5.4", "reasoning_effort": "medium"},
+            {"name": "broad-discovery-2", "count": 1, "model": "gpt-5.4", "reasoning_effort": "medium"},
+            {"name": "precision-signoff", "count": 1, "model": "gpt-5.5", "reasoning_effort": "medium"},
+        ]
+    }
+    pending = mark_review_step_pending(
+        state,
+        round_id="round-1",
+        lane="review_t1",
+        step_index=0,
+        step_name="broad-discovery-1",
+        reviewed_head="head-1",
+    )
+    findings = record_findings_decision(pending, round_id="round-1", lane="review_t1", reviewed_head="head-1")
+    fixed = mark_fix_detected(findings, head="head-2")
+    rerun_pending = mark_review_step_pending(
+        fixed,
+        round_id="round-2",
+        lane="review_t1",
+        step_index=0,
+        step_name="broad-discovery-1",
+        reviewed_head="head-2",
+        post_findings_rerun=True,
+    )
+
+    clean = record_clean_decision(rerun_pending, round_id="round-2", lane="review_t1", reviewed_head="head-2")
+
+    assert clean["stage"] == STAGE_CREATED
+    assert clean["pending_action"] == {
+        "kind": "run-review-step",
+        "step_index": 1,
+        "step": "broad-discovery-2",
+    }
+    assert clean["review_progress"]["completed_steps"] == [
+        {
+            "index": 0,
+            "name": "broad-discovery-1",
+            "round_id": "round-2",
+            "lane": "review_t1",
+            "reviewed_head": "head-2",
+        }
+    ]
+
+
+def test_github_findings_followup_reruns_last_local_signoff_step(tmp_path: Path) -> None:
+    state = _cycle(tmp_path, mode="deep")
     state["review_plan"] = {
         "steps": [
             {
@@ -573,7 +703,7 @@ def test_github_result_defaults_to_latest_local_reviewed_head(tmp_path: Path) ->
 
 
 def test_github_findings_force_signoff_rerun_for_non_sticky_profile(tmp_path: Path) -> None:
-    state = _cycle(tmp_path)
+    state = _cycle(tmp_path, mode="deep")
     state["review_plan"] = {
         "steps": [
             {
@@ -610,7 +740,7 @@ def test_github_findings_force_signoff_rerun_for_non_sticky_profile(tmp_path: Pa
 
 
 def test_github_findings_anchor_to_latest_completed_step_not_older_sticky_step(tmp_path: Path) -> None:
-    state = _cycle(tmp_path)
+    state = _cycle(tmp_path, mode="deep")
     state["review_plan"] = {
         "steps": [
             {
@@ -672,7 +802,7 @@ def test_github_findings_anchor_to_latest_completed_step_not_older_sticky_step(t
 
 
 def test_gate_findings_require_fix_followup_clean_and_same_gate_rerun(tmp_path: Path) -> None:
-    state = _cycle(tmp_path)
+    state = _cycle(tmp_path, mode="deep")
     pending = mark_decision_pending(state, round_id="gate-1", lane="review_t2", reviewed_head="head-1")
     findings = record_findings_decision(pending, round_id="gate-1", lane="review_t2", reviewed_head="head-1")
 
@@ -730,8 +860,56 @@ def test_gate_findings_require_fix_followup_clean_and_same_gate_rerun(tmp_path: 
     assert handoff["validation"]["ci"] == "classified"
 
 
-def test_gate_profile_findings_require_same_gate_rerun_before_completion(tmp_path: Path) -> None:
+def test_non_deep_gate_findings_rerun_same_gate_without_followup(tmp_path: Path) -> None:
     state = _cycle(tmp_path)
+    pending = mark_decision_pending(state, round_id="gate-1", lane="review_t2", reviewed_head="head-1")
+    findings = record_findings_decision(pending, round_id="gate-1", lane="review_t2", reviewed_head="head-1")
+
+    fixed = mark_fix_detected(findings, head="head-2")
+
+    assert fixed["stage"] == STAGE_GATE_RERUN_NEEDED
+    assert fixed["pending_action"] == {
+        "kind": "rerun-gate",
+        "lane": "review_t2",
+        "gate": "review_t2",
+        "source_round_id": "gate-1",
+        "head": "head-2",
+        "fix_verification": {
+            "source_round_id": "gate-1",
+            "source_lane": "review_t2",
+            "findings_reviewed_head": "head-1",
+            "fix_head": "head-2",
+        },
+    }
+    assert fixed["active_findings"]["status"] == STAGE_GATE_RERUN_NEEDED
+    assert fixed["review_heads"]["last_fix_head"] == "head-2"
+
+    rerun_pending = mark_gate_step_pending(
+        fixed,
+        round_id="gate-2",
+        lane="review_t2",
+        gate="review_t2",
+        step_index=0,
+        step_name="review_t2",
+        reviewed_head="head-2",
+    )
+    rerun_clean = record_clean_decision(rerun_pending, round_id="gate-2", lane="review_t2", reviewed_head="head-2")
+
+    assert rerun_clean["stage"] == STAGE_REVIEW_GREEN
+    assert rerun_clean["active_findings"] is None
+    assert rerun_clean["resolved_gate_findings"] == [
+        {
+            "source_round_id": "gate-1",
+            "rerun_round_id": "gate-2",
+            "lane": "review_t2",
+            "gate": "review_t2",
+            "resolved_head": "head-2",
+        }
+    ]
+
+
+def test_gate_profile_findings_require_same_gate_rerun_before_completion(tmp_path: Path) -> None:
+    state = _cycle(tmp_path, mode="deep")
     state["review_plan"] = {"steps": [{"name": "local-signoff", "kind": "gate", "gate": "phase_gate"}]}
     pending = mark_gate_step_pending(
         state,
@@ -779,7 +957,7 @@ def test_gate_profile_findings_require_same_gate_rerun_before_completion(tmp_pat
 
 
 def test_followup_findings_preserve_original_gate_rerun_requirement(tmp_path: Path) -> None:
-    state = _cycle(tmp_path)
+    state = _cycle(tmp_path, mode="deep")
     findings = record_findings_decision(state, round_id="gate-1", lane="review_t4", reviewed_head="head-1")
     fixed = mark_fix_detected(findings, head="head-2")
     followup_findings = record_followup_findings(fixed, round_id="followup-1", reviewed_head="head-2")

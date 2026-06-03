@@ -55,6 +55,7 @@ from review_suite_local import (
     load_operational_state,
     load_roster,
     _manual_review_request,
+    _combined_review_instructions,
     normalize_record_review_cwd_value,
     load_round,
     load_rubric,
@@ -899,11 +900,16 @@ def _orchestrator_review_slots(count: int) -> list[str]:
     ]
 
 
-def _orchestrator_phase_review_request(*, review_cwd: Path, base: str):
-    return _orchestrator_review_request(review_cwd=review_cwd, base=base, task_class="phase_review")
+def _orchestrator_phase_review_request(*, review_cwd: Path, base: str, custom_instructions: str | None = None):
+    return _orchestrator_review_request(
+        review_cwd=review_cwd,
+        base=base,
+        task_class="phase_review",
+        custom_instructions=custom_instructions,
+    )
 
 
-def _orchestrator_review_request(*, review_cwd: Path, base: str, task_class: str):
+def _orchestrator_review_request(*, review_cwd: Path, base: str, task_class: str, custom_instructions: str | None = None):
     instruction_builders = {
         "phase_review": build_phase_instructions,
         "pr_review": build_pr_instructions,
@@ -915,7 +921,10 @@ def _orchestrator_review_request(*, review_cwd: Path, base: str, task_class: str
     request = _manual_review_request(
         review_scope=review_scope,
         target_label=target_label,
-        instructions=instruction_builder(target_label),
+        instructions=_combined_review_instructions(
+            standard_instructions=instruction_builder(target_label),
+            custom_instructions=custom_instructions,
+        ),
         diff_text=diff_text,
     )
     if not request.prompt.strip():
@@ -943,13 +952,18 @@ def run_orchestrator_review_step(
     step_position: int | None = None,
     step_total: int | None = None,
     on_round_started: Callable[[dict[str, object]], None] | None = None,
+    custom_instructions: str | None = None,
 ) -> dict[str, object]:
     if reviewer_count <= 0:
         raise ValueError("reviewer_count must be > 0")
     base = str(review_scope.get("base") or "").strip()
     if not base:
         raise ValueError("review_scope.base is required")
-    request = _orchestrator_phase_review_request(review_cwd=review_cwd, base=base)
+    request = _orchestrator_phase_review_request(
+        review_cwd=review_cwd,
+        base=base,
+        custom_instructions=custom_instructions,
+    )
     return _run_orchestrator_manual_review_step(
         lane=lane,
         step_name=step_name,
@@ -989,11 +1003,17 @@ def run_orchestrated_arena_round(
     step_position: int | None = None,
     step_total: int | None = None,
     on_round_started: Callable[[dict[str, object]], None] | None = None,
+    custom_instructions: str | None = None,
 ) -> dict[str, object]:
     base = str(review_scope.get("base") or "").strip()
     if not base:
         raise ValueError("review_scope.base is required")
-    request = _orchestrator_review_request(review_cwd=review_cwd, base=base, task_class=task_class)
+    request = _orchestrator_review_request(
+        review_cwd=review_cwd,
+        base=base,
+        task_class=task_class,
+        custom_instructions=custom_instructions,
+    )
     ensure_clean_git_worktree(review_cwd, allow_dirty=allow_dirty, review_scope=request.review_scope)
     _validate_benchmarked_review_runtime(
         review_cwd=review_cwd,
