@@ -130,6 +130,7 @@ def create_cycle(
     selection: str = "auto",
     effective_selection: str | None = None,
     deslop_enabled: bool | None = None,
+    cycle_token: str | None = None,
     restart_token: str | None = None,
 ) -> dict[str, Any]:
     identity = normalize_cycle_identity(cwd=cwd, base=base, branch=branch, head=head, merge_base=merge_base)
@@ -138,10 +139,14 @@ def create_cycle(
     requested_selection = _normalize_selection(selection, field="selection")
     resolved_selection = _normalize_selection(effective_selection or requested_selection, field="effective_selection")
     deslop_tracked = bool(deslop_enabled) if deslop_enabled is not None else effective != "emergency"
-    token = _optional_text(restart_token)
+    fresh_token = _optional_text(cycle_token)
+    restart = _optional_text(restart_token)
+    if fresh_token is not None and restart is not None:
+        raise ValueError("cycle_token cannot be combined with restart_token")
+    key_token = restart or fresh_token
     state = {
         "schema_version": ORCHESTRATOR_STATE_SCHEMA_VERSION,
-        "cycle_key": cycle_key(cwd=cwd, base=base, branch=branch, head=head, merge_base=merge_base, restart_token=token),
+        "cycle_key": cycle_key(cwd=cwd, base=base, branch=branch, head=head, merge_base=merge_base, restart_token=key_token),
         "identity": identity,
         "mode": {
             "requested": requested,
@@ -188,8 +193,10 @@ def create_cycle(
         "active_findings": None,
         "resolved_gate_findings": [],
     }
-    if token is not None:
-        state["restart"] = {"token": token}
+    if restart is not None:
+        state["restart"] = {"token": restart}
+    if fresh_token is not None:
+        state["fresh"] = {"token": fresh_token}
     return state
 
 
@@ -344,6 +351,19 @@ def _review_step_rerun_on_findings(state: dict[str, Any], step_index: int) -> bo
     return bool(steps[step_index].get("rerun_on_findings"))
 
 
+def _review_step_max_review_rounds(state: dict[str, Any], step_index: int) -> int | None:
+    steps = _review_plan_steps(state)
+    if step_index < 0 or step_index >= len(steps):
+        return None
+    value = steps[step_index].get("max_review_rounds")
+    if value is None:
+        return None
+    rounds = _nonnegative_int(value, field="review_plan.steps[].max_review_rounds")
+    if rounds == 0:
+        raise ValueError("review_plan.steps[].max_review_rounds must be > 0")
+    return rounds
+
+
 def _effective_mode(state: dict[str, Any]) -> str:
     mode = dict(state.get("mode") or {})
     return str(mode.get("effective") or mode.get("requested") or "").strip()
@@ -467,6 +487,9 @@ def mark_review_step_pending(
     }
     if _review_step_rerun_on_findings(next_state, index):
         profile_step["rerun_on_findings"] = True
+    max_review_rounds = _review_step_max_review_rounds(next_state, index)
+    if max_review_rounds is not None:
+        profile_step["max_review_rounds"] = max_review_rounds
     if grading_required:
         profile_step["grading_required"] = True
     if arena_round:
@@ -481,6 +504,7 @@ def mark_review_step_pending(
                     "index",
                     "name",
                     "rerun_on_findings",
+                    "max_review_rounds",
                     "grading_required",
                     "arena_round",
                     "post_findings_rerun",
@@ -569,6 +593,9 @@ def _profile_step_for_round(state: dict[str, Any], round_id: str) -> dict[str, A
             payload["grading_required"] = True
         if pending.get("post_findings_rerun"):
             payload["post_findings_rerun"] = True
+        max_review_rounds = _review_step_max_review_rounds(state, int(payload["index"]))
+        if max_review_rounds is not None:
+            payload["max_review_rounds"] = max_review_rounds
         return payload
     for item in list(state.get("rounds") or []):
         if not isinstance(item, dict) or item.get("round_id") != round_id:
@@ -583,6 +610,8 @@ def _profile_step_for_round(state: dict[str, Any], round_id: str) -> dict[str, A
             }
             if bool(profile_step.get("rerun_on_findings")):
                 payload["rerun_on_findings"] = True
+            if profile_step.get("max_review_rounds") is not None:
+                payload["max_review_rounds"] = profile_step.get("max_review_rounds")
             if bool(profile_step.get("arena_round")):
                 payload["arena_round"] = True
             if bool(profile_step.get("grading_required")):
@@ -703,6 +732,63 @@ def _profile_step_has_fixed_findings_budget(state: dict[str, Any], profile_step:
     return _profile_step_is_discovery(profile_step) or bool(profile_step.get("arena_round"))
 
 
+def _profile_step_max_review_rounds(state: dict[str, Any], profile_step: dict[str, Any]) -> int | None:
+    if bool(profile_step.get("rerun_on_findings")):
+        return None
+    try:
+        index = _nonnegative_int(profile_step.get("index"), field="profile_step.index")
+    except ValueError:
+        return None
+    if _review_step_rerun_on_findings(state, index):
+        return None
+    value = profile_step.get("max_review_rounds")
+    if value is None:
+        return _review_step_max_review_rounds(state, index)
+    rounds = _nonnegative_int(value, field="profile_step.max_review_rounds")
+    if rounds == 0:
+        raise ValueError("profile_step.max_review_rounds must be > 0")
+    return rounds
+
+
+def _profile_step_review_round_count(state: dict[str, Any], profile_step: dict[str, Any]) -> int:
+    index = _nonnegative_int(profile_step.get("index"), field="profile_step.index")
+    count = 0
+    for item in list(state.get("rounds") or []):
+        if not isinstance(item, dict):
+            continue
+        item_step = item.get("profile_step")
+        if not isinstance(item_step, dict):
+            continue
+        try:
+            item_index = _nonnegative_int(item_step.get("index"), field="round.profile_step.index")
+        except ValueError:
+            continue
+        if item_index == index:
+            count += 1
+    return count
+
+
+def _mark_profile_review_budget_exhausted_inplace(
+    state: dict[str, Any],
+    active: dict[str, Any],
+    profile_step: dict[str, Any],
+    *,
+    max_review_rounds: int,
+) -> None:
+    active["status"] = "review-round-budget-exhausted"
+    action = {
+        "kind": "review-round-budget-exhausted",
+        "round_id": active.get("round_id"),
+        "lane": active.get("lane"),
+        "step_index": profile_step.get("index"),
+        "step": profile_step.get("name"),
+        "max_review_rounds": max_review_rounds,
+        "fix_verification": _findings_fix_context(active),
+    }
+    _set_review_green(state, "failed")
+    _set_stage(state, STAGE_FIX_PENDING, action)
+
+
 def _findings_fix_context(active: dict[str, Any]) -> dict[str, Any]:
     return _compact(
         {
@@ -720,6 +806,18 @@ def _mark_profile_fix_review_needed_inplace(state: dict[str, Any], active: dict[
     profile_step = _profile_step_for_round(state, profile_round_id) if profile_round_id else None
     if not profile_step:
         return False
+    max_review_rounds = _profile_step_max_review_rounds(state, profile_step)
+    if (
+        max_review_rounds is not None
+        and _profile_step_review_round_count(state, profile_step) >= max_review_rounds
+    ):
+        _mark_profile_review_budget_exhausted_inplace(
+            state,
+            active,
+            profile_step,
+            max_review_rounds=max_review_rounds,
+        )
+        return True
     state["active_findings"] = None
     if _profile_step_has_fixed_findings_budget(state, profile_step):
         _complete_profile_step_from_metadata(
@@ -899,6 +997,9 @@ def mark_review_step_running(
     }
     if _review_step_rerun_on_findings(next_state, index):
         profile_step["rerun_on_findings"] = True
+    max_review_rounds = _review_step_max_review_rounds(next_state, index)
+    if max_review_rounds is not None:
+        profile_step["max_review_rounds"] = max_review_rounds
     if grading_required:
         profile_step["grading_required"] = True
     if arena_round:
@@ -913,6 +1014,7 @@ def mark_review_step_running(
                     "index",
                     "name",
                     "rerun_on_findings",
+                    "max_review_rounds",
                     "grading_required",
                     "arena_round",
                     "post_findings_rerun",

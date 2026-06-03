@@ -36,6 +36,7 @@ class OrchestratorProfileStep:
     lane: str | None = None
     task_class: str | None = None
     rerun_on_findings: bool = False
+    max_review_rounds: int | None = None
 
 
 @dataclass(frozen=True)
@@ -90,6 +91,12 @@ def _non_negative_int(value: Any, *, field: str) -> int:
     if number < 0:
         raise ValueError(f"{field} must be >= 0")
     return number
+
+
+def _optional_positive_int(value: Any, *, field: str) -> int | None:
+    if value is None:
+        return None
+    return _positive_int(value, field=field)
 
 
 def _optional_bool(value: Any, *, field: str) -> bool:
@@ -283,6 +290,10 @@ def _normalize_step(
             task_class=task_class,
         )
     model, effort, default_service_tier = _model_from_step(raw_step, stable_defaults=stable_defaults, field=field)
+    rerun_on_findings = _optional_bool(raw_step.get("rerun_on_findings"), field=f"{field}.rerun_on_findings")
+    max_review_rounds = _optional_positive_int(raw_step.get("max_review_rounds"), field=f"{field}.max_review_rounds")
+    if rerun_on_findings and max_review_rounds is not None:
+        raise ValueError(f"{field} cannot combine rerun_on_findings with max_review_rounds")
     return OrchestratorProfileStep(
         kind=kind,
         name=name,
@@ -290,7 +301,8 @@ def _normalize_step(
         model=model,
         reasoning_effort=effort,
         service_tier=_service_tier(raw_step, default=default_service_tier, field=field),
-        rerun_on_findings=_optional_bool(raw_step.get("rerun_on_findings"), field=f"{field}.rerun_on_findings"),
+        rerun_on_findings=rerun_on_findings,
+        max_review_rounds=max_review_rounds,
     )
 
 

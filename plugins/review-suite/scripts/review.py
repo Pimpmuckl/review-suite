@@ -96,6 +96,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ci", choices=CLI_VALIDATION_STATUSES)
     parser.add_argument("--deslop-done", action="store_true")
     parser.add_argument("--show-findings", action="store_true", help="Print stored reviewer output for --id without running review.")
+    parser.add_argument("--fresh-token", help=argparse.SUPPRESS)
     parser.add_argument("--state-dir", default=str(default_state_dir()), help=argparse.SUPPRESS)
     return parser
 
@@ -106,6 +107,30 @@ def _help_command() -> str:
 
 def _review_command(public_id: str, *extra: str) -> str:
     return format_command([sys.executable, str(Path(__file__).resolve()), "--id", public_id, *extra])
+
+
+def _new_review_command(state: dict[str, Any], *, state_dir: Path, fresh_token: str | None = None) -> str:
+    identity = dict(state.get("identity") or {})
+    mode = str(dict(state.get("mode") or {}).get("requested") or dict(state.get("mode") or {}).get("effective") or "").strip()
+    cwd = str(identity.get("cwd") or "").strip()
+    base = str(identity.get("base") or "").strip()
+    if not mode or not cwd or not base:
+        raise ValueError("review cycle is missing mode, cwd, or base for a fresh review command")
+    command = [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        "--mode",
+        mode,
+        "--cd",
+        str(cwd_path_from_normalized(cwd)),
+        "--base",
+        base,
+        "--state-dir",
+        str(state_dir),
+    ]
+    if fresh_token:
+        command.extend(["--fresh-token", fresh_token])
+    return format_command(command)
 
 
 def _github_review_action_command(public_id: str) -> str:
@@ -705,6 +730,8 @@ def _apply_profile_resolution(state: dict[str, Any], resolution: Any) -> dict[st
         )
         if step.rerun_on_findings:
             payload["rerun_on_findings"] = True
+        if step.max_review_rounds is not None:
+            payload["max_review_rounds"] = step.max_review_rounds
         return payload
 
     state["review_plan"] = {
@@ -734,6 +761,7 @@ def _create_or_resume_cycle(*, args: argparse.Namespace, state_dir: Path) -> dic
         selection=resolution.requested_selection,
         effective_selection=resolution.effective_selection,
         deslop_enabled=resolution.profile.deslop_enabled,
+        cycle_token=str(args.fresh_token or "").strip() or None,
     )
     existing = load_cycle_by_key(state_dir, str(state["cycle_key"]))
     if existing is not None:
@@ -888,6 +916,18 @@ def _record_validation_status(state: dict[str, Any], args: argparse.Namespace) -
         full_suite=args.full_suite,
         ci=args.ci,
     )
+
+
+def _fresh_review_token(state: dict[str, Any]) -> str:
+    pending = dict(state.get("pending_action") or {})
+    active = dict(state.get("active_findings") or {})
+    parts = [
+        "budget-exhausted",
+        str(state.get("cycle_key") or "").strip(),
+        str(pending.get("round_id") or active.get("round_id") or "").strip(),
+        str(active.get("fix_head") or "").strip(),
+    ]
+    return ":".join(part for part in parts if part)
 
 
 def _record_github_result(state: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
@@ -1058,6 +1098,20 @@ def _action_payload(state: dict[str, Any], *, state_dir: Path) -> dict[str, Any]
         }
         return _with_deslop_done_action(state, action, public_id)
     if stage == STAGE_FIX_PENDING:
+        pending = dict(state.get("pending_action") or {})
+        if pending.get("kind") == "review-round-budget-exhausted":
+            max_rounds = pending.get("max_review_rounds")
+            step = str(pending.get("step") or "review").strip() or "review"
+            fresh_token = _fresh_review_token(state)
+            action = {
+                "cmd": _new_review_command(state, state_dir=state_dir, fresh_token=fresh_token),
+                "note": (
+                    f"{step} reached its {max_rounds} round review budget; "
+                    "no more local reviewers will be launched. "
+                    "Action.cmd starts a new review if the latest fix needs another local review pass."
+                ),
+            }
+            return _with_deslop_done_action(state, action, public_id)
         action = {
             "cmd": _review_command(public_id),
             "note": "Fix valid findings, then rerun this command.",
@@ -1133,6 +1187,8 @@ def main() -> int:
         has_validation_status = _has_validation_status(args)
         if args.restart_mode and not args.id:
             raise ValueError("--restart-mode requires --id")
+        if args.fresh_token and args.id:
+            raise ValueError("--fresh-token cannot be combined with --id")
         if args.reason and not args.restart_mode:
             raise ValueError("--reason requires --restart-mode")
         if args.deslop_done and not args.id:

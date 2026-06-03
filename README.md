@@ -47,9 +47,11 @@ When enabled, arena loops spend discovery budget first. Each discovery phase sti
 ```text
 |---- Emergency Phase ----
 |
-|--- Urgent Signoff - Single fast batch
+|--- Urgent Signoff - Single fast batch, max two rounds after findings
      |- GPT 5.5 Medium x2
 ```
+
+Emergency turns green immediately on a clean urgent signoff. If findings are fixed, it allows one verification rerun; findings after that exhaust the local review budget instead of launching more reviewers.
 
 ```text
 |--- Brief / Normal Phase ----

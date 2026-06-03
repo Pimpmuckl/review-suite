@@ -485,7 +485,7 @@ def test_followup_clean_reruns_sticky_signoff_step(tmp_path: Path) -> None:
     ]
 
 
-def test_non_deep_terminal_findings_rerun_profile_without_followup(tmp_path: Path) -> None:
+def test_emergency_terminal_findings_get_one_verification_round(tmp_path: Path) -> None:
     state = _cycle(tmp_path)
     state["review_plan"] = {
         "steps": [
@@ -494,6 +494,7 @@ def test_non_deep_terminal_findings_rerun_profile_without_followup(tmp_path: Pat
                 "count": 1,
                 "model": "gpt-5.5",
                 "reasoning_effort": "medium",
+                "max_review_rounds": 2,
             },
         ]
     }
@@ -526,6 +527,74 @@ def test_non_deep_terminal_findings_rerun_profile_without_followup(tmp_path: Pat
     assert fixed["review_progress"]["next_step_index"] == 0
     assert fixed["review_progress"]["completed_steps"] == []
     assert fixed["review_heads"]["last_fix_head"] == "head-2"
+
+
+def test_emergency_terminal_findings_stop_after_round_budget(tmp_path: Path) -> None:
+    state = _cycle(tmp_path, mode="emergency")
+    state["review_plan"] = {
+        "steps": [
+            {
+                "name": "urgent-signoff",
+                "count": 1,
+                "model": "gpt-5.5",
+                "reasoning_effort": "medium",
+                "max_review_rounds": 2,
+            },
+        ]
+    }
+    first_pending = mark_review_step_pending(
+        state,
+        round_id="signoff-1",
+        lane="review_t1",
+        step_index=0,
+        step_name="urgent-signoff",
+        reviewed_head="head-1",
+    )
+    first_findings = record_findings_decision(
+        first_pending,
+        round_id="signoff-1",
+        lane="review_t1",
+        reviewed_head="head-1",
+    )
+    first_fixed = mark_fix_detected(first_findings, head="head-2")
+    second_pending = mark_review_step_pending(
+        first_fixed,
+        round_id="signoff-2",
+        lane="review_t1",
+        step_index=0,
+        step_name="urgent-signoff",
+        reviewed_head="head-2",
+        post_findings_rerun=True,
+        fix_verification=first_fixed["pending_action"]["fix_verification"],
+    )
+    second_findings = record_findings_decision(
+        second_pending,
+        round_id="signoff-2",
+        lane="review_t1",
+        reviewed_head="head-2",
+    )
+
+    exhausted = mark_fix_detected(second_findings, head="head-3")
+
+    assert exhausted["stage"] == STAGE_FIX_PENDING
+    assert exhausted["validation"]["review_green"] == "failed"
+    assert exhausted["pending_action"] == {
+        "kind": "review-round-budget-exhausted",
+        "round_id": "signoff-2",
+        "lane": "review_t1",
+        "step_index": 0,
+        "step": "urgent-signoff",
+        "max_review_rounds": 2,
+        "fix_verification": {
+            "source_round_id": "signoff-2",
+            "source_lane": "review_t1",
+            "findings_reviewed_head": "head-2",
+            "fix_head": "head-3",
+        },
+    }
+    assert exhausted["active_findings"]["status"] == "review-round-budget-exhausted"
+    assert exhausted["active_findings"]["fix_head"] == "head-3"
+    assert [item["round_id"] for item in exhausted["rounds"]] == ["signoff-1", "signoff-2"]
 
 
 def test_non_deep_discovery_findings_advance_without_extra_discovery(tmp_path: Path) -> None:

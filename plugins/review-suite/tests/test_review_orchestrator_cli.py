@@ -2134,6 +2134,66 @@ def test_emergency_mode_skips_deslop_and_runs_review(monkeypatch: pytest.MonkeyP
     assert _gate_signoff_decisions(state_dir) == []
 
 
+def test_emergency_mode_stops_after_two_local_review_rounds(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    review_calls = _stub_review(monkeypatch, "urgent-1", "urgent-2", "urgent-3")
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+
+    _, opened = _run_review(
+        monkeypatch,
+        ["--mode", "emergency", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)],
+    )
+    public_id = str(opened["review"])
+    _run_review(monkeypatch, ["--id", public_id, "--decision", "findings", "--state-dir", str(state_dir)])
+    _commit_file(repo, "app.txt", "base\nfix one\n", "fix first emergency finding")
+    _, second_round = _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+    assert "--decision findings" in str(second_round["Action"]["alt"])
+    assert len(review_calls) == 2
+
+    _run_review(monkeypatch, ["--id", public_id, "--decision", "findings", "--state-dir", str(state_dir)])
+    _commit_file(repo, "app.txt", "base\nfix one\nfix two\n", "fix second emergency finding")
+    _, exhausted = _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+
+    assert len(review_calls) == 2
+    assert "reached its 2 round review budget" in str(exhausted["Action"]["note"])
+    state = _cycle_payload(state_dir, public_id)
+    assert state["stage"] == "fix-pending"
+    assert state["validation"]["review_green"] == "failed"
+    assert state["pending_action"]["kind"] == "review-round-budget-exhausted"
+    assert [item["round_id"] for item in state["rounds"]] == ["urgent-1", "urgent-2"]
+    fresh_token = review._fresh_review_token(state)
+    assert "--mode emergency" in str(exhausted["Action"]["cmd"])
+    assert "--fresh-token" in str(exhausted["Action"]["cmd"])
+    assert fresh_token in str(exhausted["Action"]["cmd"])
+
+    _, fresh = _run_review(
+        monkeypatch,
+        [
+            "--mode",
+            "emergency",
+            "--cd",
+            str(repo),
+            "--base",
+            "main",
+            "--state-dir",
+            str(state_dir),
+            "--fresh-token",
+            fresh_token,
+        ],
+    )
+    assert str(fresh["review"]) != public_id
+    assert len(review_calls) == 3
+    fresh_state = _cycle_payload(state_dir, str(fresh["review"]))
+    assert fresh_state["fresh"]["token"] == fresh_token
+    assert "restart" not in fresh_state
+    assert [item["round_id"] for item in fresh_state["rounds"]] == ["urgent-3"]
+
+
 def test_deslop_failure_retries_before_review(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     deslop_calls = _stub_deslop(monkeypatch, 9, 0)
     review_calls = _stub_review(monkeypatch)
