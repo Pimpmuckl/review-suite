@@ -528,7 +528,7 @@ def test_non_deep_terminal_findings_rerun_profile_without_followup(tmp_path: Pat
     assert fixed["review_heads"]["last_fix_head"] == "head-2"
 
 
-def test_non_deep_intermediate_findings_rerun_source_without_followup(tmp_path: Path) -> None:
+def test_non_deep_discovery_findings_advance_without_extra_discovery(tmp_path: Path) -> None:
     state = _cycle(tmp_path)
     state["review_plan"] = {
         "steps": [
@@ -553,8 +553,8 @@ def test_non_deep_intermediate_findings_rerun_source_without_followup(tmp_path: 
     assert fixed["validation"]["review_green"] == "unknown"
     assert fixed["pending_action"] == {
         "kind": "run-review-step",
-        "step_index": 0,
-        "step": "broad-discovery",
+        "step_index": 1,
+        "step": "precision-signoff",
         "fix_verification": {
             "source_round_id": "round-1",
             "source_lane": "review_t1",
@@ -562,12 +562,20 @@ def test_non_deep_intermediate_findings_rerun_source_without_followup(tmp_path: 
             "fix_head": "head-2",
         },
     }
-    assert fixed["review_progress"]["next_step_index"] == 0
-    assert fixed["review_progress"]["completed_steps"] == []
+    assert fixed["review_progress"]["next_step_index"] == 1
+    assert fixed["review_progress"]["completed_steps"] == [
+        {
+            "index": 0,
+            "name": "broad-discovery",
+            "round_id": "round-1",
+            "lane": "review_t1",
+            "reviewed_head": "head-1",
+        }
+    ]
     assert fixed["review_heads"]["last_fix_head"] == "head-2"
 
 
-def test_non_deep_post_findings_discovery_rerun_preserves_remaining_discovery(tmp_path: Path) -> None:
+def test_non_deep_discovery_findings_consume_one_discovery_budget(tmp_path: Path) -> None:
     state = _cycle(tmp_path)
     state["review_plan"] = {
         "steps": [
@@ -585,8 +593,158 @@ def test_non_deep_post_findings_discovery_rerun_preserves_remaining_discovery(tm
         reviewed_head="head-1",
     )
     findings = record_findings_decision(pending, round_id="round-1", lane="review_t1", reviewed_head="head-1")
+
     fixed = mark_fix_detected(findings, head="head-2")
-    rerun_pending = mark_review_step_pending(
+
+    assert fixed["stage"] == STAGE_CREATED
+    assert fixed["pending_action"] == {
+        "kind": "run-review-step",
+        "step_index": 1,
+        "step": "broad-discovery-2",
+        "fix_verification": {
+            "source_round_id": "round-1",
+            "source_lane": "review_t1",
+            "findings_reviewed_head": "head-1",
+            "fix_head": "head-2",
+        },
+    }
+    assert fixed["review_progress"]["completed_steps"] == [
+        {
+            "index": 0,
+            "name": "broad-discovery-1",
+            "round_id": "round-1",
+            "lane": "review_t1",
+            "reviewed_head": "head-1",
+        }
+    ]
+
+
+def test_non_deep_arena_findings_consume_one_arena_budget(tmp_path: Path) -> None:
+    state = _cycle(tmp_path)
+    state["review_plan"] = {
+        "steps": [
+            {"name": "arena-discovery", "kind": "arena", "lane": "review_t3", "task_class": "phase_review"},
+            {"name": "broad-discovery", "count": 1, "model": "gpt-5.4", "reasoning_effort": "medium"},
+            {"name": "precision-signoff", "count": 1, "model": "gpt-5.5", "reasoning_effort": "medium"},
+        ]
+    }
+    pending = mark_review_step_pending(
+        state,
+        round_id="arena-1",
+        lane="review_t3",
+        step_index=0,
+        step_name="arena-discovery",
+        reviewed_head="head-1",
+        grading_required=True,
+        arena_round=True,
+    )
+    findings = record_findings_decision(pending, round_id="arena-1", lane="review_t3", reviewed_head="head-1")
+
+    fixed = mark_fix_detected(findings, head="head-2")
+
+    assert fixed["stage"] == STAGE_CREATED
+    assert fixed["pending_action"] == {
+        "kind": "run-review-step",
+        "step_index": 1,
+        "step": "broad-discovery",
+        "fix_verification": {
+            "source_round_id": "arena-1",
+            "source_lane": "review_t3",
+            "findings_reviewed_head": "head-1",
+            "fix_head": "head-2",
+        },
+    }
+    assert fixed["review_progress"]["completed_steps"] == [
+        {
+            "index": 0,
+            "name": "arena-discovery",
+            "round_id": "arena-1",
+            "lane": "review_t3",
+            "reviewed_head": "head-1",
+            "arena_round": True,
+        }
+    ]
+
+
+def test_non_deep_signoff_findings_rerun_until_clean(tmp_path: Path) -> None:
+    state = _cycle(tmp_path)
+    state["review_plan"] = {
+        "steps": [
+            {
+                "name": "precision-signoff",
+                "count": 1,
+                "model": "gpt-5.5",
+                "reasoning_effort": "medium",
+                "rerun_on_findings": True,
+            },
+            {"name": "post-check", "count": 1, "model": "gpt-5.5", "reasoning_effort": "medium"},
+        ]
+    }
+    pending = mark_review_step_pending(
+        state,
+        round_id="signoff-1",
+        lane="review_t1",
+        step_index=0,
+        step_name="precision-signoff",
+        reviewed_head="head-1",
+    )
+    findings = record_findings_decision(pending, round_id="signoff-1", lane="review_t1", reviewed_head="head-1")
+
+    fixed = mark_fix_detected(findings, head="head-2")
+
+    assert fixed["stage"] == STAGE_CREATED
+    assert fixed["pending_action"] == {
+        "kind": "run-review-step",
+        "step_index": 0,
+        "step": "precision-signoff",
+        "fix_verification": {
+            "source_round_id": "signoff-1",
+            "source_lane": "review_t1",
+            "findings_reviewed_head": "head-1",
+            "fix_head": "head-2",
+        },
+    }
+    assert fixed["review_progress"]["next_step_index"] == 0
+    assert fixed["review_progress"]["completed_steps"] == []
+
+
+def test_existing_post_findings_discovery_rerun_clean_preserves_remaining_discovery(tmp_path: Path) -> None:
+    state = _cycle(tmp_path)
+    state["review_plan"] = {
+        "steps": [
+            {"name": "broad-discovery-1", "count": 1, "model": "gpt-5.4", "reasoning_effort": "medium"},
+            {"name": "broad-discovery-2", "count": 1, "model": "gpt-5.4", "reasoning_effort": "medium"},
+            {"name": "precision-signoff", "count": 1, "model": "gpt-5.5", "reasoning_effort": "medium"},
+        ]
+    }
+    pending = mark_review_step_pending(
+        state,
+        round_id="round-1",
+        lane="review_t1",
+        step_index=0,
+        step_name="broad-discovery-1",
+        reviewed_head="head-1",
+    )
+    findings = record_findings_decision(pending, round_id="round-1", lane="review_t1", reviewed_head="head-1")
+    fixed = json.loads(json.dumps(findings))
+    fixed["stage"] = STAGE_CREATED
+    fixed["active_findings"] = None
+    fixed["validation"]["review_green"] = "unknown"
+    fixed["review_progress"]["next_step_index"] = 0
+    fixed["review_progress"]["next_step_name"] = "broad-discovery-1"
+    fixed["review_progress"]["current_step"] = None
+    fixed["pending_action"] = {
+        "kind": "run-review-step",
+        "step_index": 0,
+        "step": "broad-discovery-1",
+        "fix_verification": {
+            "source_round_id": "round-1",
+            "source_lane": "review_t1",
+            "findings_reviewed_head": "head-1",
+            "fix_head": "head-2",
+        },
+    }
+    running_rerun = mark_review_step_pending(
         fixed,
         round_id="round-2",
         lane="review_t1",
@@ -596,14 +754,10 @@ def test_non_deep_post_findings_discovery_rerun_preserves_remaining_discovery(tm
         post_findings_rerun=True,
     )
 
-    clean = record_clean_decision(rerun_pending, round_id="round-2", lane="review_t1", reviewed_head="head-2")
+    clean = record_clean_decision(running_rerun, round_id="round-2", lane="review_t1", reviewed_head="head-2")
 
     assert clean["stage"] == STAGE_CREATED
-    assert clean["pending_action"] == {
-        "kind": "run-review-step",
-        "step_index": 1,
-        "step": "broad-discovery-2",
-    }
+    assert clean["pending_action"] == {"kind": "run-review-step", "step_index": 1, "step": "broad-discovery-2"}
     assert clean["review_progress"]["completed_steps"] == [
         {
             "index": 0,

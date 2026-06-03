@@ -691,6 +691,18 @@ def _profile_step_reruns_after_findings(state: dict[str, Any], profile_step: dic
     return _review_step_rerun_on_findings(state, index)
 
 
+def _profile_step_has_fixed_findings_budget(state: dict[str, Any], profile_step: dict[str, Any]) -> bool:
+    try:
+        index = _nonnegative_int(profile_step.get("index"), field="profile_step.index")
+    except ValueError:
+        return False
+    if index + 1 >= len(_review_plan_steps(state)):
+        return False
+    if bool(profile_step.get("rerun_on_findings")) or _review_step_rerun_on_findings(state, index):
+        return False
+    return _profile_step_is_discovery(profile_step) or bool(profile_step.get("arena_round"))
+
+
 def _findings_fix_context(active: dict[str, Any]) -> dict[str, Any]:
     return _compact(
         {
@@ -709,7 +721,17 @@ def _mark_profile_fix_review_needed_inplace(state: dict[str, Any], active: dict[
     if not profile_step:
         return False
     state["active_findings"] = None
-    action = _rewind_profile_step_action(state, profile_step)
+    if _profile_step_has_fixed_findings_budget(state, profile_step):
+        _complete_profile_step_from_metadata(
+            state,
+            profile_step=profile_step,
+            round_id=_required_text(active.get("round_id"), field="active_findings.round_id"),
+            lane=_required_text(active.get("lane"), field="active_findings.lane"),
+            reviewed_head=_required_text(active.get("reviewed_head"), field="active_findings.reviewed_head"),
+        )
+        action = _next_profile_step_action(state)
+    else:
+        action = _rewind_profile_step_action(state, profile_step)
     action["fix_verification"] = _findings_fix_context(active)
     _set_review_green(state, "unknown")
     _set_stage(state, STAGE_CREATED, action)

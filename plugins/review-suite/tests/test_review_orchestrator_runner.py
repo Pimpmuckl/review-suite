@@ -468,14 +468,15 @@ def test_runner_executes_arena_step_with_configured_lane(monkeypatch, tmp_path: 
     assert queued["pending_action"] == {"kind": "run-review-step", "step_index": 1, "step": "broad-discovery"}
 
 
-def test_runner_direct_arena_fix_rerun_carries_findings_context(monkeypatch, tmp_path: Path) -> None:
+def test_runner_arena_findings_fix_advances_with_findings_context(monkeypatch, tmp_path: Path) -> None:
     arena_calls = _stub_arena(monkeypatch, "pr_review-round-2")
+    review_calls = _stub_review(monkeypatch, "phase_review-round-2")
     monkeypatch.setattr(orchestrator_runner, "current_head", lambda cwd: "head-2")
     monkeypatch.setattr(orchestrator_runner, "merge_base", lambda cwd, left, right="HEAD": "base-1")
     monkeypatch.setattr(orchestrator_runner, "diff_artifact", lambda cwd, start_ref, end_ref="HEAD": "diff --git a/app.txt b/app.txt\n")
     monkeypatch.setattr(orchestrator_runner, "diff_paths_between", lambda cwd, left_ref, right_ref: {"app.txt"})
     monkeypatch.setattr(orchestrator_runner, "dirty_worktree_scope", lambda cwd, base, merge_base_ref=None: {"dirty_paths": []})
-    state = _cycle(tmp_path, deslop_enabled=False, step_names=("arena-discovery", "precision-signoff"))
+    state = _cycle(tmp_path, deslop_enabled=False, step_names=("arena-discovery", "broad-discovery", "precision-signoff"))
     state["review_plan"]["steps"][0] = {
         "kind": "arena",
         "name": "arena-discovery",
@@ -501,16 +502,18 @@ def test_runner_direct_arena_fix_rerun_carries_findings_context(monkeypatch, tmp
     result = orchestrator_runner.run_one_expensive_step(fixed, state_dir=tmp_path / "state")
 
     assert result.ran_step is True
-    assert result.step == "arena"
-    assert arena_calls[0]["custom_instructions"] is not None
-    instructions = str(arena_calls[0]["custom_instructions"])
+    assert result.step == "review"
+    assert arena_calls == []
+    assert review_calls[0]["step_name"] == "broad-discovery"
+    assert review_calls[0]["step_position"] == 2
+    assert review_calls[0]["step_total"] == 3
+    instructions = str(review_calls[0]["custom_instructions"])
     assert "post-findings verification rerun" in instructions
     assert "Source findings round: pr_review-round-1" in instructions
     assert "Preserve fix verification for arena reruns" in instructions
     assert result.state["pending_action"]["post_findings_rerun"] is True
-    assert result.state["pending_action"]["arena_round"] is True
     assert result.state["rounds"][1]["profile_step"]["post_findings_rerun"] is True
-    assert result.state["rounds"][1]["profile_step"]["arena_round"] is True
+    assert "arena_round" not in result.state["rounds"][1]["profile_step"]
 
 
 def test_runner_preserves_direct_arena_fix_context_after_blocked_dismissal(monkeypatch, tmp_path: Path) -> None:
@@ -543,7 +546,7 @@ def test_runner_preserves_direct_arena_fix_context_after_blocked_dismissal(monke
     monkeypatch.setattr(orchestrator_runner, "diff_artifact", lambda cwd, start_ref, end_ref="HEAD": "diff --git a/app.txt b/app.txt\n")
     monkeypatch.setattr(orchestrator_runner, "diff_paths_between", lambda cwd, left_ref, right_ref: {"app.txt"})
     monkeypatch.setattr(orchestrator_runner, "dirty_worktree_scope", lambda cwd, base, merge_base_ref=None: {"dirty_paths": []})
-    state = _cycle(tmp_path, deslop_enabled=False, step_names=("arena-discovery", "precision-signoff"))
+    state = _cycle(tmp_path, deslop_enabled=False, step_names=("arena-discovery", "broad-discovery", "precision-signoff"))
     state["review_plan"]["steps"][0] = {
         "kind": "arena",
         "name": "arena-discovery",
@@ -564,7 +567,25 @@ def test_runner_preserves_direct_arena_fix_context_after_blocked_dismissal(monke
         {"slot": "alpha", "reviewer_output": "Review comment:\n\n- [P3] Preserve fix context across arena recovery retries."},
     ]
     findings = record_findings_decision(pending, round_id="pr_review-round-1", lane="review_t3", reviewed_head="head-1")
-    fixed = mark_fix_detected(findings, head="head-2")
+    fixed = json.loads(json.dumps(findings))
+    fixed["stage"] = STAGE_CREATED
+    fixed["active_findings"] = None
+    fixed["validation"]["review_green"] = "unknown"
+    fixed["review_progress"]["next_step_index"] = 0
+    fixed["review_progress"]["next_step_name"] = "arena-discovery"
+    fixed["review_progress"]["current_step"] = None
+    fixed["pending_action"] = {
+        "kind": "run-review-step",
+        "step_index": 0,
+        "step": "arena-discovery",
+        "step_kind": "arena",
+        "fix_verification": {
+            "source_round_id": "pr_review-round-1",
+            "source_lane": "review_t3",
+            "findings_reviewed_head": "head-1",
+            "fix_head": "head-2",
+        },
+    }
 
     blocked = orchestrator_runner.run_one_expensive_step(fixed, state_dir=tmp_path / "state")
 
@@ -1015,7 +1036,7 @@ def test_runner_runs_real_followup_once_from_followup_pending(monkeypatch, tmp_p
     assert "Source review round phase_review-round-1" in str(followup_calls[0]["prompt"])
 
 
-def test_runner_direct_fix_rerun_carries_findings_context(monkeypatch, tmp_path: Path) -> None:
+def test_runner_discovery_findings_fix_advances_with_findings_context(monkeypatch, tmp_path: Path) -> None:
     review_calls = _stub_review(monkeypatch, "phase_review-round-2")
     monkeypatch.setattr(orchestrator_runner, "current_head", lambda cwd: "head-2")
     monkeypatch.setattr(orchestrator_runner, "merge_base", lambda cwd, left, right="HEAD": "base-1")
@@ -1045,7 +1066,9 @@ def test_runner_direct_fix_rerun_carries_findings_context(monkeypatch, tmp_path:
 
     assert result.ran_step is True
     assert result.step == "review"
-    assert review_calls[0]["step_name"] == "broad-discovery"
+    assert review_calls[0]["step_name"] == "precision-signoff"
+    assert review_calls[0]["step_position"] == 2
+    assert review_calls[0]["step_total"] == 2
     assert result.state["pending_action"]["post_findings_rerun"] is True
     assert result.state["rounds"][1]["profile_step"]["post_findings_rerun"] is True
     instructions = str(review_calls[0]["custom_instructions"])
