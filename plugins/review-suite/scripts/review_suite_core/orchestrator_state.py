@@ -344,6 +344,15 @@ def _review_step_rerun_on_findings(state: dict[str, Any], step_index: int) -> bo
     return bool(steps[step_index].get("rerun_on_findings"))
 
 
+def _effective_mode(state: dict[str, Any]) -> str:
+    mode = dict(state.get("mode") or {})
+    return str(mode.get("effective") or mode.get("requested") or "").strip()
+
+
+def _findings_use_followup(state: dict[str, Any]) -> bool:
+    return _effective_mode(state) == "deep"
+
+
 def _profile_step_kind(step: dict[str, Any]) -> str:
     return str(step.get("kind") or "review").strip() or "review"
 
@@ -423,26 +432,33 @@ def mark_review_step_pending(
     reviewed_head: str | None = None,
     grading_required: bool = False,
     arena_round: bool = False,
+    post_findings_rerun: bool = False,
+    fix_verification: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     index = _nonnegative_int(step_index, field="step_index")
     name = _required_text(step_name, field="step_name")
+    action = {
+        "kind": "decision",
+        "round_id": round_id,
+        "lane": lane,
+        "step_index": index,
+        "step": name,
+    }
+    if grading_required:
+        action["grading_required"] = True
+    if arena_round:
+        action["arena_round"] = True
+    if post_findings_rerun:
+        action["post_findings_rerun"] = True
+    if isinstance(fix_verification, dict) and fix_verification:
+        action["fix_verification"] = _compact(deepcopy(fix_verification))
     next_state = mark_decision_pending(
         state,
         round_id=round_id,
         lane=lane,
         reviewed_head=reviewed_head,
-        pending_action={
-            "kind": "decision",
-            "round_id": round_id,
-            "lane": lane,
-            "step_index": index,
-            "step": name,
-        },
+        pending_action=action,
     )
-    if grading_required:
-        next_state["pending_action"]["grading_required"] = True
-    if arena_round:
-        next_state["pending_action"]["arena_round"] = True
     profile_step = {
         "index": index,
         "name": name,
@@ -455,11 +471,20 @@ def mark_review_step_pending(
         profile_step["grading_required"] = True
     if arena_round:
         profile_step["arena_round"] = True
+    if post_findings_rerun:
+        profile_step["post_findings_rerun"] = True
     for item in list(next_state.get("rounds") or []):
         if isinstance(item, dict) and item.get("round_id") == round_id:
             item["profile_step"] = {
                 key: profile_step[key]
-                for key in ("index", "name", "rerun_on_findings", "grading_required", "arena_round")
+                for key in (
+                    "index",
+                    "name",
+                    "rerun_on_findings",
+                    "grading_required",
+                    "arena_round",
+                    "post_findings_rerun",
+                )
                 if key in profile_step
             }
             if grading_required:
@@ -542,6 +567,8 @@ def _profile_step_for_round(state: dict[str, Any], round_id: str) -> dict[str, A
             payload["arena_round"] = True
         if pending.get("grading_required"):
             payload["grading_required"] = True
+        if pending.get("post_findings_rerun"):
+            payload["post_findings_rerun"] = True
         return payload
     for item in list(state.get("rounds") or []):
         if not isinstance(item, dict) or item.get("round_id") != round_id:
@@ -560,6 +587,8 @@ def _profile_step_for_round(state: dict[str, Any], round_id: str) -> dict[str, A
                 payload["arena_round"] = True
             if bool(profile_step.get("grading_required")):
                 payload["grading_required"] = True
+            if bool(profile_step.get("post_findings_rerun")):
+                payload["post_findings_rerun"] = True
             if bool(item.get("arena_round")):
                 payload["arena_round"] = True
             if bool(item.get("grading_required")):
@@ -660,6 +689,31 @@ def _profile_step_reruns_after_findings(state: dict[str, Any], profile_step: dic
     except ValueError:
         return False
     return _review_step_rerun_on_findings(state, index)
+
+
+def _findings_fix_context(active: dict[str, Any]) -> dict[str, Any]:
+    return _compact(
+        {
+            "source_round_id": active.get("round_id"),
+            "source_lane": active.get("lane"),
+            "findings_reviewed_head": active.get("reviewed_head"),
+            "fix_head": active.get("fix_head"),
+            "github_note": active.get("note"),
+        }
+    )
+
+
+def _mark_profile_fix_review_needed_inplace(state: dict[str, Any], active: dict[str, Any]) -> bool:
+    profile_round_id = _profile_round_id_for_findings(state, active)
+    profile_step = _profile_step_for_round(state, profile_round_id) if profile_round_id else None
+    if not profile_step:
+        return False
+    state["active_findings"] = None
+    action = _rewind_profile_step_action(state, profile_step)
+    action["fix_verification"] = _findings_fix_context(active)
+    _set_review_green(state, "unknown")
+    _set_stage(state, STAGE_CREATED, action)
+    return True
 
 
 def _last_completed_profile_round_id(state: dict[str, Any]) -> str | None:
@@ -792,6 +846,8 @@ def mark_review_step_running(
     round_state_dir: str | None = None,
     grading_required: bool = False,
     arena_round: bool = False,
+    post_findings_rerun: bool = False,
+    fix_verification: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     index = _nonnegative_int(step_index, field="step_index")
     name = _required_text(step_name, field="step_name")
@@ -808,6 +864,10 @@ def mark_review_step_running(
         action["grading_required"] = True
     if arena_round:
         action["arena_round"] = True
+    if post_findings_rerun:
+        action["post_findings_rerun"] = True
+    if isinstance(fix_verification, dict) and fix_verification:
+        action["fix_verification"] = _compact(deepcopy(fix_verification))
     _set_stage(next_state, STAGE_RUNNING, action)
     profile_step = {
         "index": index,
@@ -821,11 +881,20 @@ def mark_review_step_running(
         profile_step["grading_required"] = True
     if arena_round:
         profile_step["arena_round"] = True
+    if post_findings_rerun:
+        profile_step["post_findings_rerun"] = True
     for item in list(next_state.get("rounds") or []):
         if isinstance(item, dict) and item.get("round_id") == round_id:
             item["profile_step"] = {
                 key: profile_step[key]
-                for key in ("index", "name", "rerun_on_findings", "grading_required", "arena_round")
+                for key in (
+                    "index",
+                    "name",
+                    "rerun_on_findings",
+                    "grading_required",
+                    "arena_round",
+                    "post_findings_rerun",
+                )
                 if key in profile_step
             }
             if action.get("round_state_dir"):
@@ -917,8 +986,26 @@ def mark_fix_detected(
     active = _active_findings(next_state)
     fix_head = _required_text(head, field="head")
     active["fix_head"] = fix_head
-    active["status"] = STAGE_FOLLOWUP_PENDING
     next_state.setdefault("review_heads", {})["last_fix_head"] = fix_head
+    if _findings_use_followup(next_state):
+        active["status"] = STAGE_FOLLOWUP_PENDING
+        _set_stage(
+            next_state,
+            STAGE_FOLLOWUP_PENDING,
+            {
+                "kind": "run-followup",
+                "source_round_id": active.get("round_id"),
+                "since_head": active.get("reviewed_head"),
+                "head": fix_head,
+            },
+        )
+        return next_state
+    if isinstance(active.get("gate"), dict):
+        _mark_gate_rerun_needed_inplace(next_state)
+        return next_state
+    if _mark_profile_fix_review_needed_inplace(next_state, active):
+        return next_state
+    active["status"] = STAGE_FOLLOWUP_PENDING
     _set_stage(
         next_state,
         STAGE_FOLLOWUP_PENDING,
@@ -969,8 +1056,6 @@ def _mark_gate_rerun_needed_inplace(state: dict[str, Any]) -> None:
     if not isinstance(gate, dict):
         raise ValueError("gate rerun requires active gate findings")
     followup_round_id = _optional_text(active.get("followup_round_id"))
-    if not followup_round_id:
-        raise ValueError("gate rerun requires a clean follow-up round")
     active["status"] = STAGE_GATE_RERUN_NEEDED
     profile_round_id = _profile_round_id_for_findings(state, active)
     profile_step = _profile_step_for_round(state, profile_round_id) if profile_round_id else None
@@ -979,9 +1064,11 @@ def _mark_gate_rerun_needed_inplace(state: dict[str, Any]) -> None:
         "lane": gate.get("lane"),
         "gate": gate.get("gate"),
         "source_round_id": gate.get("round_id"),
-        "after_followup_round_id": followup_round_id,
         "head": active.get("followup_head") or active.get("fix_head"),
+        "fix_verification": _findings_fix_context(active),
     }
+    if followup_round_id:
+        action["after_followup_round_id"] = followup_round_id
     if profile_step:
         action["step_index"] = profile_step.get("index")
         action["step"] = profile_step.get("name")
@@ -1168,7 +1255,8 @@ def record_clean_decision(
                 lane=resolved_lane,
                 reviewed_head=head,
             )
-            _skip_remaining_discovery_to_signoff(next_state, profile_step)
+            if not bool(profile_step.get("post_findings_rerun")):
+                _skip_remaining_discovery_to_signoff(next_state, profile_step)
     if completed_profile_step and review_profile_has_next_step(next_state):
         _set_review_green(next_state, "unknown")
         _set_stage(next_state, STAGE_CREATED, _next_profile_step_action(next_state))
@@ -1275,6 +1363,8 @@ def mark_arena_recovery_requested(
     step_index: int,
     step_name: str,
     round_state_dir: str | None = None,
+    post_findings_rerun: bool = False,
+    fix_verification: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     index = _nonnegative_int(step_index, field="step_index")
     name = _required_text(step_name, field="step_name")
@@ -1287,18 +1377,19 @@ def mark_arena_recovery_requested(
         "round_id": _required_text(round_id, field="round_id"),
         "retry_count": int(recovery.get("retry_count") or 0) + 1,
     }
-    _set_stage(
-        next_state,
-        STAGE_RETRY_REQUESTED,
-        {
-            "kind": "arena-blocked",
-            "round_id": round_id,
-            "lane": lane,
-            "step_index": index,
-            "step": name,
-            "round_state_dir": _optional_text(round_state_dir),
-        },
-    )
+    action = {
+        "kind": "arena-blocked",
+        "round_id": round_id,
+        "lane": lane,
+        "step_index": index,
+        "step": name,
+        "round_state_dir": _optional_text(round_state_dir),
+    }
+    if post_findings_rerun:
+        action["post_findings_rerun"] = True
+    if isinstance(fix_verification, dict) and fix_verification:
+        action["fix_verification"] = _compact(deepcopy(fix_verification))
+    _set_stage(next_state, STAGE_RETRY_REQUESTED, action)
     return next_state
 
 
@@ -1312,12 +1403,24 @@ def mark_recovery_resolved(state: dict[str, Any]) -> dict[str, Any]:
     return next_state
 
 
-def mark_review_step_retry(state: dict[str, Any], *, step_index: int, step_name: str) -> dict[str, Any]:
+def mark_review_step_retry(
+    state: dict[str, Any],
+    *,
+    step_index: int,
+    step_name: str,
+    post_findings_rerun: bool = False,
+    fix_verification: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     index = _nonnegative_int(step_index, field="step_index")
     name = _required_text(step_name, field="step_name")
     next_state = mark_recovery_resolved(state)
     _set_review_progress(next_state, next_step_index=index, current_step=None)
-    _set_stage(next_state, STAGE_CREATED, {"kind": "run-review-step", "step_index": index, "step": name})
+    action = {"kind": "run-review-step", "step_index": index, "step": name}
+    if post_findings_rerun:
+        action["post_findings_rerun"] = True
+    if isinstance(fix_verification, dict) and fix_verification:
+        action["fix_verification"] = _compact(deepcopy(fix_verification))
+    _set_stage(next_state, STAGE_CREATED, action)
     return next_state
 
 
