@@ -863,6 +863,47 @@ def test_cmd_run_allows_explicit_repo_without_local_checkout(monkeypatch, tmp_pa
     assert recorded == []
 
 
+def test_cmd_run_uses_fast_github_review_polling_default(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        review_github,
+        "get_pr_context",
+        lambda owner, repo, pr_number: {
+            "owner": "example-owner",
+            "repo": "sample-web",
+            "pr_number": 87,
+            "url": "https://github.com/example-owner/example-repo/pull/87",
+            "head_sha": "deadbeef",
+            "base_ref": "main",
+        },
+    )
+
+    def fake_run_review_cycle(**kwargs: object) -> dict[str, object]:
+        captured.update(kwargs)
+        return {
+            "status": "existing_completed_cycle",
+            "owner": "example-owner",
+            "repo": "sample-web",
+            "pr_number": 87,
+            "url": "https://github.com/example-owner/example-repo/pull/87",
+            "head_sha": "deadbeef",
+            "items": [],
+        }
+
+    monkeypatch.setattr(review_github, "run_review_cycle", fake_run_review_cycle)
+    monkeypatch.setattr(review_github, "emit_toon", lambda payload: None)
+
+    exit_code = cmd_run(
+        review_github.build_parser().parse_args(
+            ["run", "--owner", "example-owner", "--repo", "sample-web", "--pr-number", "87"]
+        ),
+    )
+
+    assert exit_code == 0
+    assert captured["poll_seconds"] == 3
+
+
 def test_post_request_includes_repo_selector(monkeypatch) -> None:
     gh_calls: list[list[str]] = []
     request_comment = _request_comment(head_sha="deadbeef")
