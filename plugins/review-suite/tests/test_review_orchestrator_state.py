@@ -269,6 +269,34 @@ def test_clean_discovery_skips_remaining_discovery_loops_to_signoff(tmp_path: Pa
     assert [item["name"] for item in clean["review_progress"]["completed_steps"]] == ["broad-discovery-1"]
 
 
+def test_clean_deep_discovery_skips_remaining_deep_discovery_to_deep_signoff(tmp_path: Path) -> None:
+    state = _cycle(tmp_path, mode="deep")
+    state["review_plan"] = {
+        "steps": [
+            {"name": "broad-discovery-1", "count": 1, "model": "gpt-5.4", "reasoning_effort": "medium"},
+            {"name": "precision-signoff", "count": 1, "model": "gpt-5.5", "reasoning_effort": "medium"},
+            {"name": "deep-discovery-1", "count": 1, "model": "gpt-5.4", "reasoning_effort": "xhigh"},
+            {"name": "deep-discovery-2", "count": 1, "model": "gpt-5.4", "reasoning_effort": "xhigh"},
+            {"name": "deep-signoff", "count": 1, "model": "gpt-5.5", "reasoning_effort": "xhigh"},
+        ]
+    }
+    pending = mark_review_step_pending(
+        state,
+        round_id="round-1",
+        lane="review_t3",
+        step_index=2,
+        step_name="deep-discovery-1",
+        reviewed_head="head-1",
+    )
+
+    clean = record_clean_decision(pending, round_id="round-1", lane="review_t3", reviewed_head="head-1")
+
+    assert clean["stage"] == STAGE_CREATED
+    assert clean["pending_action"] == {"kind": "run-review-step", "step_index": 4, "step": "deep-signoff"}
+    assert clean["review_progress"]["next_step_index"] == 4
+    assert [item["name"] for item in clean["review_progress"]["completed_steps"]] == ["deep-discovery-1"]
+
+
 def test_clean_arena_round_still_runs_fixed_discovery_safety_pass(tmp_path: Path) -> None:
     state = _cycle(tmp_path)
     state["review_plan"] = {
@@ -777,12 +805,13 @@ def test_non_deep_signoff_findings_rerun_until_clean(tmp_path: Path) -> None:
     assert fixed["review_progress"]["completed_steps"] == []
 
 
-def test_existing_post_findings_discovery_rerun_clean_preserves_remaining_discovery(tmp_path: Path) -> None:
+def test_post_findings_discovery_rerun_clean_skips_remaining_discovery_to_signoff(tmp_path: Path) -> None:
     state = _cycle(tmp_path)
     state["review_plan"] = {
         "steps": [
             {"name": "broad-discovery-1", "count": 1, "model": "gpt-5.4", "reasoning_effort": "medium"},
             {"name": "broad-discovery-2", "count": 1, "model": "gpt-5.4", "reasoning_effort": "medium"},
+            {"name": "broad-discovery-3", "count": 1, "model": "gpt-5.4", "reasoning_effort": "medium"},
             {"name": "precision-signoff", "count": 1, "model": "gpt-5.5", "reasoning_effort": "medium"},
         ]
     }
@@ -799,13 +828,13 @@ def test_existing_post_findings_discovery_rerun_clean_preserves_remaining_discov
     fixed["stage"] = STAGE_CREATED
     fixed["active_findings"] = None
     fixed["validation"]["review_green"] = "unknown"
-    fixed["review_progress"]["next_step_index"] = 0
-    fixed["review_progress"]["next_step_name"] = "broad-discovery-1"
+    fixed["review_progress"]["next_step_index"] = 1
+    fixed["review_progress"]["next_step_name"] = "broad-discovery-2"
     fixed["review_progress"]["current_step"] = None
     fixed["pending_action"] = {
         "kind": "run-review-step",
-        "step_index": 0,
-        "step": "broad-discovery-1",
+        "step_index": 1,
+        "step": "broad-discovery-2",
         "fix_verification": {
             "source_round_id": "round-1",
             "source_lane": "review_t1",
@@ -817,8 +846,8 @@ def test_existing_post_findings_discovery_rerun_clean_preserves_remaining_discov
         fixed,
         round_id="round-2",
         lane="review_t1",
-        step_index=0,
-        step_name="broad-discovery-1",
+        step_index=1,
+        step_name="broad-discovery-2",
         reviewed_head="head-2",
         post_findings_rerun=True,
     )
@@ -826,11 +855,11 @@ def test_existing_post_findings_discovery_rerun_clean_preserves_remaining_discov
     clean = record_clean_decision(running_rerun, round_id="round-2", lane="review_t1", reviewed_head="head-2")
 
     assert clean["stage"] == STAGE_CREATED
-    assert clean["pending_action"] == {"kind": "run-review-step", "step_index": 1, "step": "broad-discovery-2"}
+    assert clean["pending_action"] == {"kind": "run-review-step", "step_index": 3, "step": "precision-signoff"}
     assert clean["review_progress"]["completed_steps"] == [
         {
-            "index": 0,
-            "name": "broad-discovery-1",
+            "index": 1,
+            "name": "broad-discovery-2",
             "round_id": "round-2",
             "lane": "review_t1",
             "reviewed_head": "head-2",

@@ -1379,8 +1379,7 @@ def record_clean_decision(
                 lane=resolved_lane,
                 reviewed_head=head,
             )
-            if not bool(profile_step.get("post_findings_rerun")):
-                _skip_remaining_discovery_to_signoff(next_state, profile_step)
+            _skip_remaining_discovery_to_signoff(next_state, profile_step)
     if completed_profile_step and review_profile_has_next_step(next_state):
         _set_review_green(next_state, "unknown")
         _set_stage(next_state, STAGE_CREATED, _next_profile_step_action(next_state))
