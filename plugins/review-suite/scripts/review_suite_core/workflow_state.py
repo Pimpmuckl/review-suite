@@ -1219,7 +1219,7 @@ def inspect_workflow_status(*, state_dir: Path, review_cwd: Path, base: str) -> 
                         "recommendation": "review-followup",
                         "reason": "gate_findings_dirty_fix_delta",
                         "note": (
-                            f"Use review-followup against the current {gate_lane} findings head with --allow-dirty. "
+                            "Commit intended follow-up changes or stash unrelated dirty files, then rerun review-state. "
                             f"After a clean follow-up, rerun {gate_lane} so both signoff reviewers are green on the current head."
                         ),
                     }

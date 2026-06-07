@@ -190,7 +190,6 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--rubric", default=str(default_rubric_path()))
     run.add_argument("--state-dir", default=str(default_state_dir()))
     run.add_argument("--sqlite-path", default=str(Path.home() / ".codex" / "state_5.sqlite"))
-    run.add_argument("--allow-dirty", action="store_true")
     run.add_argument("--wsl", action="store_true")
     run.add_argument("--caller-id")
     run.add_argument("--ignore-pending-grades", action="store_true")
@@ -216,7 +215,6 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--state-dir", default=str(default_state_dir()))
     run.add_argument("--sqlite-path", default=str(Path.home() / ".codex" / "state_5.sqlite"))
     run.add_argument("--base", required=True)
-    run.add_argument("--allow-dirty", action="store_true")
     run.add_argument("--wsl", action="store_true")
 
     resume = sub.add_parser("resume-round")
@@ -312,7 +310,6 @@ def build_parser() -> argparse.ArgumentParser:
     reroll.add_argument("--rubric", default=str(default_rubric_path()))
     reroll.add_argument("--state-dir", default=str(default_state_dir()))
     reroll.add_argument("--sqlite-path", default=str(Path.home() / ".codex" / "state_5.sqlite"))
-    reroll.add_argument("--allow-dirty", action="store_true")
     reroll.add_argument("--wsl", action="store_true")
 
     return parser
@@ -511,7 +508,6 @@ def _reroll_command(
     rubric_path: Path,
     state_dir: Path,
     sqlite_path: Path,
-    allow_dirty: bool,
     allow_unsafe_windows_wsl_fallback: bool,
 ) -> str:
     parts = [
@@ -523,8 +519,6 @@ def _reroll_command(
         "--slot",
         slot,
     ]
-    if allow_dirty:
-        parts.append("--allow-dirty")
     if allow_unsafe_windows_wsl_fallback:
         parts.append("--wsl")
     return format_command(parts)
@@ -565,7 +559,6 @@ def _reroll_rows(
     rubric_path: Path,
     state_dir: Path,
     sqlite_path: Path,
-    allow_dirty: bool,
     allow_unsafe_windows_wsl_fallback: bool,
 ) -> list[dict[str, str]]:
     return [
@@ -580,7 +573,6 @@ def _reroll_rows(
                 rubric_path=rubric_path,
                 state_dir=state_dir,
                 sqlite_path=sqlite_path,
-                allow_dirty=allow_dirty,
                 allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
             ),
         }
@@ -748,7 +740,6 @@ def _print_next_steps(
     rubric_path: Path,
     state_dir: Path,
     sqlite_path: Path,
-    allow_dirty: bool,
     allow_unsafe_windows_wsl_fallback: bool,
 ) -> None:
     blocked_slots = _blocked_slots(round_result)
@@ -756,7 +747,7 @@ def _print_next_steps(
         for slot in blocked_slots:
             print(f"Reroll {slot}:", file=sys.stderr, flush=True)
             print(
-                _reroll_command(round_id=round_id, slot=slot, review_cwd=review_cwd, base=base, roster_path=roster_path, rubric_path=rubric_path, state_dir=state_dir, sqlite_path=sqlite_path, allow_dirty=allow_dirty, allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback),
+                _reroll_command(round_id=round_id, slot=slot, review_cwd=review_cwd, base=base, roster_path=roster_path, rubric_path=rubric_path, state_dir=state_dir, sqlite_path=sqlite_path, allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback),
                 file=sys.stderr,
                 flush=True,
             )
@@ -945,7 +936,6 @@ def run_orchestrator_review_step(
     sqlite_path: Path,
     review_scope: dict[str, object],
     task_id: str | None,
-    allow_dirty: bool,
     progress_interval_seconds: int,
     allow_unsafe_windows_wsl_fallback: bool,
     grading_required: bool = False,
@@ -977,7 +967,6 @@ def run_orchestrator_review_step(
         review_scope=request.review_scope,
         prompt=request.prompt,
         task_id=task_id,
-        allow_dirty=allow_dirty,
         progress_interval_seconds=progress_interval_seconds,
         allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
         grading_required=grading_required,
@@ -997,7 +986,6 @@ def run_orchestrated_arena_round(
     sqlite_path: Path,
     review_scope: dict[str, object],
     task_id: str | None,
-    allow_dirty: bool,
     progress_interval_seconds: int,
     allow_unsafe_windows_wsl_fallback: bool,
     step_position: int | None = None,
@@ -1014,7 +1002,7 @@ def run_orchestrated_arena_round(
         task_class=task_class,
         custom_instructions=custom_instructions,
     )
-    ensure_clean_git_worktree(review_cwd, allow_dirty=allow_dirty, review_scope=request.review_scope)
+    ensure_clean_git_worktree(review_cwd, review_scope=request.review_scope)
     _validate_benchmarked_review_runtime(
         review_cwd=review_cwd,
         allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
@@ -1049,7 +1037,6 @@ def run_orchestrated_arena_round(
     payload["review_cwd"] = str(review_cwd)
     payload["review_scope"] = dict(request.review_scope)
     payload["requested_prompt"] = request.prompt
-    payload["allow_dirty"] = allow_dirty
     payload["allow_unsafe_windows_wsl_fallback"] = allow_unsafe_windows_wsl_fallback
     payload["progress_interval_seconds"] = progress_interval_seconds
     if step_position is not None and step_total is not None:
@@ -1084,7 +1071,6 @@ def run_orchestrated_arena_round(
         review_scope=request.review_scope,
         sqlite_path=sqlite_path,
         progress_interval_seconds=progress_interval_seconds,
-        allow_dirty=allow_dirty,
         allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
     )
     completed["task_id_hint"] = branch_default
@@ -1125,7 +1111,6 @@ def _run_orchestrator_manual_review_step(
     review_scope: dict[str, object],
     prompt: str,
     task_id: str | None,
-    allow_dirty: bool,
     progress_interval_seconds: int,
     allow_unsafe_windows_wsl_fallback: bool,
     grading_required: bool = False,
@@ -1171,7 +1156,6 @@ def _run_orchestrator_manual_review_step(
         "review_cwd": str(review_cwd),
         "review_scope": dict(review_scope),
         "requested_prompt": prompt,
-        "allow_dirty": allow_dirty,
         "allow_unsafe_windows_wsl_fallback": allow_unsafe_windows_wsl_fallback,
         "progress_interval_seconds": progress_interval_seconds,
         "status": "sampled",
@@ -1209,7 +1193,6 @@ def _run_orchestrator_manual_review_step(
         review_scope=review_scope,
         sqlite_path=sqlite_path,
         progress_interval_seconds=progress_interval_seconds,
-        allow_dirty=allow_dirty,
         allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
     )
     return _completed_orchestrator_review_result(
@@ -1267,7 +1250,6 @@ def resume_orchestrator_review_step(
             progress_interval_seconds=int(
                 payload.get("progress_interval_seconds") or progress_interval_seconds
             ),
-            allow_dirty=bool(payload.get("allow_dirty")),
             allow_unsafe_windows_wsl_fallback=bool(payload.get("allow_unsafe_windows_wsl_fallback")),
         )
     else:
@@ -1321,7 +1303,6 @@ def run_orchestrator_followup_review_step(
         review_scope=review_scope,
         prompt=prompt,
         task_id=task_id,
-        allow_dirty=False,
         progress_interval_seconds=progress_interval_seconds,
         allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
         grading_required=False,
@@ -1343,7 +1324,6 @@ def run_benchmarked_round(
     state_dir: Path,
     sqlite_path: Path,
     seed: int | None,
-    allow_dirty: bool,
     progress_interval_seconds: int,
     allow_unsafe_windows_wsl_fallback: bool,
     review_scope: dict[str, object],
@@ -1412,7 +1392,7 @@ def run_benchmarked_round(
             review_scope=review_scope,
         )
     if review_scope.get("base"):
-        ensure_clean_git_worktree(review_cwd, allow_dirty=allow_dirty, review_scope=review_scope)
+        ensure_clean_git_worktree(review_cwd, review_scope=review_scope)
     _validate_benchmarked_review_runtime(
         review_cwd=review_cwd,
         allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
@@ -1447,7 +1427,6 @@ def run_benchmarked_round(
         review_scope=review_scope,
         sqlite_path=sqlite_path,
         progress_interval_seconds=progress_interval_seconds,
-        allow_dirty=allow_dirty,
         allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
     )
     round_result = public_round_result(
@@ -1486,7 +1465,6 @@ def run_benchmarked_round(
             rubric_path=rubric_path,
             state_dir=state_dir,
             sqlite_path=sqlite_path,
-            allow_dirty=allow_dirty,
             allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
         )
     if not all([task_id, winner, basis]):
@@ -1501,7 +1479,6 @@ def run_benchmarked_round(
                 rubric_path=rubric_path,
                 state_dir=state_dir,
                 sqlite_path=sqlite_path,
-                allow_dirty=allow_dirty,
                 allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
             )
             if round_result.get("blocked"):
@@ -1528,7 +1505,6 @@ def run_benchmarked_round(
                             rubric_path=rubric_path,
                             state_dir=state_dir,
                             sqlite_path=sqlite_path,
-                            allow_dirty=allow_dirty,
                             allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
                         ),
                     )
@@ -1677,7 +1653,6 @@ def cmd_run(args: argparse.Namespace) -> int:
         state_dir=Path(args.state_dir),
         sqlite_path=Path(args.sqlite_path),
         seed=args.seed,
-        allow_dirty=bool(args.allow_dirty),
         progress_interval_seconds=DEFAULT_PROGRESS_INTERVAL_SECONDS,
         allow_unsafe_windows_wsl_fallback=bool(args.wsl),
         review_scope={"base": args.base},
@@ -1717,7 +1692,6 @@ def cmd_run_round(args: argparse.Namespace) -> int:
         review_scope=review_scope,
         sqlite_path=Path(args.sqlite_path),
         progress_interval_seconds=DEFAULT_PROGRESS_INTERVAL_SECONDS,
-        allow_dirty=bool(args.allow_dirty),
         allow_unsafe_windows_wsl_fallback=bool(args.wsl),
     )
     completed["task_id_hint"] = _current_branch_name(review_cwd) or str(payload["round_id"])
@@ -1780,7 +1754,6 @@ def cmd_reroll_slot(args: argparse.Namespace) -> int:
         else str(original.get("review_cwd_normalized") or normalize_review_cwd_value(review_cwd))
     )
     for key in (
-        "allow_dirty",
         "allow_unsafe_windows_wsl_fallback",
         "progress_interval_seconds",
         "public_task",
@@ -1810,7 +1783,6 @@ def cmd_reroll_slot(args: argparse.Namespace) -> int:
         review_scope=review_scope,
         sqlite_path=Path(args.sqlite_path),
         progress_interval_seconds=DEFAULT_PROGRESS_INTERVAL_SECONDS,
-        allow_dirty=bool(args.allow_dirty),
         allow_unsafe_windows_wsl_fallback=bool(args.wsl),
     )
     result = public_round_result(
@@ -1833,7 +1805,6 @@ def cmd_reroll_slot(args: argparse.Namespace) -> int:
             rubric_path=Path(args.rubric),
             state_dir=state_dir,
             sqlite_path=Path(args.sqlite_path),
-            allow_dirty=bool(args.allow_dirty),
             allow_unsafe_windows_wsl_fallback=bool(args.wsl),
         )
     completed["task_id_hint"] = _current_branch_name(review_cwd) or payload["round_id"]
@@ -2297,7 +2268,6 @@ def cmd_run_manual_round(args: argparse.Namespace) -> int:
         review_scope={},
         sqlite_path=Path(args.sqlite_path),
         progress_interval_seconds=DEFAULT_PROGRESS_INTERVAL_SECONDS,
-        allow_dirty=True,
         allow_unsafe_windows_wsl_fallback=bool(args.wsl),
     )
     write_round(state_dir, completed)

@@ -1097,7 +1097,6 @@ def run_gate_round(
     state_dir: Path,
     sqlite_path: Path,
     task_id: str | None,
-    allow_dirty: bool,
     progress_interval_seconds: int,
     timeout_seconds: int,
     allow_unsafe_windows_wsl_fallback: bool,
@@ -1112,7 +1111,7 @@ def run_gate_round(
     if timeout_seconds < 0:
         raise ValueError("gate timeout must be >= 0")
     if review_scope.get("base"):
-        ensure_clean_git_worktree(review_cwd, allow_dirty=allow_dirty, review_scope=review_scope)
+        ensure_clean_git_worktree(review_cwd, review_scope=review_scope)
     roster = load_roster(roster_path)
     resolved_task_id = task_id or _current_branch_name(review_cwd) or _target_label(review_scope)
     partial_path = _gate_partial_path(

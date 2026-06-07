@@ -81,6 +81,7 @@ To explicitly replace an existing local review ladder with a stricter one, use t
 - After an id exists, do not repeat creation flags.
 - Classify reviewer output before coding valid findings.
 - Review orchestration expects committed review changes. If `git diff` is non-empty but `base..HEAD` is empty, commit intended changes or stash unrelated worktree changes before rerunning.
+- Review commands do not support a dirty-worktree override. Do not append `--allow-dirty`; commit intended review changes first.
 - Run focused review-relevant validation before dispatch.
 - Do not wait on slow full-suite/CI before dispatch; start it after the review round and track it as `pending`, `passed`, `failed`, or `waived/classified`.
 - Do not call PR-final/merge-ready while full-suite/CI is pending or unknown.

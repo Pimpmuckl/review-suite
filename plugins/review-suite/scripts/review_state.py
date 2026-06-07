@@ -457,6 +457,17 @@ def _status_action(payload: dict[str, object], *, review_cwd: Path, base: str, s
         since_head = str(payload.get("last_reviewed_head") or "").strip()
         if not since_head:
             return None
+        if bool(payload.get("worktree_dirty")):
+            return _with_action_context(
+                {
+                    "lane": "commit-or-stash",
+                    "note": (
+                        "Commit intended follow-up changes or stash unrelated dirty files, "
+                        "then rerun review-state to get the review-followup command."
+                    ),
+                },
+                review_cwd=review_cwd,
+            )
         command = [
             sys.executable,
             Path(__file__).resolve().with_name("review_followup.py").as_posix(),
@@ -465,8 +476,6 @@ def _status_action(payload: dict[str, object], *, review_cwd: Path, base: str, s
             "--since",
             since_head,
         ]
-        if bool(payload.get("worktree_dirty")):
-            command.append("--allow-dirty")
         command.extend(
             [
                 "--note-file",

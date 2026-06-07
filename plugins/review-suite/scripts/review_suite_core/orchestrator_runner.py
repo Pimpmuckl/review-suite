@@ -51,7 +51,7 @@ from .orchestrator_state import (
 )
 from .paths import cwd_path_from_normalized
 from .process_runtime import CapturedChildProcess, launch_captured_child_process, wait_for_captured_child_process
-from .workflow_state import current_head, diff_artifact, diff_paths_between, dirty_worktree_scope, merge_base
+from .workflow_state import current_head, diff_artifact, dirty_worktree_scope, merge_base
 
 
 INITIAL_REVIEW_LANE = "review_t1"
@@ -339,7 +339,7 @@ def _fix_verification_instructions(state: dict[str, Any], context: dict[str, Any
     return " ".join(parts)
 
 
-def _fix_interdiff_artifact(*, cwd: Path, since_head: str, base: str, merge_base_head: str, review_label: str) -> tuple[str, bool]:
+def _fix_interdiff_artifact(*, cwd: Path, since_head: str, base: str, merge_base_head: str, review_label: str) -> str:
     committed_diff = diff_artifact(cwd, since_head, "HEAD")
     dirty_scope = dirty_worktree_scope(cwd, base, merge_base_ref=merge_base_head)
     dirty_paths = [
@@ -347,20 +347,13 @@ def _fix_interdiff_artifact(*, cwd: Path, since_head: str, base: str, merge_base
         for path in list(dirty_scope.get("dirty_paths") or [])
         if str(path).strip()
     ]
-    related_dirty_paths = [
-        str(path)
-        for path in list(dirty_scope.get("related_dirty_paths") or [])
-        if str(path).strip()
-    ]
     if committed_diff.strip():
-        interdiff_paths = diff_paths_between(cwd, since_head, "HEAD")
-        related_dirty_paths = sorted(set(related_dirty_paths) | (set(dirty_paths) & interdiff_paths))
-        if related_dirty_paths:
+        if dirty_paths:
             raise ValueError(
-                f"{review_label} found committed interdiff changes plus uncommitted changes in reviewed paths. "
+                f"{review_label} found committed interdiff changes plus uncommitted worktree changes. "
                 "Commit the remaining fix changes or stash unrelated worktree changes, then rerun the emitted review.py --id command."
             )
-        return committed_diff, bool(dirty_paths)
+        return committed_diff
     if dirty_paths:
         raise ValueError(
             f"{review_label} found no committed interdiff after reviewed head {since_head}, "
@@ -622,7 +615,6 @@ def _run_profile_review_once(
         sqlite_path=Path.home() / ".codex" / "state_5.sqlite",
         review_scope=scope,
         task_id=_task_id(state),
-        allow_dirty=False,
         progress_interval_seconds=DEFAULT_PROGRESS_INTERVAL_SECONDS,
         allow_unsafe_windows_wsl_fallback=False,
         grading_required=bool(dict(state.get("grading") or {}).get("required")),
@@ -702,7 +694,6 @@ def _run_profile_arena_once(
         sqlite_path=Path.home() / ".codex" / "state_5.sqlite",
         review_scope=scope,
         task_id=_task_id(state),
-        allow_dirty=False,
         progress_interval_seconds=DEFAULT_PROGRESS_INTERVAL_SECONDS,
         allow_unsafe_windows_wsl_fallback=False,
         step_position=step_position,
@@ -950,7 +941,6 @@ def _run_profile_gate_once(
         state_dir=state_dir,
         sqlite_path=Path.home() / ".codex" / "state_5.sqlite",
         task_id=_task_id(state),
-        allow_dirty=False,
         progress_interval_seconds=DEFAULT_PROGRESS_INTERVAL_SECONDS,
         timeout_seconds=DEFAULT_TIMEOUT_SECONDS,
         allow_unsafe_windows_wsl_fallback=False,
@@ -1033,7 +1023,7 @@ def _followup_note(state: dict[str, Any], active: dict[str, Any], source_round_i
     return " ".join(parts)
 
 
-def _followup_diff_artifact(*, cwd: Path, since_head: str, base: str, merge_base_head: str) -> tuple[str, bool]:
+def _followup_diff_artifact(*, cwd: Path, since_head: str, base: str, merge_base_head: str) -> str:
     return _fix_interdiff_artifact(
         cwd=cwd,
         since_head=since_head,
@@ -1058,7 +1048,7 @@ def _run_followup_review_once(state: dict[str, Any], *, state_dir: Path) -> Orch
         merge_base_head = merge_base(cwd, base, "HEAD")
     except ValueError:
         merge_base_head = _identity_text(state, "merge_base")
-    diff_text, allow_unrelated_dirty_paths = _followup_diff_artifact(cwd=cwd, since_head=since_head, base=base, merge_base_head=merge_base_head)
+    diff_text = _followup_diff_artifact(cwd=cwd, since_head=since_head, base=base, merge_base_head=merge_base_head)
     review_scope = {
         "base": base,
         "commit": since_head,
@@ -1069,8 +1059,6 @@ def _run_followup_review_once(state: dict[str, Any], *, state_dir: Path) -> Orch
         "target_label": f"interdiff `{since_head}..{head}`",
         "source_round_id": source_round_id,
     }
-    if allow_unrelated_dirty_paths:
-        review_scope["allow_unrelated_dirty_paths"] = True
     prompt = build_followup_prompt(
         since_head=since_head,
         head=head,
