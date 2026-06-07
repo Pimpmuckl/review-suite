@@ -104,51 +104,14 @@ def test_main_uses_recorded_anchor_and_records_new_followup_anchor(monkeypatch, 
     assert captured["anchor"]["review_scope"]["merge_base"] == "base123"
 
 
-def test_main_uses_dirty_worktree_followup_when_head_matches_anchor(monkeypatch, tmp_path: Path) -> None:
-    captured: dict[str, object] = {}
+def test_main_rejects_allow_dirty_flag(monkeypatch) -> None:
+    errors: list[tuple[str, dict[str, object]]] = []
 
-    monkeypatch.setattr(review_followup, "resolve_repo_root", lambda cd: tmp_path)
-    monkeypatch.setattr(review_followup, "ensure_clean_git_worktree", lambda *args, **kwargs: None)
-    monkeypatch.setattr(review_followup, "use_unsafe_windows_wsl_fallback", lambda *args, **kwargs: False)
-    monkeypatch.setattr(
-        review_followup,
-        "inspect_workflow_status",
-        lambda **kwargs: {
-            "status": "ok",
-            "recommendation": "review-followup",
-            "last_reviewed_head": "abc123",
-            "worktree_dirty": True,
-        },
-    )
-    monkeypatch.setattr(review_followup, "current_head", lambda review_root: "abc123")
-    monkeypatch.setattr(review_followup, "has_worktree_changes", lambda review_root: True)
-    monkeypatch.setattr(review_followup, "merge_base", lambda review_root, base: "base123")
-    monkeypatch.setattr(
-        review_followup,
-        "worktree_diff_artifact",
-        lambda review_root, anchor_ref="HEAD": "diff --git a/x b/x\n",
-    )
+    def fake_emit_error(message: str, **kwargs: object) -> int:
+        errors.append((message, dict(kwargs)))
+        return 2
 
-    def fake_run_codex(**kwargs):
-        captured["prompt"] = kwargs["prompt"]
-        return {
-            "returncode": 0,
-            "stdout": "",
-            "stderr": "",
-            "final_message": "No findings.",
-            "session_id": "sess-1",
-            "elapsed_seconds": 1.2,
-            "timed_out": False,
-        }
-
-    monkeypatch.setattr(review_followup, "run_codex", fake_run_codex)
-    monkeypatch.setattr(review_followup, "record_review_anchor", lambda **kwargs: captured.setdefault("anchor", kwargs) or {})
-
-    def fake_emit_result(**kwargs):
-        captured["result"] = kwargs
-        return 0
-
-    monkeypatch.setattr(review_followup, "emit_result", fake_emit_result)
+    monkeypatch.setattr(review_followup, "emit_error", fake_emit_error)
     monkeypatch.setattr(
         sys,
         "argv",
@@ -158,17 +121,15 @@ def test_main_uses_dirty_worktree_followup_when_head_matches_anchor(monkeypatch,
             "main",
             "--allow-dirty",
             "--note",
-            "invariant: keep the dirty follow-up routed through the same reviewed head",
+            "invariant: only committed follow-up diffs are reviewable",
         ],
     )
 
     exit_code = review_followup.main()
 
-    assert exit_code == 0
-    assert "dirty follow-up diff against HEAD `abc123`" in str(captured["prompt"])
-    assert captured["anchor"]["review_scope"]["dirty_worktree"] is True
-    assert captured["anchor"]["review_scope"]["commit"] == "abc123"
-    assert "commit_end" not in captured["anchor"]["review_scope"]
+    assert exit_code == 2
+    assert errors
+    assert "unrecognized arguments: --allow-dirty" in errors[0][0]
 
 
 def test_resolve_since_head_requires_anchor_when_not_explicit(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

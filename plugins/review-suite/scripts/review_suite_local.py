@@ -338,7 +338,7 @@ def _manual_prompt_too_large_message(
         suffix = f" Examples: {preview}." if preview else ""
         return (
             f"{message} Dirty worktree paths outside the committed branch diff were included.{suffix} "
-            "Clean, stash, or commit unrelated dirty files, then rerun without --allow-dirty."
+            "Clean, stash, or commit unrelated dirty files, then rerun."
         )
     return (
         f"{message} Split the change into a smaller review slice, or remove custom instructions."
@@ -2557,36 +2557,15 @@ def build_review_command(
     return command
 
 
-def ensure_clean_git_worktree(review_cwd: Path, *, allow_dirty: bool, review_scope: dict[str, Any] | None = None) -> None:
+def ensure_clean_git_worktree(review_cwd: Path, *, review_scope: dict[str, Any] | None = None) -> None:
     try:
         dirty_entries = meaningful_worktree_status_entries(review_cwd)
     except ValueError as exc:
         raise ValueError(f"review-suite requires a git repo with committed changes ready for review: {exc}") from exc
     if not dirty_entries:
         return
-    if allow_dirty:
-        print(
-            "[review-suite] WARNING: dirty worktree override enabled; results are not clean committed-scope benchmark input.",
-            file=sys.stderr,
-            flush=True,
-        )
-        return
-    scope = dict(review_scope or {})
-    base = str(scope.get("base") or "").strip()
-    if base:
-        allow_unrelated_dirty = bool(scope.get("allow_unrelated_dirty_paths"))
-        commit = str(scope.get("commit") or "").strip()
-        commit_end = str(scope.get("commit_end") or "").strip()
-        is_base_review = not commit and not commit_end
-        dirty_scope = dirty_worktree_scope(
-            review_cwd,
-            base,
-            merge_base_ref=str(scope.get("merge_base") or "").strip() or None,
-        )
-        if (is_base_review or allow_unrelated_dirty) and bool(dirty_scope.get("all_dirty_paths_outside_branch_diff")):
-            return
     raise ValueError(
-        "review-suite requires a clean worktree. Commit the slice before running a review round, or pass --allow-dirty to override."
+        "review-suite requires a clean worktree. Commit intended review changes or stash unrelated worktree changes, then rerun."
     )
 def _use_unsafe_windows_wsl_fallback(review_cwd: Path, allow_unsafe_windows_wsl_fallback: bool) -> bool:
     return use_unsafe_windows_wsl_fallback(review_cwd, allow_unsafe_windows_wsl_fallback)
@@ -3193,7 +3172,6 @@ def run_round(
     review_scope: dict[str, Any],
     sqlite_path: Path = DEFAULT_SQLITE_STATE_PATH,
     progress_interval_seconds: int = 30,
-    allow_dirty: bool = False,
     allow_unsafe_windows_wsl_fallback: bool = False,
 ) -> dict[str, Any]:
     launched = launch_round(
@@ -3204,7 +3182,6 @@ def run_round(
         prompt=prompt,
         review_scope=review_scope,
         progress_interval_seconds=progress_interval_seconds,
-        allow_dirty=allow_dirty,
         allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
     )
     return collect_round_results(
@@ -3227,7 +3204,6 @@ def launch_round(
     prompt: str,
     review_scope: dict[str, Any],
     progress_interval_seconds: int = 30,
-    allow_dirty: bool = False,
     allow_unsafe_windows_wsl_fallback: bool = False,
 ) -> dict[str, Any]:
     indexed = variant_index(roster)
@@ -3235,7 +3211,7 @@ def launch_round(
     if round_payload.get("status") not in {"sampled", "failed"}:
         raise ValueError(f"round {round_payload['round_id']} is already {round_payload.get('status')}")
     if review_scope.get("base"):
-        ensure_clean_git_worktree(review_cwd, allow_dirty=allow_dirty, review_scope=review_scope)
+        ensure_clean_git_worktree(review_cwd, review_scope=review_scope)
 
     review_started_at = utc_now_iso()
     running_payload = deepcopy(round_payload)
@@ -3243,7 +3219,6 @@ def launch_round(
     running_payload["review_cwd"] = str(review_cwd)
     running_payload["review_started_at"] = review_started_at
     running_payload["review_scope"] = review_scope
-    running_payload["allow_dirty"] = allow_dirty
     running_payload["allow_unsafe_windows_wsl_fallback"] = allow_unsafe_windows_wsl_fallback
     running_payload["progress_interval_seconds"] = progress_interval_seconds
     if _use_unsafe_windows_wsl_fallback(review_cwd, allow_unsafe_windows_wsl_fallback):

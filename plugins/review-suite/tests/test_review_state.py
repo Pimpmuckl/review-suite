@@ -1740,7 +1740,7 @@ def test_review_state_status_adds_followup_action(monkeypatch, tmp_path: Path) -
     assert "--cd" not in cmd
 
 
-def test_review_state_status_adds_allow_dirty_for_dirty_followup(monkeypatch, tmp_path: Path) -> None:
+def test_review_state_status_routes_dirty_followup_to_commit_instruction(monkeypatch, tmp_path: Path) -> None:
     emitted: list[dict[str, object]] = []
     state_dir = tmp_path / "state"
 
@@ -1762,7 +1762,8 @@ def test_review_state_status_adds_allow_dirty_for_dirty_followup(monkeypatch, tm
 
     assert exit_code == 0
     assert "lane" not in emitted[0]["Action"]
-    assert "--allow-dirty" in str(emitted[0]["Action"]["cmd"])
+    assert "cmd" not in emitted[0]["Action"]
+    assert "Commit intended follow-up changes" in str(emitted[0]["Action"]["note"])
 
 
 def test_review_state_status_routes_pending_gate_signoff_decision(monkeypatch, tmp_path: Path) -> None:

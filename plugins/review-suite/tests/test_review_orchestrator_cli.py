@@ -284,7 +284,6 @@ def test_orchestrator_review_helper_uses_phase_prompt_without_predecision_anchor
         review_scope: dict[str, object],
         sqlite_path: Path,
         progress_interval_seconds: int,
-        allow_dirty: bool,
         allow_unsafe_windows_wsl_fallback: bool,
     ) -> dict[str, object]:
         captured["prompt"] = prompt
@@ -329,7 +328,6 @@ def test_orchestrator_review_helper_uses_phase_prompt_without_predecision_anchor
         sqlite_path=tmp_path / "state.sqlite",
         review_scope={"base": "main"},
         task_id="feature/orchestrator-review",
-        allow_dirty=False,
         progress_interval_seconds=1,
         allow_unsafe_windows_wsl_fallback=False,
         step_position=1,
@@ -391,7 +389,6 @@ def test_orchestrator_arena_helper_uses_pr_prompt_for_pr_review(
         review_scope: dict[str, object],
         sqlite_path: Path,
         progress_interval_seconds: int,
-        allow_dirty: bool,
         allow_unsafe_windows_wsl_fallback: bool,
     ) -> dict[str, object]:
         captured["prompt"] = prompt
@@ -434,7 +431,6 @@ def test_orchestrator_arena_helper_uses_pr_prompt_for_pr_review(
         sqlite_path=tmp_path / "state.sqlite",
         review_scope={"base": "main"},
         task_id="feature/orchestrator-arena-pr",
-        allow_dirty=False,
         progress_interval_seconds=1,
         allow_unsafe_windows_wsl_fallback=False,
         step_position=3,
@@ -450,7 +446,6 @@ def test_orchestrator_arena_helper_uses_pr_prompt_for_pr_review(
     assert "Review this PR-ready branch diff" in str(dict(captured["round_payload"])["requested_prompt"])
     assert dict(captured["round_payload"])["review_scope"] == dict(captured["review_scope"])
     assert dict(captured["round_payload"])["review_cwd"] == str(repo)
-    assert dict(captured["round_payload"])["allow_dirty"] is False
     assert dict(captured["round_payload"])["progress_interval_seconds"] == 1
     assert select_calls[0]["task_class"] == "pr_review"
     assert result["lane"] == "review_t3"

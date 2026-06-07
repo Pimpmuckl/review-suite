@@ -27,6 +27,7 @@ Rules:
 - Non-emergency runs may include a deslop sidecar. When emitted and handled/no longer useful, close it only with `review.py --id <id> --deslop-done`.
 - To replace an existing ladder with stricter review, use `review.py --id <id> --restart-mode deep --reason "<why>"` while the original repo/base/branch/head/merge-base still match and the worktree is clean; plain `--mode deep --cd <repo-root>` is not a restart.
 - Review orchestration expects committed review changes. If `git diff` is non-empty but `base..HEAD` is empty, commit intended changes or stash unrelated worktree changes before rerunning.
+- Review commands do not support a dirty-worktree override. Do not append `--allow-dirty`; commit intended review changes first.
 - Read `Output:`, then follow the emitted `Action.cmd`.
 - If the caller session was restarted after reviewer output was produced, run `review.py --id <id> --show-findings` to recover stored reviewer text without launching another review.
 - Classify reviewer output before coding valid findings.

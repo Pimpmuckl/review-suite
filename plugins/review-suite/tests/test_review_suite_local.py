@@ -368,7 +368,7 @@ def test_apply_capacity_cooldowns_keeps_cooldown_when_same_variant_also_complete
 def test_ensure_clean_git_worktree_ignores_untracked_review_suite_scratch(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr("review_suite_local.meaningful_worktree_status_entries", lambda review_cwd: [])
 
-    ensure_clean_git_worktree(tmp_path, allow_dirty=False)
+    ensure_clean_git_worktree(tmp_path)
 
 
 def test_ensure_clean_git_worktree_still_blocks_other_untracked_files(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -378,10 +378,10 @@ def test_ensure_clean_git_worktree_still_blocks_other_untracked_files(monkeypatc
     )
 
     with pytest.raises(ValueError, match="clean worktree"):
-        ensure_clean_git_worktree(tmp_path, allow_dirty=False)
+        ensure_clean_git_worktree(tmp_path)
 
 
-def test_ensure_clean_git_worktree_allows_unrelated_dirty_files_for_base_review(
+def test_ensure_clean_git_worktree_blocks_unrelated_dirty_files_for_base_review(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -389,14 +389,8 @@ def test_ensure_clean_git_worktree_allows_unrelated_dirty_files_for_base_review(
         "review_suite_local.meaningful_worktree_status_entries",
         lambda review_cwd: [{"code": " M", "path": "docs/notes.md"}],
     )
-    monkeypatch.setattr(
-        "review_suite_local.dirty_worktree_scope",
-        lambda review_cwd, base, merge_base_ref=None: {
-            "all_dirty_paths_outside_branch_diff": True,
-            "unrelated_dirty_paths": ["docs/notes.md"],
-        },
-    )
-    ensure_clean_git_worktree(tmp_path, allow_dirty=False, review_scope={"base": "main", "merge_base": "base123"})
+    with pytest.raises(ValueError, match="clean worktree"):
+        ensure_clean_git_worktree(tmp_path, review_scope={"base": "main", "merge_base": "base123"})
 
 
 def test_ensure_clean_git_worktree_still_blocks_related_dirty_files_for_base_review(
@@ -416,10 +410,10 @@ def test_ensure_clean_git_worktree_still_blocks_related_dirty_files_for_base_rev
     )
 
     with pytest.raises(ValueError, match="clean worktree"):
-        ensure_clean_git_worktree(tmp_path, allow_dirty=False, review_scope={"base": "main", "merge_base": "base123"})
+        ensure_clean_git_worktree(tmp_path, review_scope={"base": "main", "merge_base": "base123"})
 
 
-def test_ensure_clean_git_worktree_allows_unrelated_dirty_files_for_flagged_commit_review(
+def test_ensure_clean_git_worktree_blocks_unrelated_dirty_files_for_flagged_commit_review(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -427,24 +421,16 @@ def test_ensure_clean_git_worktree_allows_unrelated_dirty_files_for_flagged_comm
         "review_suite_local.meaningful_worktree_status_entries",
         lambda review_cwd: [{"code": " M", "path": "docs/notes.md"}],
     )
-    monkeypatch.setattr(
-        "review_suite_local.dirty_worktree_scope",
-        lambda review_cwd, base, merge_base_ref=None: {
-            "all_dirty_paths_outside_branch_diff": True,
-            "unrelated_dirty_paths": ["docs/notes.md"],
-        },
-    )
-    ensure_clean_git_worktree(
-        tmp_path,
-        allow_dirty=False,
-        review_scope={
-            "base": "main",
-            "commit": "head-1",
-            "commit_end": "head-2",
-            "merge_base": "base123",
-            "allow_unrelated_dirty_paths": True,
-        },
-    )
+    with pytest.raises(ValueError, match="clean worktree"):
+        ensure_clean_git_worktree(
+            tmp_path,
+            review_scope={
+                "base": "main",
+                "commit": "head-1",
+                "commit_end": "head-2",
+                "merge_base": "base123",
+            },
+        )
 
 
 def test_ensure_clean_git_worktree_blocks_unrelated_dirty_files_for_unflagged_commit_review(
@@ -466,7 +452,6 @@ def test_ensure_clean_git_worktree_blocks_unrelated_dirty_files_for_unflagged_co
     with pytest.raises(ValueError, match="clean worktree"):
         ensure_clean_git_worktree(
             tmp_path,
-            allow_dirty=False,
             review_scope={
                 "base": "main",
                 "commit": "head-1",
