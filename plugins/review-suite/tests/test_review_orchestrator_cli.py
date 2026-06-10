@@ -583,6 +583,65 @@ def test_decision_rejects_ungraded_arena_round(tmp_path: Path) -> None:
         review._apply_decision(state, "clean", state_dir=tmp_path / "state")
 
 
+def test_decision_rejects_blocked_review_round(tmp_path: Path) -> None:
+    state = {
+        "public_id": "rvw_example",
+        "stage": "decision-pending",
+        "pending_action": {"kind": "decision", "round_id": "blocked-round-1", "lane": "review_t1"},
+        "identity": {"branch": "feature/blocked"},
+        "review_progress": {"next_step_index": 1, "completed_steps": []},
+        "rounds": [
+            {
+                "round_id": "blocked-round-1",
+                "lane": "review_t1",
+                "review_blocked": True,
+                "status": "completed",
+                "reviewed_head": "head-1",
+                "runs": [
+                    {
+                        "slot": "alpha",
+                        "review_status": "process_died",
+                        "grade_blocked": True,
+                    }
+                ],
+            }
+        ],
+    }
+
+    with pytest.raises(ValueError, match="blocked review round"):
+        review._apply_decision(state, "clean", state_dir=tmp_path / "state")
+
+
+def test_action_payload_surfaces_recovery_for_blocked_decision_round(tmp_path: Path) -> None:
+    round_state_dir = tmp_path / "state" / "orchestrator" / "review-rounds"
+    state = {
+        "public_id": "rvw_example",
+        "stage": "decision-pending",
+        "pending_action": {"kind": "decision", "round_id": "blocked-round-1", "lane": "review_t1"},
+        "identity": {"branch": "feature/blocked", "base": "main", "cwd": str(tmp_path)},
+        "rounds": [
+            {
+                "round_id": "blocked-round-1",
+                "lane": "review_t1",
+                "review_blocked": True,
+                "status": "completed",
+                "round_state_dir": str(round_state_dir),
+                "runs": [{"slot": "alpha", "grade_blocked": True}],
+            }
+        ],
+    }
+
+    action = review._action_payload(state, state_dir=tmp_path / "state")
+
+    assert action is not None
+    assert "reroll-slot" in str(action["cmd"])
+    assert str(round_state_dir) in str(action["cmd"])
+    assert str(round_state_dir) in str(action["dismiss"])
+    assert "--slot alpha" in str(action["cmd"])
+    assert "--decision" not in str(action["cmd"])
+    assert action["next"].endswith("--id rvw_example")
+
+
 def test_benchmark_grading_required_round_does_not_use_arena_grade_gate(tmp_path: Path) -> None:
     state = {
         "public_id": "rvw_example",

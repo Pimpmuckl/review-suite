@@ -16,9 +16,9 @@ from review_suite_core import (
     format_command,
     gate_config,
     launch_captured_child_process,
+    prepare_codex_review_launch,
     utc_now,
     utc_now_iso,
-    wrapper_launch_cwd,
     write_text,
 )
 from review_suite_local import (
@@ -38,7 +38,6 @@ from review_suite_local import (
     _terminate_process_tree,
     _transport_stalled,
     append_jsonl,
-    build_review_command,
     collect_completed_review_capture,
     ensure_clean_git_worktree,
     format_cooldown_until_for_display,
@@ -60,7 +59,6 @@ from review_suite_local import (
     reviewer_output_heading,
     state_lock,
     total_usage_tokens,
-    use_unsafe_windows_wsl_fallback,
     variant_service_tier,
     write_json,
     aggregate_records,
@@ -184,7 +182,7 @@ def _snapshot_queue_item(item: dict[str, Any]) -> dict[str, Any]:
     for key in ("fallback_attempts", "fallback_for_variant_id", "fallback_reason"):
         if item.get(key) is not None:
             snapshot[key] = item[key]
-    for key in ("pid", "title", "command", "stdout_path", "stderr_path", "started_at"):
+    for key in ("pid", "title", "command", "stdout_path", "stderr_path", "final_message_path", "started_at"):
         if item.get(key) is not None:
             value = item[key]
             snapshot[key] = str(value) if isinstance(value, Path) else value
@@ -490,8 +488,10 @@ def _gate_run_title(*, gate_task_class: str, round_id: str, slot: str, variant_i
 
 
 def _cleanup_paths(run: dict[str, Any]) -> None:
-    for key in ("stdout_path", "stderr_path"):
+    for key in ("stdout_path", "stderr_path", "final_message_path"):
         path = run.get(key)
+        if isinstance(path, str):
+            path = Path(path)
         if not isinstance(path, Path):
             continue
         try:
@@ -911,33 +911,35 @@ def _launch_gate_run(
         variant_id=str(variant["id"]),
         retry_attempts=retry_attempts,
     )
-    command = build_review_command(
+    base_ref = str(review_scope.get("base") or "").strip()
+    commit_ref = str(review_scope.get("commit") or "").strip()
+    launch = prepare_codex_review_launch(
+        tool_name="review-suite",
         model=str(variant["model"]),
         reasoning_effort=str(variant["reasoning_effort"]),
         service_tier=variant_service_tier(variant),
         title=title,
-        review_scope=review_scope,
-        review_cwd=review_cwd,
+        review_root=review_cwd,
+        base=base_ref or None,
+        commit=None if base_ref else commit_ref or None,
+        commit_end=str(review_scope.get("commit_end") or "").strip() or None,
         prompt=prompt,
+        output_prefix=f"{gate_task_class}-{slot}-message-",
         allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
     )
     child = launch_captured_child_process(
-        command=command,
-        cwd=(
-            wrapper_launch_cwd()
-            if use_unsafe_windows_wsl_fallback(review_cwd, allow_unsafe_windows_wsl_fallback)
-            else review_cwd
-        ),
-        stdin_text=prompt if prompt.strip() else None,
+        command=launch.command,
+        cwd=launch.cwd,
+        stdin_text=launch.stdin_text,
         stdout_prefix=f"{gate_task_class}-{slot}-",
     )
-    return {
+    launched = {
         "slot": slot,
         "variant": dict(variant),
         "variant_id": str(variant["id"]),
         "service_tier": variant_service_tier(variant),
         "title": title,
-        "command": command,
+        "command": launch.command,
         "process": child.process,
         "pid": child.process.pid,
         "started_at": utc_now_iso(),
@@ -947,6 +949,9 @@ def _launch_gate_run(
         "retry_attempts": retry_attempts,
         "timed_out": False,
     }
+    if launch.final_message_path is not None:
+        launched["final_message_path"] = launch.final_message_path
+    return launched
 
 
 def _reviewer_run_counts(records: list[dict[str, Any]], gate_task_class: str) -> int:
@@ -1347,6 +1352,7 @@ def run_gate_round(
                 started_at=str(run.get("started_at") or "") or None,
                 sqlite_path=sqlite_path,
                 review_cwd=review_cwd,
+                final_message_path=Path(str(run["final_message_path"])) if run.get("final_message_path") else None,
                 timed_out=bool(run.get("timed_out")),
                 transport_stalled=bool(run.get("transport_stalled")),
             )

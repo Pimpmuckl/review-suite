@@ -252,7 +252,7 @@ def _arena_run_round_command(state: dict[str, Any], payload: dict[str, Any], *, 
     return format_command(command)
 
 
-def _arena_blocked_slots(payload: dict[str, Any]) -> list[str]:
+def _round_blocked_slots(payload: dict[str, Any]) -> list[str]:
     slots: list[str] = []
     for run in list(payload.get("runs") or []):
         if not isinstance(run, dict):
@@ -271,44 +271,63 @@ def _arena_recovery_action(state: dict[str, Any], *, state_dir: Path, public_id:
     round_id = str(pending.get("round_id") or "").strip()
     if not round_id:
         return {"cmd": _review_command(public_id), "note": "Arena recovery is missing round id."}
-    payload = _load_output_round_payload(state_dir, _round_by_id(state, round_id))
+    round_record = _round_by_id(state, round_id)
+    payload = _load_output_round_payload(state_dir, round_record)
+    round_state_dir = _round_action_state_dir(state_dir, round_record)
     next_cmd = _review_command(public_id)
-    slots = _arena_blocked_slots(payload)
+    slots = _round_blocked_slots(payload)
     if slots:
-        reroll = {slot: _arena_reroll_command(state, state_dir=state_dir, round_id=round_id, slot=slot) for slot in slots}
+        reroll = {slot: _arena_reroll_command(state, state_dir=round_state_dir, round_id=round_id, slot=slot) for slot in slots}
         return {
             "cmd": reroll[slots[0]],
             "reroll": reroll,
-            "dismiss": _arena_dismiss_command(state_dir=state_dir, round_id=round_id),
+            "dismiss": _arena_dismiss_command(state_dir=round_state_dir, round_id=round_id),
             "next": next_cmd,
             "note": "Reroll blocked arena slot(s), then rerun this review id. Dismiss reruns the arena step.",
         }
     status = str(payload.get("status") or "").strip()
     if status == "sampled":
         return {
-            "cmd": _arena_run_round_command(state, payload, state_dir=state_dir, round_id=round_id),
-            "dismiss": _arena_dismiss_command(state_dir=state_dir, round_id=round_id),
+            "cmd": _arena_run_round_command(state, payload, state_dir=round_state_dir, round_id=round_id),
+            "dismiss": _arena_dismiss_command(state_dir=round_state_dir, round_id=round_id),
             "next": next_cmd,
             "note": "Run the arena replacement round, then rerun this review id.",
         }
     if status == "running":
         return {
-            "cmd": _arena_resume_command(state_dir=state_dir, round_id=round_id),
-            "dismiss": _arena_dismiss_command(state_dir=state_dir, round_id=round_id),
+            "cmd": _arena_resume_command(state_dir=round_state_dir, round_id=round_id),
+            "dismiss": _arena_dismiss_command(state_dir=round_state_dir, round_id=round_id),
             "next": next_cmd,
             "note": "Resume the arena replacement round, then rerun this review id.",
         }
     if status and status not in {"completed", "dismissed"}:
         return {
-            "cmd": _arena_dismiss_command(state_dir=state_dir, round_id=round_id),
+            "cmd": _arena_dismiss_command(state_dir=round_state_dir, round_id=round_id),
             "next": next_cmd,
             "note": f"Arena replacement round is {status}; dismiss it, then rerun this review id.",
         }
     return {
         "cmd": next_cmd,
-        "dismiss": _arena_dismiss_command(state_dir=state_dir, round_id=round_id),
+        "dismiss": _arena_dismiss_command(state_dir=round_state_dir, round_id=round_id),
         "note": "Arena recovery is ready; rerun this review id.",
     }
+
+
+def _blocked_decision_action(state: dict[str, Any], *, state_dir: Path, public_id: str) -> dict[str, Any] | None:
+    pending = dict(state.get("pending_action") or {})
+    if str(pending.get("kind") or "") != "decision":
+        return None
+    round_id = str(pending.get("round_id") or "").strip()
+    if not round_id:
+        return None
+    round_record = _round_by_id(state, round_id)
+    payload = _load_output_round_payload(state_dir, round_record)
+    if not (bool(round_record.get("review_blocked")) or bool(payload.get("review_blocked")) or _round_blocked_slots(payload)):
+        return None
+    recovery_state = dict(state)
+    recovery_state["stage"] = STAGE_RETRY_REQUESTED
+    recovery_state["pending_action"] = {"kind": "arena-blocked", "round_id": round_id}
+    return _arena_recovery_action(recovery_state, state_dir=state_dir, public_id=public_id)
 
 
 def _pending_grade_payload(state: dict[str, Any], *, state_dir: Path) -> dict[str, Any] | None:
@@ -508,6 +527,18 @@ def _round_state_dir_candidates(state_dir: Path, round_record: dict[str, Any]) -
         candidates.append(Path(round_state_dir))
     candidates.extend([_orchestrator_review_state_dir(state_dir), state_dir])
     return _unique_paths(candidates)
+
+
+def _round_action_state_dir(state_dir: Path, round_record: dict[str, Any]) -> Path:
+    round_state_dir = str(round_record.get("round_state_dir") or "").strip()
+    if round_state_dir:
+        return Path(round_state_dir)
+    round_id = str(round_record.get("round_id") or "").strip()
+    if round_id:
+        for candidate in _round_state_dir_candidates(state_dir, round_record):
+            if (candidate / "rounds" / f"{round_id}.json").exists():
+                return candidate
+    return state_dir
 
 
 def _task_class_for_lane(lane: str) -> str:
@@ -892,6 +923,13 @@ def _apply_decision(state: dict[str, Any], decision: str, *, state_dir: Path) ->
     if _pending_grade_payload(ready_state, state_dir=state_dir) is not None:
         raise ValueError("grade the arena round before recording a clean/findings decision")
     round_payload = _round_by_id(ready_state, round_id)
+    blocked_slots = _round_blocked_slots(round_payload)
+    if bool(round_payload.get("review_blocked")) or blocked_slots:
+        slot_text = f" Blocked slots: {', '.join(blocked_slots)}." if blocked_slots else ""
+        raise ValueError(
+            f"cannot record a {decision} decision for blocked review round {round_id}.{slot_text} "
+            "Rerun or recover the review round before recording a decision."
+        )
     reviewed_head = str(round_payload.get("reviewed_head") or "").strip() or None
     gate = _round_gate(round_payload, lane)
     if decision == DECISION_CLEAN:
@@ -1093,6 +1131,9 @@ def _action_payload(state: dict[str, Any], *, state_dir: Path) -> dict[str, Any]
     if arena_recovery:
         return _with_deslop_done_action(state, arena_recovery, public_id)
     if stage == STAGE_DECISION_PENDING:
+        blocked_action = _blocked_decision_action(state, state_dir=state_dir, public_id=public_id)
+        if blocked_action:
+            return _with_deslop_done_action(state, blocked_action, public_id)
         grade = _arena_grade_command(state, state_dir=state_dir)
         if grade:
             action = {

@@ -29,7 +29,6 @@ from review_suite_local import (
     _transport_hung_after_output,
     _transport_stalled,
     aggregate_records,
-    build_review_command,
     compact_benchmark_run,
     cleanup_stale_ungraded_rounds,
     build_reroll_slot_payload,
@@ -90,58 +89,6 @@ def _roster(*variants: dict[str, object]) -> dict[str, object]:
         },
         "variants": list(variants),
     }
-
-
-def test_build_review_command_includes_service_tier_when_configured(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setattr("review_suite_core.lens_runtime.shutil.which", lambda name: "codex")
-    monkeypatch.setattr("review_suite_core.lens_runtime.validate_codex_runtime", lambda *args, **kwargs: None)
-
-    command = build_review_command(
-        model="gpt-5.5",
-        reasoning_effort="medium",
-        service_tier="fast",
-        title="review-suite::round::alpha::gpt-5.5-medium",
-        review_scope={"base": "main"},
-        review_cwd=tmp_path,
-    )
-
-    assert command[0:2] == ["codex", "review"]
-    assert '-c' in command
-    assert 'service_tier="fast"' in command
-    assert command.index('service_tier="fast"') < command.index("--title")
-
-
-def test_build_review_command_combines_base_with_prompt_stdin(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setattr("review_suite_core.lens_runtime.shutil.which", lambda name: "codex")
-    monkeypatch.setattr("review_suite_core.lens_runtime.validate_codex_runtime", lambda *args, **kwargs: None)
-
-    command = build_review_command(
-        model="gpt-5.5",
-        reasoning_effort="medium",
-        title="review-suite::round::alpha::gpt-5.5-medium",
-        review_scope={"base": "origin/main"},
-        review_cwd=tmp_path,
-        prompt="Review for correctness.",
-    )
-
-    assert command[0:2] == ["codex", "review"]
-    assert command[-3:] == ["--base", "origin/main", "-"]
-
-
-def test_build_review_command_uses_commit_without_inline_diff(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setattr("review_suite_core.lens_runtime.shutil.which", lambda name: "codex")
-    monkeypatch.setattr("review_suite_core.lens_runtime.validate_codex_runtime", lambda *args, **kwargs: None)
-
-    command = build_review_command(
-        model="gpt-5.5",
-        reasoning_effort="medium",
-        title="review-suite::round::alpha::gpt-5.5-medium",
-        review_scope={"commit": "abc123"},
-        review_cwd=tmp_path,
-        prompt="Review for correctness.",
-    )
-
-    assert command[-3:] == ["--commit", "abc123", "-"]
 
 
 def test_service_tier_is_dormant_when_variant_does_not_set_it() -> None:
@@ -1079,10 +1026,13 @@ def test_launch_reviewer_process_writes_prompt_for_native_base_mode(
         captured["proc"] = FakeProc()
         return captured["proc"]
 
-    monkeypatch.setattr("review_suite_local.build_review_command", lambda **kwargs: ["codex", "review", "-"])
     monkeypatch.setattr("review_suite_local.subprocess.Popen", fake_popen)
     monkeypatch.setattr("review_suite_local.time.monotonic", lambda: 12.5)
     monkeypatch.setattr("review_suite_local.utc_now_iso", lambda: "2026-04-21T18:30:00Z")
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime.validated_linear_review_range",
+        lambda cwd, start_ref, end_ref, label: None,
+    )
 
     launched = _launch_reviewer_process(
         round_payload={"round_id": "round-1"},
@@ -1090,14 +1040,19 @@ def test_launch_reviewer_process_writes_prompt_for_native_base_mode(
         variant={"model": "gpt-5.4-mini", "reasoning_effort": "xhigh"},
         review_cwd=tmp_path,
         prompt="manual prompt",
-        review_scope={"base": "main"},
+        review_scope={"base": "main", "commit": "old-head", "commit_end": "new-head"},
         allow_unsafe_windows_wsl_fallback=False,
     )
 
     proc = captured["proc"]
-    assert proc.stdin.writes == ["manual prompt"]
+    assert len(proc.stdin.writes) == 1
+    assert "manual prompt" in proc.stdin.writes[0]
+    assert "base ref `main`" in proc.stdin.writes[0]
+    assert "BEGIN DIFF" not in proc.stdin.writes[0]
     assert proc.stdin.closed is True
     assert launched["pid"] == 4242
+    assert "final_message_path" in launched
+    Path(str(launched["final_message_path"])).unlink(missing_ok=True)
 
 
 def test_print_live_completed_run_includes_terminal_status(capsys) -> None:

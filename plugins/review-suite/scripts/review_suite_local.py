@@ -29,7 +29,6 @@ from rollout_capture import (
 )
 from review_suite_core import (
     EFFECTIVE_BASE_METADATA_KEYS,
-    codex_review_command,
     current_head,
     dirty_worktree_scope,
     effective_base_ref,
@@ -41,11 +40,12 @@ from review_suite_core import (
     meaningful_worktree_status_entries,
     merge_base,
     normalize_cwd,
+    normalize_service_tier,
+    prepare_codex_review_launch,
     use_unsafe_windows_wsl_fallback,
     utc_now,
     utc_now_iso,
     validated_linear_review_range,
-    wrapper_launch_cwd,
     write_text,
 )
 
@@ -89,7 +89,6 @@ CAPACITY_RETRY_DELAY_SECONDS = 10
 CAPACITY_RETRY_MAX_ATTEMPTS = 1
 MULTI_REVIEW_DISPATCH_STAGGER_SECONDS = 5.0
 DEEP_REVIEW_EFFORTS = {"high", "xhigh"}
-SUPPORTED_CODEX_SERVICE_TIERS = {"fast", "flex"}
 REVIEW_STALL_WARNING_SECONDS = 10 * 60
 TRANSPORT_STALL_GRACE_SECONDS = 3 * 60
 TRANSPORT_RECONNECT_PATTERNS = (
@@ -877,15 +876,6 @@ def compute_cost_usd(variant: dict[str, Any], usage: dict[str, Any]) -> float | 
     return round(total, 6)
 
 
-def normalize_service_tier(value: Any) -> str | None:
-    service_tier = str(value or "").strip().lower()
-    if not service_tier:
-        return None
-    if service_tier not in SUPPORTED_CODEX_SERVICE_TIERS:
-        raise ValueError(f"service_tier must be one of: {', '.join(sorted(SUPPORTED_CODEX_SERVICE_TIERS))}")
-    return service_tier
-
-
 def variant_service_tier(variant: dict[str, Any]) -> str | None:
     service_tier = normalize_service_tier(variant.get("service_tier"))
     if not service_tier:
@@ -1181,6 +1171,8 @@ def _run_started_at_datetime(run: dict[str, Any]) -> datetime | None:
 
 
 def _path_stat(path_text: str) -> os.stat_result | None:
+    if not path_text.strip():
+        return None
     path = Path(path_text)
     try:
         return path.stat()
@@ -1190,7 +1182,7 @@ def _path_stat(path_text: str) -> os.stat_result | None:
 
 def _artifact_activity_epoch(run: dict[str, Any]) -> float | None:
     times: list[float] = []
-    for key in ("stdout_path", "stderr_path"):
+    for key in ("stdout_path", "stderr_path", "final_message_path"):
         stat = _path_stat(str(run.get(key) or ""))
         if stat is not None:
             times.append(float(stat.st_mtime))
@@ -1198,8 +1190,11 @@ def _artifact_activity_epoch(run: dict[str, Any]) -> float | None:
 
 
 def _stdout_has_content(run: dict[str, Any]) -> bool:
-    stat = _path_stat(str(run.get("stdout_path") or ""))
-    return bool(stat is not None and int(stat.st_size) > 0)
+    for key in ("stdout_path", "final_message_path"):
+        stat = _path_stat(str(run.get(key) or ""))
+        if stat is not None and int(stat.st_size) > 0:
+            return True
+    return False
 
 
 def _stderr_text_for_run(run: dict[str, Any]) -> str:
@@ -2374,43 +2369,6 @@ def normalize_grade_basis(value: str, rubric: dict[str, Any]) -> str:
     return basis
 
 
-def build_review_command(
-    *,
-    model: str,
-    reasoning_effort: str,
-    service_tier: str | None = None,
-    title: str,
-    review_scope: dict[str, Any],
-    review_cwd: Path,
-    prompt: str = "",
-    allow_unsafe_windows_wsl_fallback: bool = False,
-) -> list[str]:
-    base_ref = str(review_scope.get("base") or "").strip()
-    commit_ref = str(review_scope.get("commit") or "").strip()
-    commit_end = str(review_scope.get("commit_end") or "").strip()
-    if not base_ref and not commit_ref:
-        raise ValueError("review command requires a base or commit target")
-    if base_ref and commit_end:
-        validated_linear_review_range(
-            review_cwd,
-            base_ref,
-            commit_end,
-            label="native commit-range review launch",
-        )
-    return codex_review_command(
-        tool_name="review-suite",
-        model=model,
-        reasoning_effort=reasoning_effort,
-        service_tier=service_tier,
-        title=title,
-        review_root=review_cwd,
-        base=base_ref or None,
-        commit=None if base_ref else commit_ref,
-        prompt=prompt,
-        allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
-    )
-
-
 def ensure_clean_git_worktree(review_cwd: Path, *, review_scope: dict[str, Any] | None = None) -> None:
     try:
         dirty_entries = meaningful_worktree_status_entries(review_cwd)
@@ -2612,6 +2570,21 @@ def _classification_for_run(run: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+def _read_review_artifacts(
+    *,
+    stdout_path: Path,
+    stderr_path: Path,
+    final_message_path: Path | None = None,
+) -> tuple[str, str]:
+    stderr_text = stderr_path.read_text(encoding="utf-8", errors="replace").strip() if stderr_path.exists() else ""
+    reviewer_output = stdout_path.read_text(encoding="utf-8", errors="replace").strip() if stdout_path.exists() else ""
+    if final_message_path is not None and final_message_path.exists():
+        final_message = final_message_path.read_text(encoding="utf-8", errors="replace").strip()
+        if final_message:
+            reviewer_output = final_message
+    return stderr_text, reviewer_output
+
+
 def collect_completed_review_capture(
     *,
     slot: str,
@@ -2624,11 +2597,15 @@ def collect_completed_review_capture(
     started_at: str | None,
     sqlite_path: Path,
     review_cwd: Path,
+    final_message_path: Path | None = None,
     timed_out: bool = False,
     transport_stalled: bool = False,
 ) -> dict[str, Any]:
-    stderr_text = stderr_path.read_text(encoding="utf-8", errors="replace").strip() if stderr_path.exists() else ""
-    reviewer_output = stdout_path.read_text(encoding="utf-8", errors="replace").strip() if stdout_path.exists() else ""
+    stderr_text, reviewer_output = _read_review_artifacts(
+        stdout_path=stdout_path,
+        stderr_path=stderr_path,
+        final_message_path=final_message_path,
+    )
     session_id = extract_session_id(stderr_text)
     review_cwd_text = str(review_cwd)
     thread = None
@@ -2742,9 +2719,12 @@ def collect_completed_review_capture(
 def _load_live_run_artifacts(item: dict[str, Any]) -> tuple[str, str]:
     stderr_path = Path(str(item["stderr_path"]))
     stdout_path = Path(str(item["stdout_path"]))
-    stderr_text = stderr_path.read_text(encoding="utf-8", errors="replace").strip() if stderr_path.exists() else ""
-    reviewer_output = stdout_path.read_text(encoding="utf-8", errors="replace").strip() if stdout_path.exists() else ""
-    return stderr_text, reviewer_output
+    final_path_text = str(item.get("final_message_path") or "").strip()
+    return _read_review_artifacts(
+        stdout_path=stdout_path,
+        stderr_path=stderr_path,
+        final_message_path=Path(final_path_text) if final_path_text else None,
+    )
 
 
 def _summarize_live_run(item: dict[str, Any]) -> dict[str, Any]:
@@ -2840,42 +2820,46 @@ def _launch_reviewer_process(
         variant_id=str(run["variant_id"]),
         capacity_retry_attempts=retry_attempts,
     )
-    command = build_review_command(
+    base_ref = str(review_scope.get("base") or "").strip()
+    commit_ref = str(review_scope.get("commit") or "").strip()
+    service_tier = variant_service_tier(variant)
+    launch = prepare_codex_review_launch(
+        tool_name="review-suite",
         model=variant["model"],
         reasoning_effort=variant["reasoning_effort"],
-        service_tier=variant_service_tier(variant),
+        service_tier=service_tier,
         title=title,
-        review_scope=review_scope,
-        review_cwd=review_cwd,
+        review_root=review_cwd,
+        base=base_ref or None,
+        commit=None if base_ref else commit_ref or None,
+        commit_end=str(review_scope.get("commit_end") or "").strip() or None,
         prompt=prompt,
+        output_prefix=f"review-suite-{run['slot']}-message-",
         allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
     )
     child = launch_captured_child_process(
-        command=command,
-        cwd=(
-            wrapper_launch_cwd()
-            if use_unsafe_windows_wsl_fallback(review_cwd, allow_unsafe_windows_wsl_fallback)
-            else review_cwd
-        ),
-        stdin_text=prompt if prompt.strip() else None,
+        command=launch.command,
+        cwd=launch.cwd,
+        stdin_text=launch.stdin_text,
         stdout_prefix=f"review-suite-{run['slot']}-",
     )
-    run.update(
-        {
-            "title": title,
-            "command": command,
-            "service_tier": variant_service_tier(variant),
-            "pid": child.process.pid,
-            "started_at": utc_now_iso(),
-            "stdout_path": str(child.stdout_path),
-            "stderr_path": str(child.stderr_path),
-        }
-    )
+    updates = {
+        "title": title,
+        "command": launch.command,
+        "service_tier": service_tier,
+        "pid": child.process.pid,
+        "started_at": utc_now_iso(),
+        "stdout_path": str(child.stdout_path),
+        "stderr_path": str(child.stderr_path),
+    }
+    if launch.final_message_path is not None:
+        updates["final_message_path"] = str(launch.final_message_path)
+    run.update(updates)
     return run
 
 
 def _cleanup_run_artifacts(run: dict[str, Any]) -> None:
-    for path_key in ("stdout_path", "stderr_path"):
+    for path_key in ("stdout_path", "stderr_path", "final_message_path"):
         path_value = str(run.get(path_key) or "").strip()
         if not path_value:
             continue
@@ -2887,7 +2871,7 @@ def _cleanup_run_artifacts(run: dict[str, Any]) -> None:
 
 def _strip_live_run_transient_fields(run: dict[str, Any]) -> dict[str, Any]:
     cleaned = deepcopy(run)
-    for key in ("pid", "stdout_path", "stderr_path"):
+    for key in ("pid", "stdout_path", "stderr_path", "final_message_path"):
         cleaned.pop(key, None)
     return cleaned
 
@@ -2898,6 +2882,7 @@ def _collect_completed_run_from_artifacts(
     indexed: dict[str, dict[str, Any]],
     sqlite_path: Path,
     review_cwd: Path,
+    transport_stalled: bool = False,
 ) -> dict[str, Any]:
     variant_id = str(item["variant_id"])
     return collect_completed_review_capture(
@@ -2911,6 +2896,8 @@ def _collect_completed_run_from_artifacts(
         started_at=str(item.get("started_at") or "") or None,
         sqlite_path=sqlite_path,
         review_cwd=review_cwd,
+        final_message_path=Path(str(item["final_message_path"])) if item.get("final_message_path") else None,
+        transport_stalled=transport_stalled,
     )
 
 
@@ -3164,27 +3151,12 @@ def collect_round_results(
                 last_progress = time.monotonic()
                 restarted_capacity_run = True
                 break
-            terminal_summary = (
-                collect_completed_review_capture(
-                    slot=str(item["slot"]),
-                    variant_id=str(item["variant_id"]),
-                    variant=indexed[str(item["variant_id"])],
-                    title=str(item["title"]),
-                    command=list(item.get("command") or []),
-                    stdout_path=Path(str(item["stdout_path"])),
-                    stderr_path=Path(str(item["stderr_path"])),
-                    started_at=str(item.get("started_at") or "") or None,
-                    sqlite_path=sqlite_path,
-                    review_cwd=review_cwd,
-                    transport_stalled=True,
-                )
-                if bool(item.get("transport_stalled"))
-                else _collect_completed_run_from_artifacts(
-                    item=item,
-                    indexed=indexed,
-                    sqlite_path=sqlite_path,
-                    review_cwd=review_cwd,
-                )
+            terminal_summary = _collect_completed_run_from_artifacts(
+                item=item,
+                indexed=indexed,
+                sqlite_path=sqlite_path,
+                review_cwd=review_cwd,
+                transport_stalled=bool(item.get("transport_stalled")),
             )
             item.update(terminal_summary)
             write_round(state_dir, round_payload)
@@ -3243,25 +3215,12 @@ def collect_round_results(
             completed_runs.append(_strip_live_run_transient_fields(_finalized_run_summary(item)))
             continue
         completed_runs.append(
-            collect_completed_review_capture(
-                slot=str(item["slot"]),
-                variant_id=str(item["variant_id"]),
-                variant=indexed[str(item["variant_id"])],
-                title=str(item["title"]),
-                command=list(item.get("command") or []),
-                stdout_path=Path(str(item["stdout_path"])),
-                stderr_path=Path(str(item["stderr_path"])),
-                started_at=str(item.get("started_at") or "") or None,
-                sqlite_path=sqlite_path,
-                review_cwd=review_cwd,
-                transport_stalled=bool(item.get("transport_stalled")),
-            )
-            if bool(item.get("transport_stalled"))
-            else _collect_completed_run_from_artifacts(
+            _collect_completed_run_from_artifacts(
                 item=item,
                 indexed=indexed,
                 sqlite_path=sqlite_path,
                 review_cwd=review_cwd,
+                transport_stalled=bool(item.get("transport_stalled")),
             )
         )
         _cleanup_run_artifacts(item)

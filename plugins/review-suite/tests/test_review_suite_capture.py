@@ -921,6 +921,50 @@ def test_collect_completed_review_capture_uses_started_at_for_title_fallback(
     assert observed["created_after"] == review_suite_local._started_at_epoch_seconds(started_at) - 5
 
 
+def test_collect_completed_review_capture_prefers_final_message_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    stdout_path = tmp_path / "review.stdout.txt"
+    stderr_path = tmp_path / "review.stderr.txt"
+    final_path = tmp_path / "review.final.txt"
+    stdout_path.write_text("", encoding="utf-8")
+    stderr_path.write_text("", encoding="utf-8")
+    final_path.write_text("No findings from output file.\n", encoding="utf-8")
+
+    monkeypatch.setattr(review_suite_local, "find_thread_by_id", lambda **_: None)
+    monkeypatch.setattr(review_suite_local, "find_review_child_thread", lambda **_: None)
+    monkeypatch.setattr(review_suite_local, "find_thread_by_title", lambda **_: None)
+    monkeypatch.setattr(review_suite_local, "enrich_thread_record", lambda thread: {})
+
+    variant = {
+        "id": "gpt-5.4-mini-medium",
+        "model": "gpt-5.4-mini",
+        "reasoning_effort": "medium",
+        "pricing": {
+            "input_per_million_usd": 0.75,
+            "cached_input_per_million_usd": 0.075,
+            "output_per_million_usd": 4.5,
+        },
+    }
+
+    capture = review_suite_local.collect_completed_review_capture(
+        slot="review-1",
+        variant_id="gpt-5.4-mini-medium",
+        variant=variant,
+        title="local-review::repo::review-1",
+        command=["codex", "exec"],
+        stdout_path=stdout_path,
+        stderr_path=stderr_path,
+        started_at="2026-04-13T10:00:00Z",
+        sqlite_path=tmp_path / "state_5.sqlite",
+        review_cwd=tmp_path,
+        final_message_path=final_path,
+    )
+
+    assert capture["review_status"] == "completed"
+    assert capture["reviewer_output"] == "No findings from output file."
+
+
 def test_rollout_capture_missing_threads_table_returns_none(tmp_path: Path) -> None:
     sqlite_path = tmp_path / "state_5.sqlite"
     sqlite3.connect(sqlite_path).close()

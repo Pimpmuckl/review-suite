@@ -4,6 +4,7 @@ import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -1534,7 +1535,15 @@ def test_launch_gate_run_preserves_retry_attempts(monkeypatch, tmp_path: Path) -
             self.stdin = None
 
     monkeypatch.setattr("review_gate.subprocess.Popen", FakeProc)
-    monkeypatch.setattr("review_gate.build_review_command", lambda **kwargs: ["codex", "review"])
+    monkeypatch.setattr(
+        "review_gate.prepare_codex_review_launch",
+        lambda **kwargs: SimpleNamespace(
+            command=["codex", "review"],
+            cwd=tmp_path,
+            stdin_text=None,
+            final_message_path=None,
+        ),
+    )
 
     run = _launch_gate_run(
         gate_task_class="phase_gate",
