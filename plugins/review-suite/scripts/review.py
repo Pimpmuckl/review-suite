@@ -22,6 +22,8 @@ from review_suite_core import (
     current_branch,
     current_head,
     cwd_path_from_normalized,
+    EFFECTIVE_BASE_METADATA_KEYS,
+    effective_base_ref,
     emit_error,
     emit_toon,
     format_command,
@@ -746,7 +748,9 @@ def _create_or_resume_cycle(*, args: argparse.Namespace, state_dir: Path) -> dic
     review_root = resolve_repo_root(args.cd)
     head = current_head(review_root)
     branch = current_branch(review_root)
-    base = _base_arg(args)
+    requested_base = _base_arg(args)
+    base_info = effective_base_ref(review_root, requested_base)
+    base = str(base_info["base"])
     merge_base_head = merge_base(review_root, base, "HEAD")
     config = load_config(state_dir)
     resolution = resolve_orchestrator_profile(config, mode=str(args.mode), selection=_configured_selection(config))
@@ -763,6 +767,11 @@ def _create_or_resume_cycle(*, args: argparse.Namespace, state_dir: Path) -> dic
         deslop_enabled=resolution.profile.deslop_enabled,
         cycle_token=str(args.fresh_token or "").strip() or None,
     )
+    if str(base_info["requested_base"]) != base:
+        state["identity"]["requested_base"] = str(base_info["requested_base"])
+    for key in EFFECTIVE_BASE_METADATA_KEYS:
+        if key in base_info:
+            state["identity"][key] = base_info[key]
     existing = load_cycle_by_key(state_dir, str(state["cycle_key"]))
     if existing is not None:
         return existing

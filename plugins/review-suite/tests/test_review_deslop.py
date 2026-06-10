@@ -36,43 +36,21 @@ def test_emit_output_only_treats_uninspectable_success_as_failure(capsys) -> Non
     assert capsys.readouterr().out == f"{body}\n"
 
 
-def test_target_diff_artifact_uses_merge_base_for_base_reviews(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    captured: dict[str, object] = {}
-
-    monkeypatch.setattr(review_deslop, "merge_base", lambda review_root, base, head: "merge-base-sha")
-
-    def fake_diff_artifact(review_root: Path, start_ref: str, end_ref: str = "HEAD") -> str:
-        captured["diff"] = (review_root, start_ref, end_ref)
-        return "diff --git a/base b/base\n"
-
-    monkeypatch.setattr(review_deslop, "diff_artifact", fake_diff_artifact)
-
-    artifact = review_deslop.target_diff_artifact(
-        review_root=tmp_path,
-        base="main",
-        commit=None,
-        commit_end=None,
-    )
-
-    assert artifact == "diff --git a/base b/base\n"
-    assert captured["diff"] == (tmp_path, "merge-base-sha", "HEAD")
-
-
-def test_main_embeds_base_diff_for_deslop_review(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_main_uses_native_base_deslop_review(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     captured: dict[str, object] = {}
 
     monkeypatch.setattr(review_deslop, "resolve_repo_root", lambda cd: tmp_path)
     monkeypatch.setattr(review_deslop, "use_unsafe_windows_wsl_fallback", lambda *args, **kwargs: False)
-    monkeypatch.setattr(review_deslop, "merge_base", lambda review_root, base, head: "merge-base-sha")
-    monkeypatch.setattr(review_deslop, "diff_artifact", lambda review_root, start_ref, end_ref="HEAD": "diff --git a/x b/x\n")
+    monkeypatch.setattr(review_deslop, "ensure_clean_git_worktree", lambda *args, **kwargs: None)
+    monkeypatch.setattr(review_deslop, "effective_base_ref", lambda review_root, base: {"base": "origin/main", "requested_base": base})
     monkeypatch.setattr(
         review_deslop,
         "lens_model_config",
         lambda name: SimpleNamespace(model="gpt-5.5", reasoning_effort="medium", service_tier=None),
     )
 
-    def fake_run_codex(**kwargs):
-        captured["run_codex"] = kwargs
+    def fake_run_codex_review(**kwargs):
+        captured["run_codex_review"] = kwargs
         return {
             "returncode": 0,
             "stdout": "",
@@ -83,7 +61,7 @@ def test_main_embeds_base_diff_for_deslop_review(monkeypatch: pytest.MonkeyPatch
             "timed_out": False,
         }
 
-    monkeypatch.setattr(review_deslop, "run_codex", fake_run_codex)
+    monkeypatch.setattr(review_deslop, "run_codex_review", fake_run_codex_review)
 
     def fake_emit_result(**kwargs):
         captured["emit_result"] = kwargs
@@ -94,26 +72,42 @@ def test_main_embeds_base_diff_for_deslop_review(monkeypatch: pytest.MonkeyPatch
 
     assert review_deslop.main() == 0
 
-    assert captured["run_codex"]["review_root"] == tmp_path
-    assert "redundant code" in str(captured["run_codex"]["prompt"])
-    assert "=== BEGIN DIFF ===" in str(captured["run_codex"]["prompt"])
-    assert "diff --git a/x b/x" in str(captured["run_codex"]["prompt"])
+    assert captured["run_codex_review"]["review_root"] == tmp_path
+    assert captured["run_codex_review"]["base"] == "origin/main"
+    assert captured["run_codex_review"].get("commit") is None
+    prompt = str(captured["run_codex_review"]["prompt"])
+    assert "base branch `origin/main`" in prompt
+    assert "redundant code" in prompt
+    assert "=== BEGIN DIFF ===" not in prompt
+    assert "diff --git" not in prompt
 
 
-def test_main_precomputes_diff_for_commit_ranges(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_main_uses_native_base_for_linear_commit_ranges(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     captured: dict[str, object] = {}
 
     monkeypatch.setattr(review_deslop, "resolve_repo_root", lambda cd: tmp_path)
     monkeypatch.setattr(review_deslop, "use_unsafe_windows_wsl_fallback", lambda *args, **kwargs: False)
-    monkeypatch.setattr(review_deslop, "diff_artifact", lambda review_root, start_ref, end_ref: "diff --git a/x b/x\n")
+    monkeypatch.setattr(review_deslop, "ensure_clean_git_worktree", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         review_deslop,
         "lens_model_config",
         lambda name: SimpleNamespace(model="gpt-5.5", reasoning_effort="medium", service_tier=None),
     )
 
-    def fake_run_codex(**kwargs):
-        captured["run_codex"] = kwargs
+    monkeypatch.setattr(
+        review_deslop,
+        "validated_linear_review_range",
+        lambda review_root, start, end, label: {
+            "start": start,
+            "end": end,
+            "resolved_start": f"{start}-resolved",
+            "resolved_end": f"{end}-resolved",
+            "head": f"{end}-resolved",
+        },
+    )
+
+    def fake_run_codex_review(**kwargs):
+        captured["run_codex_review"] = kwargs
         return {
             "returncode": 0,
             "stdout": "",
@@ -124,7 +118,7 @@ def test_main_precomputes_diff_for_commit_ranges(monkeypatch: pytest.MonkeyPatch
             "timed_out": False,
         }
 
-    monkeypatch.setattr(review_deslop, "run_codex", fake_run_codex)
+    monkeypatch.setattr(review_deslop, "run_codex_review", fake_run_codex_review)
 
     def fake_emit_result(**kwargs):
         captured["emit_result"] = kwargs
@@ -135,4 +129,9 @@ def test_main_precomputes_diff_for_commit_ranges(monkeypatch: pytest.MonkeyPatch
 
     assert review_deslop.main() == 0
 
-    assert "=== BEGIN DIFF ===" in str(captured["run_codex"]["prompt"])
+    assert captured["run_codex_review"]["base"] == "abc123"
+    assert captured["run_codex_review"].get("commit") is None
+    prompt = str(captured["run_codex_review"]["prompt"])
+    assert "commit range `abc123..def456`" in prompt
+    assert "=== BEGIN DIFF ===" not in prompt
+    assert "diff --git" not in prompt

@@ -35,10 +35,9 @@ from review_suite_local import (
     _run_is_finalized,
     aggregate_records,
     append_record_if_new,
-    _base_branch_review_artifact,
-    build_manual_review_prompt,
     build_phase_instructions,
     build_pr_instructions,
+    build_local_review_request,
     build_record_from_grade,
     build_reroll_slot_payload,
     compact_benchmark_record,
@@ -54,8 +53,6 @@ from review_suite_local import (
     launch_round,
     load_operational_state,
     load_roster,
-    _manual_review_request,
-    _combined_review_instructions,
     normalize_record_review_cwd_value,
     load_round,
     load_rubric,
@@ -248,17 +245,6 @@ def build_parser() -> argparse.ArgumentParser:
     costs.add_argument("--codex-home")
     costs.add_argument("--output")
     costs.add_argument("--json", action="store_true")
-
-    run_manual = sub.add_parser("run-manual-round")
-    run_manual.add_argument("--round-id", required=True)
-    run_manual.add_argument("--cd")
-    run_manual.add_argument("--roster", default=str(default_roster_path()))
-    run_manual.add_argument("--state-dir", default=str(default_state_dir()))
-    run_manual.add_argument("--sqlite-path", default=str(Path.home() / ".codex" / "state_5.sqlite"))
-    run_manual.add_argument("--diff-file", required=True)
-    run_manual.add_argument("--instructions")
-    run_manual.add_argument("--instructions-file")
-    run_manual.add_argument("--wsl", action="store_true")
 
     grade = sub.add_parser("grade")
     grade.add_argument("--round-id")
@@ -908,15 +894,12 @@ def _orchestrator_review_request(*, review_cwd: Path, base: str, task_class: str
     instruction_builder = instruction_builders.get(task_class)
     if instruction_builder is None:
         raise ValueError(f"unsupported orchestrator arena task_class: {task_class}")
-    diff_text, review_scope, target_label = _base_branch_review_artifact(review_cwd=review_cwd, base=base)
-    request = _manual_review_request(
-        review_scope=review_scope,
-        target_label=target_label,
-        instructions=_combined_review_instructions(
-            standard_instructions=instruction_builder(target_label),
-            custom_instructions=custom_instructions,
-        ),
-        diff_text=diff_text,
+    request = build_local_review_request(
+        review_cwd=review_cwd,
+        base=base,
+        commit_values=None,
+        instruction_builder=instruction_builder,
+        custom_instructions=custom_instructions or "",
     )
     if not request.prompt.strip():
         raise ValueError(f"orchestrator review requires a non-empty {task_class} prompt")
@@ -1002,7 +985,6 @@ def run_orchestrated_arena_round(
         task_class=task_class,
         custom_instructions=custom_instructions,
     )
-    ensure_clean_git_worktree(review_cwd, review_scope=request.review_scope)
     _validate_benchmarked_review_runtime(
         review_cwd=review_cwd,
         allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
@@ -2236,59 +2218,6 @@ def cmd_costs(args: argparse.Namespace) -> int:
     return 0
 
 
-def _load_manual_instructions(args: argparse.Namespace) -> str:
-    if args.instructions and args.instructions_file:
-        raise ValueError("use either --instructions or --instructions-file")
-    if args.instructions_file:
-        return Path(args.instructions_file).read_text(encoding="utf-8")
-    if args.instructions:
-        return args.instructions
-    raise ValueError("run-manual-round requires --instructions or --instructions-file")
-
-
-def cmd_run_manual_round(args: argparse.Namespace) -> int:
-    review_cwd = _resolve_review_cwd(args.cd)
-    print(
-        f"[review-suite] input_repo={review_cwd} effective_cwd={effective_execution_cwd(review_cwd, bool(args.wsl))} cwd={Path.cwd()}",
-        file=sys.stderr,
-        flush=True,
-    )
-    roster = load_roster(Path(args.roster))
-    state_dir = Path(args.state_dir)
-    payload = load_round(state_dir, args.round_id)
-    instructions = _load_manual_instructions(args)
-    diff_text = Path(args.diff_file).read_text(encoding="utf-8")
-    prompt = build_manual_review_prompt(instructions=instructions, diff_text=diff_text)
-    completed = run_round(
-        round_payload=payload,
-        roster=roster,
-        state_dir=state_dir,
-        review_cwd=review_cwd,
-        prompt=prompt,
-        review_scope={},
-        sqlite_path=Path(args.sqlite_path),
-        progress_interval_seconds=DEFAULT_PROGRESS_INTERVAL_SECONDS,
-        allow_unsafe_windows_wsl_fallback=bool(args.wsl),
-    )
-    write_round(state_dir, completed)
-    result = public_round_result(
-        completed,
-        output_slots=_visible_completed_output_slots(
-            previous_payload=payload,
-            completed_payload=completed,
-            show_all_when_gradeable=False,
-        ),
-    )
-    _print_findings(completed)
-    emit_toon(
-        _completed_round_payload(
-            round_result=result,
-            manual=True,
-        )
-    )
-    return 0
-
-
 def cmd_grade(args: argparse.Namespace) -> int:
     roster = load_roster(Path(args.roster))
     rubric = load_rubric(Path(args.rubric))
@@ -2484,8 +2413,6 @@ def main() -> int:
             return cmd_costs(args)
         if args.command == "reroll-slot":
             return cmd_reroll_slot(args)
-        if args.command == "run-manual-round":
-            return cmd_run_manual_round(args)
         if args.command == "grade":
             return cmd_grade(args)
         if args.command == "dismiss-round":

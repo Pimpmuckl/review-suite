@@ -14,10 +14,12 @@ from .lens_runtime import (
     DEFAULT_REASONING_EFFORT,
     DEFAULT_TIMEOUT_SECONDS,
     WRAPPER_SESSION_LOG_FILENAME,
+    codex_review_command,
     emit_result,
     progress_heartbeat_line,
     record_wrapper_session,
     run_codex,
+    run_codex_review,
 )
 from .paths import cwd_path_from_normalized, normalize_cwd, resolve_repo_root, utc_now, utc_now_iso
 from .process_runtime import (
@@ -27,6 +29,7 @@ from .process_runtime import (
     wait_for_captured_child_process,
 )
 from .workflow_state import (
+    EFFECTIVE_BASE_METADATA_KEYS,
     anchor_updates_branch_state,
     branch_diff_paths,
     classify_delta_recommendation,
@@ -35,6 +38,8 @@ from .workflow_state import (
     diff_artifact,
     diff_stats,
     dirty_worktree_scope,
+    effective_base_ref,
+    has_committed_diff,
     has_worktree_changes,
     inspect_workflow_status,
     is_ancestor,
@@ -43,6 +48,8 @@ from .workflow_state import (
     record_review_anchor,
     resolve_ref,
     resolve_reviewed_head,
+    upstream_ref,
+    validated_linear_review_range,
     worktree_diff_artifact,
     worktree_diff_stats,
     worktree_status_entries,
@@ -51,6 +58,7 @@ from .workflow_state import (
 
 __all__ = [
     "DEFAULT_MODEL",
+    "EFFECTIVE_BASE_METADATA_KEYS",
     "DEFAULT_PROGRESS_INTERVAL_SECONDS",
     "DEFAULT_REASONING_EFFORT",
     "DEFAULT_TIMEOUT_SECONDS",
@@ -60,6 +68,7 @@ __all__ = [
     "CapturedChildWaitResult",
     "GateConfig",
     "LensModelConfig",
+    "codex_review_command",
     "effective_execution_cwd",
     "emit_error",
     "emit_result",
@@ -75,6 +84,8 @@ __all__ = [
     "diff_artifact",
     "diff_stats",
     "dirty_worktree_scope",
+    "effective_base_ref",
+    "has_committed_diff",
     "has_worktree_changes",
     "inspect_workflow_status",
     "is_ancestor",
@@ -91,8 +102,11 @@ __all__ = [
     "resolve_ref",
     "resolve_repo_root",
     "resolve_reviewed_head",
+    "upstream_ref",
+    "validated_linear_review_range",
     "running_in_wsl",
     "run_codex",
+    "run_codex_review",
     "use_unsafe_windows_wsl_fallback",
     "worktree_diff_artifact",
     "worktree_diff_stats",

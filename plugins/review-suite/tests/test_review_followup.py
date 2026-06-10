@@ -47,6 +47,8 @@ def test_main_uses_recorded_anchor_and_records_new_followup_anchor(monkeypatch, 
     monkeypatch.setattr(review_followup, "resolve_repo_root", lambda cd: tmp_path)
     monkeypatch.setattr(review_followup, "ensure_clean_git_worktree", lambda *args, **kwargs: None)
     monkeypatch.setattr(review_followup, "use_unsafe_windows_wsl_fallback", lambda *args, **kwargs: False)
+    monkeypatch.setattr(review_followup, "effective_base_ref", lambda review_root, base: {"base": base, "requested_base": base})
+    monkeypatch.setattr(review_followup, "has_committed_diff", lambda review_root, start, end: True)
     monkeypatch.setattr(
         review_followup,
         "inspect_workflow_status",
@@ -58,9 +60,20 @@ def test_main_uses_recorded_anchor_and_records_new_followup_anchor(monkeypatch, 
     )
     monkeypatch.setattr(review_followup, "current_head", lambda review_root: "def456")
     monkeypatch.setattr(review_followup, "merge_base", lambda review_root, base: "base123")
-    monkeypatch.setattr(review_followup, "diff_artifact", lambda review_root, start_ref, end_ref: "diff --git a/x b/x\n")
-    def fake_run_codex(**kwargs):
+    monkeypatch.setattr(
+        review_followup,
+        "validated_linear_review_range",
+        lambda review_root, start, end, label: {
+            "start": start,
+            "end": end,
+            "resolved_start": start,
+            "resolved_end": end,
+            "head": end,
+        },
+    )
+    def fake_run_codex_review(**kwargs):
         captured["prompt"] = kwargs["prompt"]
+        captured["review_base"] = kwargs["base"]
         return {
             "returncode": 0,
             "stdout": "",
@@ -71,7 +84,7 @@ def test_main_uses_recorded_anchor_and_records_new_followup_anchor(monkeypatch, 
             "timed_out": False,
         }
 
-    monkeypatch.setattr(review_followup, "run_codex", fake_run_codex)
+    monkeypatch.setattr(review_followup, "run_codex_review", fake_run_codex_review)
     monkeypatch.setattr(review_followup, "record_review_anchor", lambda **kwargs: captured.setdefault("anchor", kwargs) or {})
 
     def fake_emit_result(**kwargs):
@@ -98,10 +111,142 @@ def test_main_uses_recorded_anchor_and_records_new_followup_anchor(monkeypatch, 
     assert "abc123" in str(captured["prompt"])
     assert "do not stop after the first issue" in str(captured["prompt"])
     assert "unbounded agent-context injection" in str(captured["prompt"])
+    assert "=== BEGIN DIFF ===" not in str(captured["prompt"])
+    assert captured["review_base"] == "abc123"
     assert captured["anchor"]["lane"] == "review-followup"
     assert captured["anchor"]["reviewed_head"] == "def456"
     assert captured["anchor"]["review_scope"]["commit"] == "abc123"
+    assert captured["anchor"]["review_scope"]["base"] == "abc123"
+    assert captured["anchor"]["review_scope"]["branch_base"] == "main"
     assert captured["anchor"]["review_scope"]["merge_base"] == "base123"
+
+
+def test_main_records_effective_branch_base_for_followup_anchor(monkeypatch, tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+    status_bases: list[str] = []
+
+    monkeypatch.setattr(review_followup, "resolve_repo_root", lambda cd: tmp_path)
+    monkeypatch.setattr(review_followup, "ensure_clean_git_worktree", lambda *args, **kwargs: None)
+    monkeypatch.setattr(review_followup, "use_unsafe_windows_wsl_fallback", lambda *args, **kwargs: False)
+    monkeypatch.setattr(
+        review_followup,
+        "effective_base_ref",
+        lambda review_root, base: {
+            "base": "origin/main",
+            "requested_base": "main",
+            "base_upstream": "origin/main",
+            "requested_base_head": "old-main",
+            "effective_base_head": "new-main",
+            "base_ref_stale": True,
+        },
+    )
+
+    def fake_inspect_workflow_status(**kwargs):
+        status_bases.append(str(kwargs["base"]))
+        return {
+            "status": "ok",
+            "recommendation": "review-followup",
+            "last_reviewed_head": "abc123",
+        }
+
+    monkeypatch.setattr(review_followup, "inspect_workflow_status", fake_inspect_workflow_status)
+    monkeypatch.setattr(review_followup, "current_head", lambda review_root: "def456")
+    monkeypatch.setattr(review_followup, "merge_base", lambda review_root, base: f"merge-base-for-{base}")
+    monkeypatch.setattr(review_followup, "has_committed_diff", lambda review_root, start, end: True)
+    monkeypatch.setattr(
+        review_followup,
+        "validated_linear_review_range",
+        lambda review_root, start, end, label: {
+            "start": start,
+            "end": end,
+            "resolved_start": start,
+            "resolved_end": end,
+            "head": end,
+        },
+    )
+    monkeypatch.setattr(
+        review_followup,
+        "run_codex_review",
+        lambda **kwargs: {
+            "returncode": 0,
+            "stdout": "",
+            "stderr": "",
+            "final_message": "No findings.",
+            "session_id": "sess-1",
+            "elapsed_seconds": 1.2,
+            "timed_out": False,
+        },
+    )
+    monkeypatch.setattr(review_followup, "record_review_anchor", lambda **kwargs: captured.setdefault("anchor", kwargs) or {})
+    monkeypatch.setattr(review_followup, "emit_result", lambda **kwargs: 0)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "review_followup.py",
+            "--base",
+            "main",
+            "--note",
+            "invariant: branch fix must update the owning state machine",
+        ],
+    )
+
+    assert review_followup.main() == 0
+    assert status_bases == ["origin/main", "origin/main"]
+    assert captured["anchor"]["base"] == "origin/main"
+    assert captured["anchor"]["review_scope"]["base"] == "abc123"
+    assert captured["anchor"]["review_scope"]["branch_base"] == "origin/main"
+    assert captured["anchor"]["review_scope"]["requested_base"] == "main"
+    assert captured["anchor"]["review_scope"]["merge_base"] == "merge-base-for-origin/main"
+    assert captured["anchor"]["review_scope"]["base_upstream"] == "origin/main"
+    assert captured["anchor"]["review_scope"]["base_ref_stale"] is True
+
+
+def test_main_rejects_empty_followup_interdiff(monkeypatch, tmp_path: Path) -> None:
+    errors: list[tuple[str, dict[str, object]]] = []
+
+    monkeypatch.setattr(review_followup, "resolve_repo_root", lambda cd: tmp_path)
+    monkeypatch.setattr(review_followup, "use_unsafe_windows_wsl_fallback", lambda *args, **kwargs: False)
+    monkeypatch.setattr(review_followup, "effective_base_ref", lambda review_root, base: {"base": base, "requested_base": base})
+    monkeypatch.setattr(
+        review_followup,
+        "inspect_workflow_status",
+        lambda **kwargs: {
+            "status": "ok",
+            "recommendation": "review-followup",
+            "last_reviewed_head": "abc123",
+        },
+    )
+    monkeypatch.setattr(review_followup, "current_head", lambda review_root: "def456")
+    monkeypatch.setattr(
+        review_followup,
+        "validated_linear_review_range",
+        lambda review_root, start, end, label: {
+            "start": start,
+            "end": end,
+            "resolved_start": start,
+            "resolved_end": end,
+            "head": end,
+        },
+    )
+    monkeypatch.setattr(review_followup, "has_committed_diff", lambda review_root, start, end: False)
+    monkeypatch.setattr(review_followup, "run_codex_review", lambda **kwargs: (_ for _ in ()).throw(AssertionError("review should not run")))
+    monkeypatch.setattr(review_followup, "emit_error", lambda message, **kwargs: errors.append((message, dict(kwargs))) or 2)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "review_followup.py",
+            "--base",
+            "main",
+            "--note",
+            "invariant: branch fix must update the owning state machine",
+        ],
+    )
+
+    assert review_followup.main() == 2
+    assert "no committed diff" in errors[0][0]
+    assert errors[0][1]["status"] == "usage_error"
 
 
 def test_main_rejects_allow_dirty_flag(monkeypatch) -> None:

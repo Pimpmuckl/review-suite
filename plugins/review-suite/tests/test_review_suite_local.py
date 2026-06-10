@@ -93,8 +93,8 @@ def _roster(*variants: dict[str, object]) -> dict[str, object]:
 
 
 def test_build_review_command_includes_service_tier_when_configured(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setattr("review_suite_local.shutil.which", lambda name: "codex")
-    monkeypatch.setattr("review_suite_local._validate_wsl_codex_runtime", lambda *args, **kwargs: None)
+    monkeypatch.setattr("review_suite_core.lens_runtime.shutil.which", lambda name: "codex")
+    monkeypatch.setattr("review_suite_core.lens_runtime.validate_codex_runtime", lambda *args, **kwargs: None)
 
     command = build_review_command(
         model="gpt-5.5",
@@ -109,6 +109,39 @@ def test_build_review_command_includes_service_tier_when_configured(monkeypatch:
     assert '-c' in command
     assert 'service_tier="fast"' in command
     assert command.index('service_tier="fast"') < command.index("--title")
+
+
+def test_build_review_command_combines_base_with_prompt_stdin(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("review_suite_core.lens_runtime.shutil.which", lambda name: "codex")
+    monkeypatch.setattr("review_suite_core.lens_runtime.validate_codex_runtime", lambda *args, **kwargs: None)
+
+    command = build_review_command(
+        model="gpt-5.5",
+        reasoning_effort="medium",
+        title="review-suite::round::alpha::gpt-5.5-medium",
+        review_scope={"base": "origin/main"},
+        review_cwd=tmp_path,
+        prompt="Review for correctness.",
+    )
+
+    assert command[0:2] == ["codex", "review"]
+    assert command[-3:] == ["--base", "origin/main", "-"]
+
+
+def test_build_review_command_uses_commit_without_inline_diff(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("review_suite_core.lens_runtime.shutil.which", lambda name: "codex")
+    monkeypatch.setattr("review_suite_core.lens_runtime.validate_codex_runtime", lambda *args, **kwargs: None)
+
+    command = build_review_command(
+        model="gpt-5.5",
+        reasoning_effort="medium",
+        title="review-suite::round::alpha::gpt-5.5-medium",
+        review_scope={"commit": "abc123"},
+        review_cwd=tmp_path,
+        prompt="Review for correctness.",
+    )
+
+    assert command[-3:] == ["--commit", "abc123", "-"]
 
 
 def test_service_tier_is_dormant_when_variant_does_not_set_it() -> None:
@@ -1018,7 +1051,7 @@ def test_maybe_retry_capacity_run_emits_retry_notice(monkeypatch: pytest.MonkeyP
     assert launches
 
 
-def test_launch_reviewer_process_writes_manual_prompt_for_manual_base_mode(
+def test_launch_reviewer_process_writes_prompt_for_native_base_mode(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -1057,7 +1090,7 @@ def test_launch_reviewer_process_writes_manual_prompt_for_manual_base_mode(
         variant={"model": "gpt-5.4-mini", "reasoning_effort": "xhigh"},
         review_cwd=tmp_path,
         prompt="manual prompt",
-        review_scope={"base": "main", "manual_prompt_mode": True},
+        review_scope={"base": "main"},
         allow_unsafe_windows_wsl_fallback=False,
     )
 

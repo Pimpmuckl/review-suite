@@ -5,7 +5,6 @@ import math
 import os
 import random
 import re
-import shutil
 import statistics
 import subprocess
 import sys
@@ -29,17 +28,23 @@ from rollout_capture import (
     rollout_activity_summary,
 )
 from review_suite_core import (
+    EFFECTIVE_BASE_METADATA_KEYS,
+    codex_review_command,
+    current_head,
     dirty_worktree_scope,
+    effective_base_ref,
     format_command,
+    has_committed_diff,
     has_worktree_changes,
     inspect_workflow_status,
     launch_captured_child_process,
     meaningful_worktree_status_entries,
+    merge_base,
     normalize_cwd,
     use_unsafe_windows_wsl_fallback,
     utc_now,
     utc_now_iso,
-    validate_codex_runtime,
+    validated_linear_review_range,
     wrapper_launch_cwd,
     write_text,
 )
@@ -52,7 +57,6 @@ LOCAL_REVIEW_LANE_STAGE_RANK = {
     "review_t3": 3,
     "review_t4": 4,
 }
-MANUAL_REVIEW_PROMPT_MAX_CHARS = 600_000
 STALE_REVIEW_STATE_TTL_SECONDS = 24 * 60 * 60
 RUN_LOG_FILENAME = "runs.jsonl"
 SUMMARY_FILENAME = "summary.json"
@@ -192,198 +196,46 @@ def build_correctness_review_contract() -> str:
     )
 
 
-def uses_native_base_review(review_scope: dict[str, Any]) -> bool:
-    return bool(str(review_scope.get("base") or "").strip()) and not bool(review_scope.get("manual_prompt_mode"))
-
-
-def _run_git_artifact(review_cwd: Path, args: list[str], *, default_error: str) -> str:
-    proc = subprocess.run(
-        args,
-        cwd=str(review_cwd),
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        check=False,
-    )
-    if proc.returncode != 0:
-        raise ValueError((proc.stderr or proc.stdout or "").strip() or default_error)
-    return proc.stdout
-
-
-def _current_reviewed_head(review_cwd: Path) -> str:
-    return _run_git_artifact(
-        review_cwd,
-        ["git", "rev-parse", "HEAD"],
-        default_error="git rev-parse HEAD failed",
-    ).strip()
-
-
-def _current_merge_base(review_cwd: Path, base: str) -> str:
-    merge_base = _run_git_artifact(
-        review_cwd,
-        ["git", "merge-base", base, "HEAD"],
-        default_error=f"git merge-base {base} HEAD failed",
-    ).strip()
-    if not merge_base:
-        raise ValueError(f"git merge-base {base} HEAD returned no merge base")
-    return merge_base
-
-
-def _has_committed_diff(review_cwd: Path, start_ref: str, end_ref: str = "HEAD") -> bool:
-    proc = subprocess.run(
-        ["git", "diff", "--quiet", f"{start_ref}..{end_ref}"],
-        cwd=str(review_cwd),
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        check=False,
-    )
-    if proc.returncode == 0:
-        return False
-    if proc.returncode == 1:
-        return True
-    raise ValueError((proc.stderr or proc.stdout or "").strip() or f"git diff --quiet {start_ref}..{end_ref} failed")
-
-
-def _base_review_scope(*, review_cwd: Path, base: str, manual_prompt_mode: bool) -> tuple[dict[str, Any], str]:
-    merge_base = _current_merge_base(review_cwd, base)
-    reviewed_head = _current_reviewed_head(review_cwd)
-    target_label = f"branch diff against base `{base}`" if manual_prompt_mode else f"base `{base}`"
+def _base_review_scope(*, review_cwd: Path, base: str) -> tuple[dict[str, Any], str]:
+    base_info = effective_base_ref(review_cwd, base)
+    effective_base = str(base_info["base"])
+    requested_base = str(base_info["requested_base"])
+    merge_base_head = merge_base(review_cwd, effective_base, "HEAD")
+    reviewed_head = current_head(review_cwd)
+    if requested_base != effective_base:
+        target_label = f"base `{effective_base}` (requested `{requested_base}`)"
+    else:
+        target_label = f"base `{effective_base}`"
     review_scope = {
-        "base": base,
-        "merge_base": merge_base,
+        "base": effective_base,
+        "merge_base": merge_base_head,
         "reviewed_head": reviewed_head,
         "target_label": target_label,
     }
-    if manual_prompt_mode:
-        review_scope["manual_prompt_mode"] = True
+    if requested_base != effective_base:
+        review_scope["requested_base"] = requested_base
+    for key in EFFECTIVE_BASE_METADATA_KEYS:
+        if key in base_info:
+            review_scope[key] = base_info[key]
     return review_scope, target_label
 
 
 def _ensure_base_review_has_committed_diff_or_clean_worktree(*, review_cwd: Path, base: str, merge_base: str) -> None:
-    if not _has_committed_diff(review_cwd, merge_base, "HEAD") and has_worktree_changes(review_cwd):
+    if not has_committed_diff(review_cwd, merge_base, "HEAD") and has_worktree_changes(review_cwd):
         raise ValueError(
             f"base review found no committed diff against `{base}`, but the worktree has uncommitted changes. "
             "Commit the intended review changes or stash unrelated worktree changes, then rerun the emitted review.py command."
         )
-
-
-def _commit_review_artifact(*, review_cwd: Path, commit: str, commit_end: str | None) -> tuple[str, dict[str, Any], str]:
-    if commit_end:
-        return (
-            _run_git_artifact(
-                review_cwd,
-                ["git", "diff", "--find-renames", "--stat", "--patch", f"{commit}..{commit_end}"],
-                default_error=f"git diff {commit}..{commit_end} failed",
-            ),
-            {
-                "commit": commit,
-                "commit_end": commit_end,
-                "target_label": f"commit range `{commit}..{commit_end}`",
-            },
-            f"commit range `{commit}..{commit_end}`",
-        )
-    return (
-        _run_git_artifact(
-            review_cwd,
-            ["git", "show", "--stat", "--patch", "--find-renames", commit],
-            default_error=f"git show {commit} failed",
-        ),
-        {"commit": commit, "target_label": f"commit `{commit}`"},
-        f"commit `{commit}`",
-    )
-
-
-def _base_branch_review_artifact(*, review_cwd: Path, base: str) -> tuple[str, dict[str, Any], str]:
-    review_scope, target_label = _base_review_scope(review_cwd=review_cwd, base=base, manual_prompt_mode=True)
-    merge_base = str(review_scope["merge_base"])
-    diff_text = _run_git_artifact(
-        review_cwd,
-        ["git", "diff", "--find-renames", "--stat", "--patch", f"{merge_base}..HEAD"],
-        default_error=f"git diff {merge_base}..HEAD failed",
-    )
-    if not diff_text.strip() and has_worktree_changes(review_cwd):
-        raise ValueError(
-            f"base review found no committed diff against `{base}`, but the worktree has uncommitted changes. "
-            "Commit the intended review changes or stash unrelated worktree changes, then rerun the emitted review.py command."
-        )
-    return diff_text, review_scope, target_label
 
 
 def _combined_review_instructions(*, standard_instructions: str, custom_instructions: str | None) -> str:
     instruction_text = standard_instructions.strip()
     if not instruction_text:
         raise ValueError("manual review mode requires built-in instructions")
-    if custom_instructions is None:
+    custom_instruction_text = "" if custom_instructions is None else custom_instructions.strip()
+    if not custom_instruction_text:
         return instruction_text
-    return f"{instruction_text}\n\nAdditional review instructions:\n{custom_instructions}"
-
-
-def _manual_prompt_too_large_message(
-    *,
-    prompt: str,
-    review_scope: dict[str, Any],
-    dirty_scope: dict[str, Any] | None = None,
-) -> str:
-    reason = str(review_scope.get("manual_prompt_reason") or "manual_review_required").strip()
-    message = (
-        f"manual review artifact is too large for reliable Codex review launch "
-        f"({len(prompt)} chars; limit {MANUAL_REVIEW_PROMPT_MAX_CHARS})."
-    )
-    if reason == "dirty_worktree_outside_branch_diff":
-        paths = list((dirty_scope or {}).get("unrelated_dirty_paths") or [])
-        preview = ", ".join(str(path) for path in paths[:3])
-        suffix = f" Examples: {preview}." if preview else ""
-        return (
-            f"{message} Dirty worktree paths outside the committed branch diff were included.{suffix} "
-            "Clean, stash, or commit unrelated dirty files, then rerun."
-        )
-    return (
-        f"{message} Split the change into a smaller review slice, or remove custom instructions."
-    )
-
-
-def _ensure_manual_prompt_within_limit(
-    *,
-    prompt: str,
-    review_scope: dict[str, Any],
-    dirty_scope: dict[str, Any] | None = None,
-) -> None:
-    if len(prompt) <= MANUAL_REVIEW_PROMPT_MAX_CHARS:
-        return
-    raise ValueError(
-        _manual_prompt_too_large_message(
-            prompt=prompt,
-            review_scope=review_scope,
-            dirty_scope=dirty_scope,
-        )
-    )
-
-
-def _manual_review_request(
-    *,
-    review_scope: dict[str, Any],
-    target_label: str,
-    instructions: str,
-    diff_text: str,
-    dirty_scope: dict[str, Any] | None = None,
-) -> LocalReviewRequest:
-    prompt = build_manual_review_prompt(
-        instructions=instructions,
-        diff_text=diff_text,
-    )
-    _ensure_manual_prompt_within_limit(
-        prompt=prompt,
-        review_scope=review_scope,
-        dirty_scope=dirty_scope,
-    )
-    return LocalReviewRequest(
-        review_scope=review_scope,
-        prompt=prompt,
-        target_label=target_label,
-    )
+    return f"{instruction_text}\n\nAdditional review instructions:\n{custom_instruction_text}"
 
 
 def build_local_review_request(
@@ -398,42 +250,64 @@ def build_local_review_request(
     if commit:
         if base != "main":
             raise ValueError("use either --base or --commit")
-        diff_text, review_scope, target_label = _commit_review_artifact(
-            review_cwd=review_cwd,
-            commit=commit,
-            commit_end=commit_end,
-        )
-        return _manual_review_request(
-            review_scope=review_scope,
-            target_label=target_label,
-            instructions=_combined_review_instructions(
+        if commit_end:
+            range_info = validated_linear_review_range(
+                review_cwd,
+                commit,
+                commit_end,
+                label="native commit-range review",
+            )
+            ensure_clean_git_worktree(review_cwd)
+            target_label = f"commit range `{commit}..{commit_end}`"
+            return LocalReviewRequest(
+                review_scope={
+                    "base": commit,
+                    "commit": commit,
+                    "commit_end": commit_end,
+                    "reviewed_head": range_info["head"],
+                    "target_label": target_label,
+                },
+                prompt=_combined_review_instructions(
+                    standard_instructions=instruction_builder(target_label),
+                    custom_instructions=custom_instructions,
+                ),
+                target_label=target_label,
+            )
+        target_label = f"commit `{commit}`"
+        return LocalReviewRequest(
+            review_scope={"commit": commit, "target_label": target_label},
+            prompt=_combined_review_instructions(
                 standard_instructions=instruction_builder(target_label),
                 custom_instructions=custom_instructions,
             ),
-            diff_text=diff_text,
+            target_label=target_label,
         )
+    review_scope, target_label = _base_review_scope(review_cwd=review_cwd, base=str(base))
+    _ensure_base_review_has_committed_diff_or_clean_worktree(
+        review_cwd=review_cwd,
+        base=str(review_scope["base"]),
+        merge_base=str(review_scope["merge_base"]),
+    )
     if custom_instructions is None:
-        native_scope, _target_label = _base_review_scope(review_cwd=review_cwd, base=str(base), manual_prompt_mode=False)
-        _ensure_base_review_has_committed_diff_or_clean_worktree(
-            review_cwd=review_cwd,
-            base=str(base),
-            merge_base=str(native_scope["merge_base"]),
-        )
-        base_dirty_scope = dirty_worktree_scope(review_cwd, str(base))
+        base_dirty_scope = dirty_worktree_scope(review_cwd, str(review_scope["base"]))
         if bool(base_dirty_scope.get("all_dirty_paths_outside_branch_diff")):
             unrelated_paths = list(base_dirty_scope.get("unrelated_dirty_paths") or [])
-            native_scope["ignored_dirty_path_count"] = len(unrelated_paths)
-            native_scope["ignored_dirty_paths"] = unrelated_paths[:3]
-        return LocalReviewRequest(review_scope=native_scope, prompt="", target_label=str(native_scope["target_label"]))
-    diff_text, review_scope, target_label = _base_branch_review_artifact(review_cwd=review_cwd, base=str(base))
-    return _manual_review_request(
-        review_scope=review_scope,
-        target_label=target_label,
-        instructions=_combined_review_instructions(
+            review_scope["ignored_dirty_path_count"] = len(unrelated_paths)
+            review_scope["ignored_dirty_paths"] = unrelated_paths[:3]
+    else:
+        ensure_clean_git_worktree(review_cwd)
+    prompt = (
+        _combined_review_instructions(
             standard_instructions=instruction_builder(target_label),
             custom_instructions=custom_instructions,
-        ),
-        diff_text=diff_text,
+        )
+        if custom_instructions is not None
+        else ""
+    )
+    return LocalReviewRequest(
+        review_scope=review_scope,
+        target_label=target_label,
+        prompt=prompt,
     )
 
 
@@ -2511,50 +2385,30 @@ def build_review_command(
     prompt: str = "",
     allow_unsafe_windows_wsl_fallback: bool = False,
 ) -> list[str]:
-    codex_executable = shutil.which("codex") or shutil.which("codex.cmd") or "codex"
-    _validate_wsl_codex_runtime(
-        codex_executable,
-        review_cwd=review_cwd,
+    base_ref = str(review_scope.get("base") or "").strip()
+    commit_ref = str(review_scope.get("commit") or "").strip()
+    commit_end = str(review_scope.get("commit_end") or "").strip()
+    if not base_ref and not commit_ref:
+        raise ValueError("review command requires a base or commit target")
+    if base_ref and commit_end:
+        validated_linear_review_range(
+            review_cwd,
+            base_ref,
+            commit_end,
+            label="native commit-range review launch",
+        )
+    return codex_review_command(
+        tool_name="review-suite",
+        model=model,
+        reasoning_effort=reasoning_effort,
+        service_tier=service_tier,
+        title=title,
+        review_root=review_cwd,
+        base=base_ref or None,
+        commit=None if base_ref else commit_ref,
+        prompt=prompt,
         allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
     )
-    base_branch = review_scope.get("base") if uses_native_base_review(review_scope) else None
-    if _use_unsafe_windows_wsl_fallback(review_cwd, allow_unsafe_windows_wsl_fallback):
-        command = [
-            codex_executable,
-            "exec",
-            "-C",
-            str(review_cwd),
-            "review",
-            "--dangerously-bypass-approvals-and-sandbox",
-            "-c",
-            f'model="{model}"',
-            "-c",
-            f'model_reasoning_effort="{reasoning_effort}"',
-            "--title",
-            title,
-        ]
-    else:
-        command = [
-            codex_executable,
-            "review",
-            "-c",
-            f'model="{model}"',
-            "-c",
-            f'model_reasoning_effort="{reasoning_effort}"',
-            "--title",
-            title,
-        ]
-    normalized_service_tier = normalize_service_tier(service_tier)
-    if normalized_service_tier:
-        insert_at = command.index("--title")
-        command[insert_at:insert_at] = ["-c", f'service_tier="{normalized_service_tier}"']
-    if base_branch:
-        command.extend(["--base", str(base_branch)])
-    else:
-        if not prompt.strip():
-            raise ValueError("manual review mode requires a non-empty custom prompt")
-        command.append("-")
-    return command
 
 
 def ensure_clean_git_worktree(review_cwd: Path, *, review_scope: dict[str, Any] | None = None) -> None:
@@ -2567,25 +2421,6 @@ def ensure_clean_git_worktree(review_cwd: Path, *, review_scope: dict[str, Any] 
     raise ValueError(
         "review-suite requires a clean worktree. Commit intended review changes or stash unrelated worktree changes, then rerun."
     )
-def _use_unsafe_windows_wsl_fallback(review_cwd: Path, allow_unsafe_windows_wsl_fallback: bool) -> bool:
-    return use_unsafe_windows_wsl_fallback(review_cwd, allow_unsafe_windows_wsl_fallback)
-
-
-def _validate_wsl_codex_runtime(
-    codex_executable: str,
-    *,
-    review_cwd: Path,
-    allow_unsafe_windows_wsl_fallback: bool,
-) -> None:
-    validate_codex_runtime(
-        tool_name="review-suite",
-        codex_executable=codex_executable,
-        review_root=review_cwd,
-        allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
-        unsafe_command_hint="codex exec review --dangerously-bypass-approvals-and-sandbox",
-    )
-
-
 def extract_session_id(text: str) -> str | None:
     marker = "session id:"
     for line in text.splitlines():
@@ -2981,32 +2816,6 @@ def _apply_capacity_cooldowns(*, state_dir: Path, round_payload: dict[str, Any])
     return updates
 
 
-def build_manual_review_prompt(*, instructions: str, diff_text: str) -> str:
-    instruction_text = instructions.strip()
-    diff_body = diff_text.strip()
-    if not instruction_text:
-        raise ValueError("manual review mode requires custom instructions")
-    if not diff_body:
-        raise ValueError("manual review mode requires a non-empty diff artifact")
-    return (
-        "You are reviewing a manually supplied diff artifact.\n\n"
-        "Follow these custom instructions exactly:\n"
-        f"{instruction_text}\n\n"
-        "Use only the diff below as the review artifact.\n"
-        "Reviewer output is advisory risk input, not authoritative product direction. "
-        "Report only findings that identify concrete correctness, regression, integration, security, accessibility, or maintainability risk against stated requirements, docs, code invariants, or explicit contracts. "
-        "UX preferences, product-scope speculation, backwards-compat speculation, and alternative product direction are non-findings. "
-        "Put unresolved scope questions or conflicts with explicit user/product direction under `Scope questions / suggestions (non-findings)` with the tradeoff to escalate. "
-        "Do not recommend code changes that reverse explicit product intent. "
-        "Focused review-relevant checks can be enough to launch the next review round before slow full-suite/CI completes; full-suite/CI remains a merge-readiness requirement. "
-        "Record full-suite/CI validation status when relevant as pending, passed, failed, or intentionally waived/classified; do not call a PR final or merge-ready while that status is unknown, and investigate/fix relevant failures first. "
-        "If there are no correctness issues, say 'No findings.'\n\n"
-        "=== BEGIN DIFF ===\n"
-        f"{diff_body}\n"
-        "=== END DIFF ==="
-    )
-
-
 def _review_run_title(*, round_id: str, slot: str, variant_id: str, capacity_retry_attempts: int = 0) -> str:
     title = f"review-suite::{round_id}::{slot}::{variant_id}"
     if capacity_retry_attempts <= 0:
@@ -3024,7 +2833,6 @@ def _launch_reviewer_process(
     review_scope: dict[str, Any],
     allow_unsafe_windows_wsl_fallback: bool,
 ) -> dict[str, Any]:
-    manual_prompt = prompt if not uses_native_base_review(review_scope) else ""
     retry_attempts = int(run.get("capacity_retry_attempts", 0) or 0)
     title = _review_run_title(
         round_id=str(round_payload["round_id"]),
@@ -3046,10 +2854,10 @@ def _launch_reviewer_process(
         command=command,
         cwd=(
             wrapper_launch_cwd()
-            if _use_unsafe_windows_wsl_fallback(review_cwd, allow_unsafe_windows_wsl_fallback)
+            if use_unsafe_windows_wsl_fallback(review_cwd, allow_unsafe_windows_wsl_fallback)
             else review_cwd
         ),
-        stdin_text=manual_prompt or None,
+        stdin_text=prompt if prompt.strip() else None,
         stdout_prefix=f"review-suite-{run['slot']}-",
     )
     run.update(
@@ -3221,7 +3029,7 @@ def launch_round(
     running_payload["review_scope"] = review_scope
     running_payload["allow_unsafe_windows_wsl_fallback"] = allow_unsafe_windows_wsl_fallback
     running_payload["progress_interval_seconds"] = progress_interval_seconds
-    if _use_unsafe_windows_wsl_fallback(review_cwd, allow_unsafe_windows_wsl_fallback):
+    if use_unsafe_windows_wsl_fallback(review_cwd, allow_unsafe_windows_wsl_fallback):
         print(
             "[review-suite] WARNING: using Windows Codex fallback for a WSL UNC repo. This bypasses the Codex sandbox and is not the happy path.",
             file=sys.stderr,

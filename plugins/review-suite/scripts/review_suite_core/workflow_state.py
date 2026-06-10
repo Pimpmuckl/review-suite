@@ -36,6 +36,15 @@ LANE_STAGE_RANK = {
     "review_t3": 3,
     "review_t4": 4,
 }
+EFFECTIVE_BASE_METADATA_KEYS = (
+    "base_upstream",
+    "base_upstream_head",
+    "base_upstream_unresolved",
+    "requested_base_head",
+    "effective_base_head",
+    "base_ref_stale",
+    "base_ref_relation",
+)
 
 
 def _git_text(review_cwd: Path, args: list[str], *, default_error: str) -> str:
@@ -72,6 +81,82 @@ def resolve_ref(review_cwd: Path, ref: str) -> str:
     return _git_text(review_cwd, ["git", "rev-parse", ref], default_error=f"git rev-parse {ref} failed").strip()
 
 
+def _optional_git_text(review_cwd: Path, args: list[str]) -> str | None:
+    proc = subprocess.run(
+        args,
+        cwd=str(review_cwd),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    if proc.returncode != 0:
+        return None
+    value = proc.stdout.strip()
+    return value or None
+
+
+def upstream_ref(review_cwd: Path, ref: str) -> str | None:
+    base = str(ref or "").strip()
+    if not base:
+        return None
+    upstream = _optional_git_text(
+        review_cwd,
+        ["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", f"{base}@{{upstream}}"],
+    )
+    if upstream:
+        return upstream
+    remote = _optional_git_text(review_cwd, ["git", "config", f"branch.{base}.remote"])
+    merge_ref = _optional_git_text(review_cwd, ["git", "config", f"branch.{base}.merge"])
+    if not remote or not merge_ref:
+        return None
+    branch_name = merge_ref.removeprefix("refs/heads/").strip()
+    if not branch_name:
+        return None
+    if remote == ".":
+        return branch_name
+    return f"{remote}/{branch_name}"
+
+
+def effective_base_ref(review_cwd: Path, base: str) -> dict[str, Any]:
+    requested = str(base or "").strip()
+    if not requested:
+        raise ValueError("base is required")
+    payload: dict[str, Any] = {
+        "base": requested,
+        "requested_base": requested,
+    }
+    upstream = upstream_ref(review_cwd, requested)
+    if not upstream or upstream == requested:
+        return payload
+    payload["base_upstream"] = upstream
+    try:
+        requested_head = resolve_ref(review_cwd, requested)
+        upstream_head = resolve_ref(review_cwd, upstream)
+    except ValueError:
+        payload["base_upstream_unresolved"] = True
+        return payload
+    payload["requested_base_head"] = requested_head
+    payload["base_upstream_head"] = upstream_head
+    payload["base_ref_stale"] = requested_head != upstream_head
+    if requested_head == upstream_head:
+        payload["effective_base_head"] = requested_head
+        payload["base_ref_relation"] = "same"
+        return payload
+    if is_ancestor(review_cwd, requested_head, upstream_head):
+        payload["base"] = upstream
+        payload["effective_base_head"] = upstream_head
+        payload["base_ref_relation"] = "behind"
+    elif is_ancestor(review_cwd, upstream_head, requested_head):
+        payload["effective_base_head"] = requested_head
+        payload["base_ref_relation"] = "ahead"
+    else:
+        payload["effective_base_head"] = requested_head
+        payload["base_ref_relation"] = "diverged"
+    return payload
+
+
 def merge_base(review_cwd: Path, left_ref: str, right_ref: str = "HEAD") -> str:
     return _git_text(
         review_cwd,
@@ -95,6 +180,56 @@ def is_ancestor(review_cwd: Path, ancestor_ref: str, descendant_ref: str = "HEAD
     if proc.returncode == 1:
         return False
     raise ValueError((proc.stderr or proc.stdout or "").strip() or f"git merge-base --is-ancestor {ancestor_ref} {descendant_ref} failed")
+
+
+def validated_linear_review_range(
+    review_cwd: Path,
+    start_ref: str,
+    end_ref: str,
+    *,
+    label: str = "native range review",
+) -> dict[str, str]:
+    start = str(start_ref or "").strip()
+    end = str(end_ref or "").strip()
+    if not start or not end:
+        raise ValueError(f"{label} requires non-empty range start and end refs")
+    resolved_start = resolve_ref(review_cwd, start)
+    resolved_end = resolve_ref(review_cwd, end)
+    head = current_head(review_cwd)
+    if head != resolved_end:
+        raise ValueError(
+            f"{label} requires HEAD to match the range end. "
+            "Check out the range end and review with --base <range-start>."
+        )
+    if not is_ancestor(review_cwd, resolved_start, resolved_end):
+        raise ValueError(
+            f"{label} requires the range start to be an ancestor of the range end. "
+            "Review non-linear ranges as smaller single-commit slices."
+        )
+    return {
+        "start": start,
+        "end": end,
+        "resolved_start": resolved_start,
+        "resolved_end": resolved_end,
+        "head": head,
+    }
+
+
+def has_committed_diff(review_cwd: Path, start_ref: str, end_ref: str = "HEAD") -> bool:
+    proc = subprocess.run(
+        ["git", "diff", "--quiet", f"{start_ref}..{end_ref}"],
+        cwd=str(review_cwd),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    if proc.returncode == 0:
+        return False
+    if proc.returncode == 1:
+        return True
+    raise ValueError((proc.stderr or proc.stdout or "").strip() or f"git diff --quiet {start_ref}..{end_ref} failed")
 
 
 def resolve_reviewed_head(review_cwd: Path, review_scope: dict[str, Any] | None = None) -> str:
@@ -607,7 +742,9 @@ def compact_review_scope(review_scope: dict[str, Any] | None) -> dict[str, Any]:
         "commit_end",
         "merge_base",
         "reviewed_head",
-        "manual_prompt_mode",
+        "branch_base",
+        "requested_base",
+        *EFFECTIVE_BASE_METADATA_KEYS,
         "source_gate_lane",
         "source_gate_reviewed_head",
         "source_gate_round_id",
@@ -882,11 +1019,30 @@ def latest_base_review_context_anchor(
         anchor_base = str(scope.get("base") or anchor.get("base") or "").strip()
         if not anchor_base:
             continue
-        if requested and anchor_base == requested:
+        anchor_requested_base = str(scope.get("requested_base") or "").strip()
+        anchor_branch_base = str(scope.get("branch_base") or "").strip()
+        if requested and requested in {anchor_base, anchor_requested_base, anchor_branch_base}:
             return anchor
         if fallback is None:
             fallback = anchor
     return fallback
+
+
+def review_scope_matches_requested_base(
+    *,
+    anchor: dict[str, Any],
+    review_scope: dict[str, Any],
+    requested_base: str,
+) -> bool:
+    requested = str(requested_base or "").strip()
+    if not requested:
+        return False
+    return requested in {
+        str(review_scope.get("base") or "").strip(),
+        str(review_scope.get("requested_base") or "").strip(),
+        str(review_scope.get("branch_base") or "").strip(),
+        str(anchor.get("base") or "").strip(),
+    }
 
 
 def current_stage_full_review_lane(
@@ -1353,7 +1509,21 @@ def inspect_workflow_status(*, state_dir: Path, review_cwd: Path, base: str) -> 
     base_context_anchor = latest_base_review_context_anchor(state, requested_base=base) or anchor
     base_context_scope = dict(base_context_anchor.get("review_scope") or {})
     recorded_merge_base = str(base_context_scope.get("merge_base") or "").strip()
-    anchor_base = str(base or base_context_scope.get("base") or base_context_anchor.get("base") or state.get("base") or "").strip()
+    stored_anchor_base = str(base_context_scope.get("base") or base_context_anchor.get("base") or state.get("base") or "").strip()
+    stored_branch_base = str(base_context_scope.get("branch_base") or "").strip()
+    stored_requested_base = str(base_context_scope.get("requested_base") or "").strip()
+    requested_status_base = str(base or "").strip()
+    if review_scope_matches_requested_base(
+        anchor=base_context_anchor,
+        review_scope=base_context_scope,
+        requested_base=base,
+    ):
+        if stored_branch_base and requested_status_base in {stored_branch_base, stored_requested_base}:
+            anchor_base = stored_branch_base
+        else:
+            anchor_base = stored_anchor_base or requested_status_base
+    else:
+        anchor_base = str(base or stored_anchor_base).strip()
     branch_pressure: dict[str, Any] | None = None
     cycle_pressure = followup_cycle_pressure(state=state)
     current_merge_base: str | None = None

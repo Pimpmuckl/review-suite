@@ -37,6 +37,58 @@ def compact_tool_label(tool_name: str) -> str:
     return tool_name
 
 
+def _codex_command_prefix(
+    *,
+    tool_name: str,
+    review_root: Path,
+    allow_unsafe_windows_wsl_fallback: bool,
+    unsafe_command_hint: str,
+    subcommand: str,
+    model: str,
+    reasoning_effort: str,
+    service_tier: str | None,
+    title: str | None = None,
+) -> list[str]:
+    codex_executable = shutil.which("codex") or shutil.which("codex.cmd") or "codex"
+    validate_codex_runtime(
+        tool_name=tool_name,
+        codex_executable=codex_executable,
+        review_root=review_root,
+        allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
+        unsafe_command_hint=unsafe_command_hint,
+    )
+    unsafe_fallback = use_unsafe_windows_wsl_fallback(review_root, allow_unsafe_windows_wsl_fallback)
+    command = [codex_executable]
+    if subcommand == "exec":
+        command.append("exec")
+        if unsafe_fallback:
+            command.append("--dangerously-bypass-approvals-and-sandbox")
+        command.extend(["-C", str(review_root)])
+        if not unsafe_fallback:
+            command.extend(["-s", "read-only"])
+    elif subcommand == "review":
+        if unsafe_fallback:
+            command.extend(["exec", "-C", str(review_root), "review", "--dangerously-bypass-approvals-and-sandbox"])
+        else:
+            command.append("review")
+    else:
+        raise ValueError(f"unsupported Codex subcommand: {subcommand}")
+    command.extend(
+        [
+            "-c",
+            f'model="{model}"',
+            "-c",
+            f'model_reasoning_effort="{reasoning_effort}"',
+        ]
+    )
+    normalized_service_tier = normalize_service_tier(service_tier)
+    if normalized_service_tier:
+        command.extend(["-c", f'service_tier="{normalized_service_tier}"'])
+    if title is not None:
+        command.extend(["--title", title])
+    return command
+
+
 def progress_heartbeat_line(tool_name: str, elapsed_seconds: int) -> str:
     label = compact_tool_label(tool_name)
     if bool(getattr(sys.stderr, "isatty", lambda: False)()):
@@ -56,38 +108,56 @@ def codex_exec_command(
     review_root: Path,
     allow_unsafe_windows_wsl_fallback: bool,
 ) -> list[str]:
-    codex_executable = shutil.which("codex") or shutil.which("codex.cmd") or "codex"
-    validate_codex_runtime(
+    command = _codex_command_prefix(
         tool_name=tool_name,
-        codex_executable=codex_executable,
         review_root=review_root,
         allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
         unsafe_command_hint="codex exec --dangerously-bypass-approvals-and-sandbox",
+        subcommand="exec",
+        model=model,
+        reasoning_effort=reasoning_effort,
+        service_tier=service_tier,
     )
-    command = [
-        codex_executable,
-        "exec",
-        "-C",
-        str(review_root),
-        "-c",
-        f'model="{model}"',
-        "-c",
-        f'model_reasoning_effort="{reasoning_effort}"',
-        "--color",
-        "never",
-        "-o",
-        str(output_path),
-    ]
-    normalized_service_tier = normalize_service_tier(service_tier)
-    if normalized_service_tier:
-        insert_at = command.index("--color")
-        command[insert_at:insert_at] = ["-c", f'service_tier="{normalized_service_tier}"']
+    command.extend(["--color", "never", "-o", str(output_path)])
     if prompt.strip():
         command.append("-")
-    if use_unsafe_windows_wsl_fallback(review_root, allow_unsafe_windows_wsl_fallback):
-        command.insert(2, "--dangerously-bypass-approvals-and-sandbox")
+    return command
+
+
+def codex_review_command(
+    *,
+    tool_name: str,
+    model: str,
+    reasoning_effort: str,
+    service_tier: str | None = None,
+    title: str,
+    review_root: Path,
+    base: str | None = None,
+    commit: str | None = None,
+    prompt: str = "",
+    allow_unsafe_windows_wsl_fallback: bool,
+) -> list[str]:
+    base_ref = str(base or "").strip()
+    commit_ref = str(commit or "").strip()
+    if bool(base_ref) == bool(commit_ref):
+        raise ValueError("native review requires exactly one of base or commit")
+    command = _codex_command_prefix(
+        tool_name=tool_name,
+        review_root=review_root,
+        allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
+        unsafe_command_hint="codex exec review --dangerously-bypass-approvals-and-sandbox",
+        subcommand="review",
+        model=model,
+        reasoning_effort=reasoning_effort,
+        service_tier=service_tier,
+        title=title,
+    )
+    if base_ref:
+        command.extend(["--base", base_ref])
     else:
-        command[4:4] = ["-s", "read-only"]
+        command.extend(["--commit", commit_ref])
+    if prompt.strip():
+        command.append("-")
     return command
 
 
@@ -158,36 +228,24 @@ def truncate(text: str | None, *, limit: int = 1200) -> str:
     return value[:limit].rstrip() + "\n...[truncated]..."
 
 
-def run_codex(
+def _run_captured_codex_command(
     *,
     tool_name: str,
-    prompt: str,
-    model: str,
-    reasoning_effort: str,
-    service_tier: str | None = None,
+    command: list[str],
+    cwd: Path,
+    stdin_text: str | None,
     review_root: Path,
     progress_interval_seconds: int,
     timeout_seconds: int,
-    allow_unsafe_windows_wsl_fallback: bool,
+    final_message_path: Path | None = None,
+    cleanup_paths: tuple[Path, ...] = (),
 ) -> dict[str, object]:
-    with tempfile.NamedTemporaryFile(prefix=f"{tool_name}-message-", suffix=".txt", delete=False) as handle:
-        output_path = Path(handle.name)
     child: CapturedChildProcess | None = None
     try:
-        command = codex_exec_command(
-            tool_name=tool_name,
-            model=model,
-            reasoning_effort=reasoning_effort,
-            service_tier=service_tier,
-            prompt=prompt,
-            output_path=output_path,
-            review_root=review_root,
-            allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
-        )
         child = launch_captured_child_process(
             command=command,
-            cwd=wrapper_launch_cwd(),
-            stdin_text=prompt if prompt.strip() else None,
+            cwd=cwd,
+            stdin_text=stdin_text,
             stdout_prefix=f"{tool_name}-stdout-",
             stderr_prefix=f"{tool_name}-stderr-",
             stdout_suffix=".txt",
@@ -202,6 +260,7 @@ def run_codex(
             progress_interval_seconds=progress_interval_seconds,
             timeout_seconds=timeout_seconds,
         )
+        stdout_text = child.stdout_path.read_text(encoding="utf-8", errors="replace") if child.stdout_path.exists() else ""
         stderr_text = child.stderr_path.read_text(encoding="utf-8", errors="replace") if child.stderr_path.exists() else ""
         session_id = extract_session_id(stderr_text)
         record_wrapper_session(
@@ -210,22 +269,105 @@ def run_codex(
             review_root=review_root,
             elapsed_seconds=wait_result.elapsed_seconds,
         )
+        final_message = stdout_text.strip()
+        if final_message_path is not None:
+            final_message = final_message_path.read_text(encoding="utf-8").strip() if final_message_path.exists() else ""
         return {
             "returncode": wait_result.returncode,
-            "stdout": child.stdout_path.read_text(encoding="utf-8", errors="replace") if child.stdout_path.exists() else "",
+            "stdout": stdout_text,
             "stderr": stderr_text,
-            "final_message": output_path.read_text(encoding="utf-8").strip() if output_path.exists() else "",
+            "final_message": final_message,
             "session_id": session_id,
             "elapsed_seconds": wait_result.elapsed_seconds,
             "timed_out": wait_result.timed_out,
         }
     finally:
         child_paths = (child.stdout_path, child.stderr_path) if child is not None else ()
-        for path in (output_path, *child_paths):
+        for path in (*cleanup_paths, *child_paths):
             try:
                 path.unlink(missing_ok=True)
             except OSError:
                 pass
+
+
+def run_codex(
+    *,
+    tool_name: str,
+    prompt: str,
+    model: str,
+    reasoning_effort: str,
+    service_tier: str | None = None,
+    review_root: Path,
+    progress_interval_seconds: int,
+    timeout_seconds: int,
+    allow_unsafe_windows_wsl_fallback: bool,
+) -> dict[str, object]:
+    with tempfile.NamedTemporaryFile(prefix=f"{tool_name}-message-", suffix=".txt", delete=False) as handle:
+        output_path = Path(handle.name)
+    command = codex_exec_command(
+        tool_name=tool_name,
+        model=model,
+        reasoning_effort=reasoning_effort,
+        service_tier=service_tier,
+        prompt=prompt,
+        output_path=output_path,
+        review_root=review_root,
+        allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
+    )
+    return _run_captured_codex_command(
+        tool_name=tool_name,
+        command=command,
+        cwd=wrapper_launch_cwd(),
+        stdin_text=prompt if prompt.strip() else None,
+        review_root=review_root,
+        progress_interval_seconds=progress_interval_seconds,
+        timeout_seconds=timeout_seconds,
+        final_message_path=output_path,
+        cleanup_paths=(output_path,),
+    )
+
+
+def run_codex_review(
+    *,
+    tool_name: str,
+    prompt: str,
+    model: str,
+    reasoning_effort: str,
+    service_tier: str | None = None,
+    title: str,
+    review_root: Path,
+    base: str | None = None,
+    commit: str | None = None,
+    progress_interval_seconds: int,
+    timeout_seconds: int,
+    allow_unsafe_windows_wsl_fallback: bool,
+) -> dict[str, object]:
+    command = codex_review_command(
+        tool_name=tool_name,
+        model=model,
+        reasoning_effort=reasoning_effort,
+        service_tier=service_tier,
+        title=title,
+        review_root=review_root,
+        base=base,
+        commit=commit,
+        prompt=prompt,
+        allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
+    )
+    cwd = (
+        wrapper_launch_cwd()
+        if use_unsafe_windows_wsl_fallback(review_root, allow_unsafe_windows_wsl_fallback)
+        else review_root
+    )
+    return _run_captured_codex_command(
+        tool_name=tool_name,
+        command=command,
+        cwd=cwd,
+        stdin_text=prompt if prompt.strip() else None,
+        review_root=review_root,
+        progress_interval_seconds=progress_interval_seconds,
+        timeout_seconds=timeout_seconds,
+    )
 
 
 def emit_result(

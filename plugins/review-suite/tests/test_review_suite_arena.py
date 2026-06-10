@@ -23,7 +23,6 @@ from review_suite_arena import (
     cmd_close_gate,
     cmd_costs,
     cmd_resume_round,
-    cmd_run_manual_round,
     cmd_show_last,
     cmd_show_round,
     resume_orchestrator_review_step,
@@ -39,6 +38,7 @@ BASIS = "valid_findings_vs_none"
 @pytest.fixture(autouse=True)
 def _stub_clean_git_worktree(monkeypatch) -> None:
     monkeypatch.setattr("review_suite_arena.ensure_clean_git_worktree", lambda *args, **kwargs: None)
+    monkeypatch.setattr("review_suite_local.ensure_clean_git_worktree", lambda *args, **kwargs: None)
 
 
 def test_print_findings_prints_final_reviewer_output(capsys) -> None:
@@ -1247,54 +1247,6 @@ def test_run_benchmarked_round_direct_grade_without_caller_rejects_ambiguous_rep
             alpha_note=None,
             bravo_note=None,
         )
-
-
-def test_cmd_run_manual_round_emits_manual_payload(monkeypatch, tmp_path, capsys) -> None:
-    diff_path = tmp_path / "diff.txt"
-    diff_path.write_text("diff --git a/x b/x\n", encoding="utf-8")
-    captured: dict[str, object] = {}
-
-    monkeypatch.setattr("review_suite_arena._resolve_review_cwd", lambda cd: tmp_path)
-    monkeypatch.setattr("review_suite_arena.load_roster", lambda path: {"variants": []})
-    monkeypatch.setattr(
-        "review_suite_arena.load_round",
-        lambda state_dir, round_id: {"round_id": "round-1", "task_class": "phase_review", "review_cwd": str(tmp_path)},
-    )
-    monkeypatch.setattr("review_suite_arena._load_manual_instructions", lambda args: "Review this.")
-    monkeypatch.setattr("review_suite_arena.build_manual_review_prompt", lambda **kwargs: "prompt")
-    monkeypatch.setattr(
-        "review_suite_arena.run_round",
-        lambda **kwargs: {
-            "round_id": "round-1",
-            "task_class": "phase_review",
-            "runs": [{"slot": "alpha", "review_status": "completed", "reviewer_output": "Manual body"}],
-        },
-    )
-    monkeypatch.setattr("review_suite_arena._visible_completed_output_slots", lambda **kwargs: set())
-    monkeypatch.setattr("review_suite_arena.public_round_result", lambda *args, **kwargs: {"blocked": False, "runs": []})
-    monkeypatch.setattr("review_suite_arena._completed_round_payload", lambda **kwargs: captured.update(kwargs) or {"status": "ok"})
-    monkeypatch.setattr("review_suite_arena.emit_toon", lambda payload: None)
-
-    result = cmd_run_manual_round(
-        Namespace(
-            cd=None,
-            round_id="round-1",
-            roster=str(tmp_path / "roster.json"),
-            state_dir=str(tmp_path / "state"),
-            sqlite_path=str(tmp_path / "state.sqlite"),
-            diff_file=str(diff_path),
-            instructions="Review this.",
-            instructions_file=None,
-            progress_interval_seconds=30,
-            wsl=False,
-        )
-    )
-
-    assert result == 0
-    assert captured["manual"] is True
-    assert "task_name" not in captured
-    assert "round_id" not in captured
-    assert "Manual body" in capsys.readouterr().out
 
 
 def test_cmd_reroll_slot_records_workflow_anchor_when_completed(monkeypatch, tmp_path) -> None:

@@ -51,7 +51,7 @@ from .orchestrator_state import (
 )
 from .paths import cwd_path_from_normalized
 from .process_runtime import CapturedChildProcess, launch_captured_child_process, wait_for_captured_child_process
-from .workflow_state import current_head, diff_artifact, dirty_worktree_scope, merge_base
+from .workflow_state import EFFECTIVE_BASE_METADATA_KEYS, current_head, dirty_worktree_scope, has_committed_diff, merge_base
 
 
 INITIAL_REVIEW_LANE = "review_t1"
@@ -339,21 +339,21 @@ def _fix_verification_instructions(state: dict[str, Any], context: dict[str, Any
     return " ".join(parts)
 
 
-def _fix_interdiff_artifact(*, cwd: Path, since_head: str, base: str, merge_base_head: str, review_label: str) -> str:
-    committed_diff = diff_artifact(cwd, since_head, "HEAD")
+def _require_committed_fix_interdiff(*, cwd: Path, since_head: str, base: str, merge_base_head: str, review_label: str) -> None:
+    has_fix_diff = has_committed_diff(cwd, since_head, "HEAD")
     dirty_scope = dirty_worktree_scope(cwd, base, merge_base_ref=merge_base_head)
     dirty_paths = [
         str(path)
         for path in list(dirty_scope.get("dirty_paths") or [])
         if str(path).strip()
     ]
-    if committed_diff.strip():
+    if has_fix_diff:
         if dirty_paths:
             raise ValueError(
                 f"{review_label} found committed interdiff changes plus uncommitted worktree changes. "
                 "Commit the remaining fix changes or stash unrelated worktree changes, then rerun the emitted review.py --id command."
             )
-        return committed_diff
+        return
     if dirty_paths:
         raise ValueError(
             f"{review_label} found no committed interdiff after reviewed head {since_head}, "
@@ -369,7 +369,7 @@ def _validate_fix_interdiff(*, cwd: Path, scope: dict[str, object], context: dic
     since_head = str(context.get("findings_reviewed_head") or "").strip()
     if not since_head:
         return
-    _fix_interdiff_artifact(
+    _require_committed_fix_interdiff(
         cwd=cwd,
         since_head=since_head,
         base=str(scope.get("base") or ""),
@@ -1023,16 +1023,6 @@ def _followup_note(state: dict[str, Any], active: dict[str, Any], source_round_i
     return " ".join(parts)
 
 
-def _followup_diff_artifact(*, cwd: Path, since_head: str, base: str, merge_base_head: str) -> str:
-    return _fix_interdiff_artifact(
-        cwd=cwd,
-        since_head=since_head,
-        base=base,
-        merge_base_head=merge_base_head,
-        review_label="follow-up review",
-    )
-
-
 def _run_followup_review_once(state: dict[str, Any], *, state_dir: Path) -> OrchestratorRunnerResult:
     active = _active_findings(state)
     source_round_id = str(active.get("round_id") or "").strip()
@@ -1044,26 +1034,38 @@ def _run_followup_review_once(state: dict[str, Any], *, state_dir: Path) -> Orch
     cwd = _identity_cwd(state)
     head = current_head(cwd)
     base = _identity_text(state, "base")
+    identity = dict(state.get("identity") or {})
     try:
         merge_base_head = merge_base(cwd, base, "HEAD")
     except ValueError:
         merge_base_head = _identity_text(state, "merge_base")
-    diff_text = _followup_diff_artifact(cwd=cwd, since_head=since_head, base=base, merge_base_head=merge_base_head)
+    _require_committed_fix_interdiff(
+        cwd=cwd,
+        since_head=since_head,
+        base=base,
+        merge_base_head=merge_base_head,
+        review_label="follow-up review",
+    )
     review_scope = {
-        "base": base,
+        "base": since_head,
+        "branch_base": base,
         "commit": since_head,
         "commit_end": head,
         "reviewed_head": head,
         "merge_base": merge_base_head,
-        "manual_prompt_mode": True,
         "target_label": f"interdiff `{since_head}..{head}`",
         "source_round_id": source_round_id,
     }
+    requested_base = str(identity.get("requested_base") or "").strip()
+    if requested_base and requested_base != base:
+        review_scope["requested_base"] = requested_base
+    for key in EFFECTIVE_BASE_METADATA_KEYS:
+        if key in identity:
+            review_scope[key] = identity[key]
     prompt = build_followup_prompt(
         since_head=since_head,
         head=head,
         note=_followup_note(state, active, source_round_id),
-        diff_text=diff_text,
     )
     if not prompt.strip():
         raise ValueError("follow-up review prompt must not be empty")

@@ -13,13 +13,15 @@ from review_suite_core import (
     AxiArgumentParser,
     DEFAULT_PROGRESS_INTERVAL_SECONDS,
     DEFAULT_TIMEOUT_SECONDS,
+    EFFECTIVE_BASE_METADATA_KEYS,
     classify_delta_recommendation,
     current_head,
-    diff_artifact,
     diff_stats,
+    effective_base_ref,
     emit_error,
     emit_result,
     format_command,
+    has_committed_diff,
     inspect_workflow_status,
     is_ancestor,
     lens_model_config,
@@ -27,10 +29,11 @@ from review_suite_core import (
     record_review_anchor,
     resolve_ref,
     resolve_repo_root,
-    run_codex,
+    run_codex_review,
     use_unsafe_windows_wsl_fallback,
+    validated_linear_review_range,
 )
-from review_suite_local import build_correctness_review_contract, build_manual_review_prompt, default_state_dir, ensure_clean_git_worktree
+from review_suite_local import build_correctness_review_contract, default_state_dir, ensure_clean_git_worktree
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -163,9 +166,9 @@ def gate_findings_source_context(*, state_dir: Path, review_cwd: Path, base: str
     }
 
 
-def build_followup_prompt(*, since_head: str, head: str, note: str, diff_text: str) -> str:
+def build_followup_prompt(*, since_head: str, head: str, note: str) -> str:
     target_label = f"interdiff `{since_head}..{head}`"
-    instructions = (
+    return (
         "Review this follow-up diff for correctness and regression risk.\n"
         f"The review target is {target_label}.\n"
         "This is a fix pass after earlier review feedback. Focus on whether the interdiff resolves the underlying problem and whether adjacent invariants still hold.\n\n"
@@ -173,7 +176,6 @@ def build_followup_prompt(*, since_head: str, head: str, note: str, diff_text: s
         f"{note}\n\n"
         f"{build_correctness_review_contract()}"
     )
-    return build_manual_review_prompt(instructions=instructions, diff_text=diff_text)
 
 
 def _record_anchor_warning(exc: Exception) -> None:
@@ -187,7 +189,9 @@ def main() -> int:
         review_root = resolve_repo_root(args.cd)
         state_dir = Path(args.state_dir)
         note_text = load_followup_note(note=args.note, note_file=args.note_file, review_root=review_root)
-        ensure_clean_git_worktree(review_root)
+        requested_base = str(args.base)
+        base_info = effective_base_ref(review_root, requested_base)
+        branch_base = str(base_info["base"])
         if use_unsafe_windows_wsl_fallback(review_root, bool(args.wsl)):
             print(
                 "[review-followup] WARNING: using Windows Codex fallback for a WSL UNC repo. This bypasses the Codex sandbox and is not the happy path.",
@@ -198,32 +202,40 @@ def main() -> int:
             explicit_since=args.since,
             state_dir=state_dir,
             review_cwd=review_root,
-            base=str(args.base),
+            base=branch_base,
             force=bool(args.force),
         )
         source_context = gate_findings_source_context(
             state_dir=state_dir,
             review_cwd=review_root,
-            base=str(args.base),
+            base=branch_base,
             since_head=since_head,
         )
         head = current_head(review_root)
         if since_head == head:
             raise ValueError("current HEAD already matches the requested follow-up anchor")
+        validated_linear_review_range(review_root, since_head, head, label="native follow-up review")
+        if not has_committed_diff(review_root, since_head, head):
+            raise ValueError(
+                f"follow-up review found no committed diff between `{since_head}` and `{head}`. "
+                "Commit the intended fix or use the appropriate full review lane."
+            )
+        ensure_clean_git_worktree(review_root)
         prompt = build_followup_prompt(
             since_head=since_head,
             head=head,
             note=note_text,
-            diff_text=diff_artifact(review_root, since_head, "HEAD"),
         )
         model_config = lens_model_config("review-followup", state_dir=state_dir)
-        result = run_codex(
+        result = run_codex_review(
             tool_name="review-followup",
             prompt=prompt,
             model=model_config.model,
             reasoning_effort=model_config.reasoning_effort,
             service_tier=model_config.service_tier,
+            title="review-followup",
             review_root=review_root,
+            base=since_head,
             progress_interval_seconds=DEFAULT_PROGRESS_INTERVAL_SECONDS,
             timeout_seconds=DEFAULT_TIMEOUT_SECONDS,
             allow_unsafe_windows_wsl_fallback=bool(args.wsl),
@@ -231,18 +243,27 @@ def main() -> int:
         if int(result["returncode"]) == 0:
             try:
                 output_ref = f"session:{result['session_id']}" if result.get("session_id") else None
+                branch_scope = {
+                    "branch_base": branch_base,
+                    "merge_base": merge_base(review_root, branch_base),
+                }
+                if requested_base != branch_base:
+                    branch_scope["requested_base"] = requested_base
+                for key in EFFECTIVE_BASE_METADATA_KEYS:
+                    if key in base_info:
+                        branch_scope[key] = base_info[key]
                 record_review_anchor(
                     state_dir=state_dir,
                     review_cwd=review_root,
                     lane="review-followup",
-                    base=str(args.base),
+                    base=branch_base,
                     review_scope=(
                         {
                             "commit": since_head,
                             "commit_end": head,
-                            "merge_base": merge_base(review_root, str(args.base)),
-                            "manual_prompt_mode": True,
+                            "base": since_head,
                             "target_label": f"interdiff `{since_head}..{head}`",
+                            **branch_scope,
                             **source_context,
                         }
                     ),

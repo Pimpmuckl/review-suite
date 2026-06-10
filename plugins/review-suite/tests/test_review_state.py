@@ -13,7 +13,15 @@ if str(SCRIPT_DIR) not in sys.path:
 import review_suite_core.workflow_state as workflow_state_module
 import review_state
 
-from review_suite_core.workflow_state import branch_token, inspect_workflow_status, load_workflow_state, record_review_anchor, workflow_state_path
+from review_suite_core.workflow_state import (
+    branch_token,
+    effective_base_ref,
+    inspect_workflow_status,
+    latest_base_review_context_anchor,
+    load_workflow_state,
+    record_review_anchor,
+    workflow_state_path,
+)
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -66,6 +74,71 @@ def _write_orchestrator_cycle(state_dir: Path, name: str, payload: dict[str, obj
     path = state_dir / "orchestrator" / "cycles" / name
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_effective_base_ref_prefers_configured_upstream_and_marks_stale(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    old_main = _commit_file(repo, "app.txt", "old\n", "old main")
+    new_main = _commit_file(repo, "app.txt", "new\n", "new upstream main")
+    _git(repo, "remote", "add", "origin", str(tmp_path / "origin.git"))
+    _git(repo, "update-ref", "refs/remotes/origin/main", new_main)
+    _git(repo, "reset", "--hard", old_main)
+    _git(repo, "branch", "--set-upstream-to=origin/main", "main")
+    _git(repo, "checkout", "-b", "feature/stale-base")
+    _commit_file(repo, "feature.txt", "feature\n", "feature")
+
+    payload = effective_base_ref(repo, "main")
+
+    assert payload["requested_base"] == "main"
+    assert payload["base"] == "origin/main"
+    assert payload["base_upstream"] == "origin/main"
+    assert payload["requested_base_head"] == old_main
+    assert payload["base_upstream_head"] == new_main
+    assert payload["effective_base_head"] == new_main
+    assert payload["base_ref_stale"] is True
+    assert payload["base_ref_relation"] == "behind"
+
+
+def test_effective_base_ref_keeps_requested_base_when_local_branch_is_ahead(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    old_main = _commit_file(repo, "app.txt", "old\n", "old main")
+    _git(repo, "remote", "add", "origin", str(tmp_path / "origin.git"))
+    _git(repo, "update-ref", "refs/remotes/origin/main", old_main)
+    new_main = _commit_file(repo, "app.txt", "new\n", "new local main")
+    _git(repo, "branch", "--set-upstream-to=origin/main", "main")
+    _git(repo, "checkout", "-b", "feature/local-base")
+    _commit_file(repo, "feature.txt", "feature\n", "feature")
+
+    payload = effective_base_ref(repo, "main")
+
+    assert payload["requested_base"] == "main"
+    assert payload["base"] == "main"
+    assert payload["base_upstream"] == "origin/main"
+    assert payload["requested_base_head"] == new_main
+    assert payload["base_upstream_head"] == old_main
+    assert payload["effective_base_head"] == new_main
+    assert payload["base_ref_stale"] is True
+    assert payload["base_ref_relation"] == "ahead"
+
+
+def test_effective_base_ref_keeps_requested_base_when_upstream_is_unresolved(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    main_head = _commit_file(repo, "app.txt", "main\n", "main")
+    _git(repo, "remote", "add", "origin", str(tmp_path / "origin.git"))
+    _git(repo, "config", "branch.main.remote", "origin")
+    _git(repo, "config", "branch.main.merge", "refs/heads/main")
+
+    payload = effective_base_ref(repo, "main")
+
+    assert payload["requested_base"] == "main"
+    assert payload["base"] == "main"
+    assert payload["base_upstream"] == "origin/main"
+    assert payload["base_upstream_unresolved"] is True
+    assert "requested_base_head" not in payload
+    assert _git(repo, "rev-parse", "main") == main_head
 
 
 def test_inspect_workflow_status_without_anchor_recommends_full_review(tmp_path: Path) -> None:
@@ -598,7 +671,6 @@ def test_inspect_workflow_status_routes_clean_followup_after_gate_findings_back_
         review_scope={
             "commit": reviewed_head,
             "commit_end": fix_head,
-            "manual_prompt_mode": True,
             "merge_base": merge_base,
             "source_gate_lane": "review_t4",
             "source_gate_reviewed_head": reviewed_head,
@@ -738,8 +810,12 @@ def test_record_review_anchor_compacts_tool_only_state(tmp_path: Path) -> None:
         review_scope={
             "commit": reviewed_head,
             "commit_end": reviewed_head,
+            "branch_base": "main",
+            "requested_base": "main",
+            "base_upstream": "origin/main",
+            "base_upstream_head": reviewed_head,
+            "effective_base_head": reviewed_head,
             "merge_base": reviewed_head,
-            "manual_prompt_mode": True,
             "target_label": f"interdiff `{reviewed_head}..{reviewed_head}`",
             "manual_prompt_reason": "custom instructions",
         },
@@ -758,9 +834,26 @@ def test_record_review_anchor_compacts_tool_only_state(tmp_path: Path) -> None:
     assert anchor["review_scope"] == {
         "commit": reviewed_head,
         "commit_end": reviewed_head,
+        "branch_base": "main",
+        "requested_base": "main",
+        "base_upstream": "origin/main",
+        "base_upstream_head": reviewed_head,
+        "effective_base_head": reviewed_head,
         "merge_base": reviewed_head,
-        "manual_prompt_mode": True,
     }
+
+
+def test_latest_base_review_context_anchor_matches_branch_base_metadata() -> None:
+    anchor = {
+        "lane": "review_t3",
+        "review_scope": {
+            "base": "origin/main",
+            "branch_base": "main",
+            "merge_base": "merge-base-sha",
+        },
+    }
+
+    assert latest_base_review_context_anchor({"anchors": [anchor]}, requested_base="main") is anchor
 
 
 def test_inspect_workflow_status_recommends_followup_for_small_delta(tmp_path: Path) -> None:
@@ -835,7 +928,6 @@ def test_inspect_workflow_status_escalates_small_delta_when_branch_review_pressu
                 "commit": latest_reviewed_head,
                 "commit_end": latest_reviewed_head,
                 "merge_base": _git(repo, "merge-base", "main", "HEAD"),
-                "manual_prompt_mode": True,
             },
         )
     for index in range(12, 26):
@@ -851,7 +943,6 @@ def test_inspect_workflow_status_escalates_small_delta_when_branch_review_pressu
             "commit": latest_reviewed_head,
             "commit_end": latest_reviewed_head,
             "merge_base": _git(repo, "merge-base", "main", "HEAD"),
-            "manual_prompt_mode": True,
         },
     )
     _commit_file(repo, "app.txt", "tip\n", "small fix")
@@ -899,7 +990,6 @@ def test_inspect_workflow_status_escalates_after_too_many_followups_since_full_c
             review_scope={
                 "commit": previous_head,
                 "commit_end": next_head,
-                "manual_prompt_mode": True,
                 "merge_base": merge_base_at_checkpoint,
             },
         )
@@ -949,7 +1039,6 @@ def test_inspect_workflow_status_clean_t4_resets_followup_cycle_pressure(tmp_pat
             review_scope={
                 "commit": previous_head,
                 "commit_end": next_head,
-                "manual_prompt_mode": True,
                 "merge_base": merge_base_at_checkpoint,
             },
         )
@@ -972,7 +1061,6 @@ def test_inspect_workflow_status_clean_t4_resets_followup_cycle_pressure(tmp_pat
         review_scope={
             "commit": previous_head,
             "commit_end": next_head,
-            "manual_prompt_mode": True,
             "merge_base": merge_base_at_checkpoint,
         },
     )
@@ -1018,7 +1106,6 @@ def test_inspect_workflow_status_github_review_resets_followup_cycle_pressure(tm
             review_scope={
                 "commit": previous_head,
                 "commit_end": next_head,
-                "manual_prompt_mode": True,
                 "merge_base": merge_base_at_checkpoint,
             },
         )
@@ -1086,7 +1173,6 @@ def test_inspect_workflow_status_routes_post_t4_findings_back_to_t4(tmp_path: Pa
             review_scope={
                 "commit": previous_head,
                 "commit_end": next_head,
-                "manual_prompt_mode": True,
                 "merge_base": merge_base_at_checkpoint,
             },
         )
@@ -1264,7 +1350,6 @@ def test_inspect_workflow_status_uses_latest_base_review_context_after_followup(
         review_scope={
             "commit": reviewed_head,
             "commit_end": final_head,
-            "manual_prompt_mode": True,
             "merge_base": stale_base,
         },
     )
@@ -1547,6 +1632,73 @@ def test_inspect_workflow_status_honors_requested_base_over_stored_base(tmp_path
 
     assert payload["recommendation"] == "full-review"
     assert payload["reason"] == "base_merge_base_changed"
+
+
+def test_inspect_workflow_status_uses_effective_base_when_requested_base_matches_metadata(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    old_main = _commit_file(repo, "base.txt", "old\n", "old main")
+    new_main = _commit_file(repo, "base.txt", "old\nnew\n", "new upstream main")
+    _git(repo, "update-ref", "refs/remotes/origin/main", new_main)
+    _git(repo, "checkout", "-b", "feature/effective-base")
+    _git(repo, "branch", "-f", "main", old_main)
+    reviewed_head = _commit_file(repo, "feature.txt", "feat\n", "feature work")
+    record_review_anchor(
+        state_dir=state_dir,
+        review_cwd=repo,
+        lane="review_t3",
+        base="origin/main",
+        reviewed_head=reviewed_head,
+        review_scope={
+            "base": "origin/main",
+            "requested_base": "main",
+            "reviewed_head": reviewed_head,
+            "merge_base": new_main,
+        },
+    )
+
+    payload = inspect_workflow_status(
+        state_dir=state_dir,
+        review_cwd=repo,
+        base="main",
+    )
+
+    assert payload["recommendation"] == "none"
+    assert payload["current_merge_base"] == new_main
+
+
+def test_inspect_workflow_status_uses_branch_base_for_followup_anchor_context(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    branch_base = _commit_file(repo, "base.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/followup-only")
+    since_head = _commit_file(repo, "feature.txt", "feat\n", "reviewed")
+    final_head = _commit_file(repo, "feature.txt", "feat\nfix\n", "fix")
+    record_review_anchor(
+        state_dir=state_dir,
+        review_cwd=repo,
+        lane="review-followup",
+        base="main",
+        reviewed_head=final_head,
+        review_scope={
+            "commit": since_head,
+            "commit_end": final_head,
+            "base": since_head,
+            "branch_base": "main",
+            "merge_base": branch_base,
+        },
+    )
+
+    payload = inspect_workflow_status(
+        state_dir=state_dir,
+        review_cwd=repo,
+        base="main",
+    )
+
+    assert payload["recommendation"] == "none"
+    assert payload["current_merge_base"] == branch_base
 
 
 def test_workflow_state_path_disambiguates_slug_colliding_branch_names(tmp_path: Path) -> None:

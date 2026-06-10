@@ -338,8 +338,8 @@ def test_orchestrator_review_helper_uses_phase_prompt_without_predecision_anchor
     assert prompt.strip()
     assert "Review this implementation slice" in prompt
     assert "Reviewer output is advisory risk input" in prompt
-    assert "=== BEGIN DIFF ===" in prompt
-    assert dict(captured["review_scope"])["manual_prompt_mode"] is True
+    assert "=== BEGIN DIFF ===" not in prompt
+    assert "manual_prompt_mode" not in dict(captured["review_scope"])
     assert dict(captured["round_payload"])["runs"][0]["service_tier"] == "flex"
     assert result["reviewed_head"] == head
     assert result["output_refs"] == ["rollout://alpha"]
@@ -440,7 +440,7 @@ def test_orchestrator_arena_helper_uses_pr_prompt_for_pr_review(
     prompt = str(captured["prompt"])
     assert "Review this PR-ready branch diff" in prompt
     assert "Review this implementation slice" not in prompt
-    assert dict(captured["review_scope"])["manual_prompt_mode"] is True
+    assert "manual_prompt_mode" not in dict(captured["review_scope"])
     assert dict(captured["round_payload"])["task_class"] == "pr_review"
     assert dict(captured["round_payload"])["task_id_hint"] == "feature/orchestrator-arena-pr"
     assert "Review this PR-ready branch diff" in str(dict(captured["round_payload"])["requested_prompt"])

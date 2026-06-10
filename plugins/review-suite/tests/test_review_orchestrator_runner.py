@@ -473,7 +473,7 @@ def test_runner_arena_findings_fix_advances_with_findings_context(monkeypatch, t
     review_calls = _stub_review(monkeypatch, "phase_review-round-2")
     monkeypatch.setattr(orchestrator_runner, "current_head", lambda cwd: "head-2")
     monkeypatch.setattr(orchestrator_runner, "merge_base", lambda cwd, left, right="HEAD": "base-1")
-    monkeypatch.setattr(orchestrator_runner, "diff_artifact", lambda cwd, start_ref, end_ref="HEAD": "diff --git a/app.txt b/app.txt\n")
+    monkeypatch.setattr(orchestrator_runner, "has_committed_diff", lambda cwd, start_ref, end_ref="HEAD": True)
     monkeypatch.setattr(orchestrator_runner, "dirty_worktree_scope", lambda cwd, base, merge_base_ref=None: {"dirty_paths": []})
     state = _cycle(tmp_path, deslop_enabled=False, step_names=("arena-discovery", "broad-discovery", "precision-signoff"))
     state["review_plan"]["steps"][0] = {
@@ -542,7 +542,7 @@ def test_runner_preserves_direct_arena_fix_context_after_blocked_dismissal(monke
     monkeypatch.setattr(orchestrator_runner, "run_arena_step", fake_run)
     monkeypatch.setattr(orchestrator_runner, "current_head", lambda cwd: "head-2")
     monkeypatch.setattr(orchestrator_runner, "merge_base", lambda cwd, left, right="HEAD": "base-1")
-    monkeypatch.setattr(orchestrator_runner, "diff_artifact", lambda cwd, start_ref, end_ref="HEAD": "diff --git a/app.txt b/app.txt\n")
+    monkeypatch.setattr(orchestrator_runner, "has_committed_diff", lambda cwd, start_ref, end_ref="HEAD": True)
     monkeypatch.setattr(orchestrator_runner, "dirty_worktree_scope", lambda cwd, base, merge_base_ref=None: {"dirty_paths": []})
     state = _cycle(tmp_path, deslop_enabled=False, step_names=("arena-discovery", "broad-discovery", "precision-signoff"))
     state["review_plan"]["steps"][0] = {
@@ -995,7 +995,7 @@ def test_runner_runs_real_followup_once_from_followup_pending(monkeypatch, tmp_p
     followup_calls = _stub_followup(monkeypatch)
     monkeypatch.setattr(orchestrator_runner, "current_head", lambda cwd: "head-2")
     monkeypatch.setattr(orchestrator_runner, "merge_base", lambda cwd, left, right="HEAD": "base-1")
-    monkeypatch.setattr(orchestrator_runner, "diff_artifact", lambda cwd, start_ref, end_ref="HEAD": "diff --git a/app.txt b/app.txt\n")
+    monkeypatch.setattr(orchestrator_runner, "has_committed_diff", lambda cwd, start_ref, end_ref="HEAD": True)
     monkeypatch.setattr(orchestrator_runner, "dirty_worktree_scope", lambda cwd, base, merge_base_ref=None: {"dirty_paths": []})
     state = _cycle(tmp_path, mode="deep", deslop_enabled=False, step_names=("broad-discovery", "precision-signoff"))
     pending = mark_review_step_pending(
@@ -1008,6 +1008,10 @@ def test_runner_runs_real_followup_once_from_followup_pending(monkeypatch, tmp_p
     )
     findings = record_findings_decision(pending, round_id="phase_review-round-1", lane="review_t1", reviewed_head="head-1")
     fixed = mark_fix_detected(findings, head="head-2")
+    fixed["identity"]["base"] = "origin/main"
+    fixed["identity"]["requested_base"] = "main"
+    fixed["identity"]["base_upstream"] = "origin/main"
+    fixed["identity"]["base_ref_stale"] = True
 
     result = orchestrator_runner.run_one_expensive_step(fixed, state_dir=tmp_path / "state")
 
@@ -1029,6 +1033,10 @@ def test_runner_runs_real_followup_once_from_followup_pending(monkeypatch, tmp_p
     assert followup_calls[0]["review_scope"]["source_round_id"] == "phase_review-round-1"
     assert followup_calls[0]["review_scope"]["commit"] == "head-1"
     assert followup_calls[0]["review_scope"]["commit_end"] == "head-2"
+    assert followup_calls[0]["review_scope"]["branch_base"] == "origin/main"
+    assert followup_calls[0]["review_scope"]["requested_base"] == "main"
+    assert followup_calls[0]["review_scope"]["base_upstream"] == "origin/main"
+    assert followup_calls[0]["review_scope"]["base_ref_stale"] is True
     assert "Review this follow-up diff" in str(followup_calls[0]["prompt"])
     assert "Source review round phase_review-round-1" in str(followup_calls[0]["prompt"])
 
@@ -1037,7 +1045,7 @@ def test_runner_discovery_findings_fix_advances_with_findings_context(monkeypatc
     review_calls = _stub_review(monkeypatch, "phase_review-round-2")
     monkeypatch.setattr(orchestrator_runner, "current_head", lambda cwd: "head-2")
     monkeypatch.setattr(orchestrator_runner, "merge_base", lambda cwd, left, right="HEAD": "base-1")
-    monkeypatch.setattr(orchestrator_runner, "diff_artifact", lambda cwd, start_ref, end_ref="HEAD": "diff --git a/app.txt b/app.txt\n")
+    monkeypatch.setattr(orchestrator_runner, "has_committed_diff", lambda cwd, start_ref, end_ref="HEAD": True)
     monkeypatch.setattr(orchestrator_runner, "dirty_worktree_scope", lambda cwd, base, merge_base_ref=None: {"dirty_paths": []})
     state = _cycle(tmp_path, deslop_enabled=False, step_names=("broad-discovery", "precision-signoff"))
     pending = mark_review_step_pending(
@@ -1082,7 +1090,7 @@ def test_runner_rejects_direct_fix_rerun_without_committed_interdiff(monkeypatch
     review_calls = _stub_review(monkeypatch, "phase_review-round-2")
     monkeypatch.setattr(orchestrator_runner, "current_head", lambda cwd: "head-2")
     monkeypatch.setattr(orchestrator_runner, "merge_base", lambda cwd, left, right="HEAD": "base-1")
-    monkeypatch.setattr(orchestrator_runner, "diff_artifact", lambda cwd, start_ref, end_ref="HEAD": "")
+    monkeypatch.setattr(orchestrator_runner, "has_committed_diff", lambda cwd, start_ref, end_ref="HEAD": False)
     monkeypatch.setattr(orchestrator_runner, "dirty_worktree_scope", lambda cwd, base, merge_base_ref=None: {"dirty_paths": []})
     state = _cycle(tmp_path, deslop_enabled=False, step_names=("broad-discovery", "precision-signoff"))
     pending = mark_review_step_pending(
@@ -1106,7 +1114,7 @@ def test_runner_rejects_followup_with_committed_and_related_dirty_changes(monkey
     followup_calls = _stub_followup(monkeypatch)
     monkeypatch.setattr(orchestrator_runner, "current_head", lambda cwd: "head-2")
     monkeypatch.setattr(orchestrator_runner, "merge_base", lambda cwd, left, right="HEAD": "base-1")
-    monkeypatch.setattr(orchestrator_runner, "diff_artifact", lambda cwd, start_ref, end_ref="HEAD": "diff --git a/app.txt b/app.txt\n")
+    monkeypatch.setattr(orchestrator_runner, "has_committed_diff", lambda cwd, start_ref, end_ref="HEAD": True)
     monkeypatch.setattr(
         orchestrator_runner,
         "dirty_worktree_scope",
@@ -1134,7 +1142,7 @@ def test_runner_rejects_followup_dirty_changes_in_interdiff_paths(monkeypatch, t
     followup_calls = _stub_followup(monkeypatch)
     monkeypatch.setattr(orchestrator_runner, "current_head", lambda cwd: "head-2")
     monkeypatch.setattr(orchestrator_runner, "merge_base", lambda cwd, left, right="HEAD": "base-1")
-    monkeypatch.setattr(orchestrator_runner, "diff_artifact", lambda cwd, start_ref, end_ref="HEAD": "diff --git a/app.txt b/app.txt\n")
+    monkeypatch.setattr(orchestrator_runner, "has_committed_diff", lambda cwd, start_ref, end_ref="HEAD": True)
     monkeypatch.setattr(
         orchestrator_runner,
         "dirty_worktree_scope",
@@ -1162,7 +1170,7 @@ def test_runner_rejects_followup_with_committed_diff_and_unrelated_dirty_changes
     followup_calls = _stub_followup(monkeypatch)
     monkeypatch.setattr(orchestrator_runner, "current_head", lambda cwd: "head-2")
     monkeypatch.setattr(orchestrator_runner, "merge_base", lambda cwd, left, right="HEAD": "base-1")
-    monkeypatch.setattr(orchestrator_runner, "diff_artifact", lambda cwd, start_ref, end_ref="HEAD": "diff --git a/app.txt b/app.txt\n")
+    monkeypatch.setattr(orchestrator_runner, "has_committed_diff", lambda cwd, start_ref, end_ref="HEAD": True)
     monkeypatch.setattr(
         orchestrator_runner,
         "dirty_worktree_scope",

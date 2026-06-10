@@ -60,7 +60,6 @@ from review_suite_local import (
     reviewer_output_heading,
     state_lock,
     total_usage_tokens,
-    uses_native_base_review,
     use_unsafe_windows_wsl_fallback,
     variant_service_tier,
     write_json,
@@ -905,7 +904,6 @@ def _launch_gate_run(
     allow_unsafe_windows_wsl_fallback: bool,
     retry_attempts: int,
 ) -> dict[str, Any]:
-    manual_prompt = prompt if not uses_native_base_review(review_scope) else ""
     title = _gate_run_title(
         gate_task_class=gate_task_class,
         round_id=round_id,
@@ -930,7 +928,7 @@ def _launch_gate_run(
             if use_unsafe_windows_wsl_fallback(review_cwd, allow_unsafe_windows_wsl_fallback)
             else review_cwd
         ),
-        stdin_text=manual_prompt or None,
+        stdin_text=prompt if prompt.strip() else None,
         stdout_prefix=f"{gate_task_class}-{slot}-",
     )
     return {
