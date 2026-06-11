@@ -749,7 +749,7 @@ def _select_gate_variants(
             variants=_repeat_gate_variant(primary, reviewer_count),
             champion_ids=configured_phase_ids,
         )
-    if not champion_ids:
+    def backup_selection(*, mode_prefix: str, champion_ids: tuple[str, ...], empty_message: str) -> GateSelection:
         fallbacks = _gate_fallback_variants(
             roster=roster,
             indexed=indexed,
@@ -760,46 +760,39 @@ def _select_gate_variants(
             state_dir=state_dir,
         )
         if not fallbacks:
-            configured = ", ".join(gate_config(gate_task_class, state_dir=state_dir).backup_variant_ids)
-            raise ValueError(
-                f"no configured provisional backups or non-probation supplied-roster fallbacks for {gate_task_class} are active and eligible for {arena_task_class}: {configured}"
-            )
+            raise ValueError(empty_message)
         fallback = fallbacks[0]
         return GateSelection(
             gate_task_class=gate_task_class,
             arena_task_class=arena_task_class,
-            mode=_multi_pass_mode("provisional_backup", reviewer_count),
+            mode=_multi_pass_mode(mode_prefix, reviewer_count),
             variants=_repeat_gate_variant(fallback, reviewer_count),
-            champion_ids=(),
+            champion_ids=champion_ids,
         )
+
     champions = [
         indexed[variant_id]
         for variant_id in champion_ids
         if variant_id in indexed and str(indexed[variant_id].get("state", "active")) == "active"
     ]
-    if not champions:
-        raise ValueError(f"configured champions for {gate_task_class} are no longer active in the roster")
+    active_champion_ids = tuple(str(variant["id"]) for variant in champions)
+    if not champion_ids or not champions:
+        configured = ", ".join(gate_config(gate_task_class, state_dir=state_dir).backup_variant_ids)
+        return backup_selection(
+            mode_prefix="provisional_backup",
+            champion_ids=(),
+            empty_message=(
+                f"no configured provisional backups or non-probation supplied-roster fallbacks for {gate_task_class} "
+                f"are active and eligible for {arena_task_class}: {configured}"
+            ),
+        )
     ready_champions = [variant for variant in champions if str(variant["id"]) not in cooling]
     if not ready_champions:
-        fallbacks = _gate_fallback_variants(
-            roster=roster,
-            indexed=indexed,
-            gate_task_class=gate_task_class,
-            arena_task_class=arena_task_class,
-            probation_ids=probation_ids,
-            cooling=cooling,
-            state_dir=state_dir,
-        )
-        if not fallbacks:
-            cooled = ", ".join(str(variant["id"]) for variant in champions)
-            raise ValueError(f"all configured champions for {gate_task_class} are cooling and no fallback is available: {cooled}")
-        fallback = fallbacks[0]
-        return GateSelection(
-            gate_task_class=gate_task_class,
-            arena_task_class=arena_task_class,
-            mode=_multi_pass_mode("cooldown_backup", reviewer_count),
-            variants=_repeat_gate_variant(fallback, reviewer_count),
-            champion_ids=champion_ids,
+        cooled = ", ".join(str(variant["id"]) for variant in champions)
+        return backup_selection(
+            mode_prefix="cooldown_backup",
+            champion_ids=active_champion_ids,
+            empty_message=f"all configured champions for {gate_task_class} are cooling and no fallback is available: {cooled}",
         )
     selection_pool = ready_champions
     if len(selection_pool) == 1:
@@ -809,10 +802,10 @@ def _select_gate_variants(
             arena_task_class=arena_task_class,
             mode="double_pass" if reviewer_count == 2 else f"{reviewer_count}_pass",
             variants=_repeat_gate_variant(champion, reviewer_count),
-            champion_ids=champion_ids,
+            champion_ids=active_champion_ids,
         )
     counts = _gate_variant_counts(read_jsonl(_gate_runs_path(state_dir)), gate_task_class)
-    champion_order = {variant_id: idx for idx, variant_id in enumerate(champion_ids)}
+    champion_order = {variant_id: idx for idx, variant_id in enumerate(active_champion_ids)}
     ranked = sorted(
         selection_pool,
         key=lambda variant: (
@@ -826,7 +819,7 @@ def _select_gate_variants(
         arena_task_class=arena_task_class,
         mode="dual_champion" if reviewer_count == 2 else f"multi_champion_{reviewer_count}_pass",
         variants=_cycle_gate_variants(ranked, reviewer_count),
-        champion_ids=champion_ids,
+        champion_ids=active_champion_ids,
     )
 
 

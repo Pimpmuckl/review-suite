@@ -51,6 +51,23 @@ from review_suite_local import (
 )
 
 
+def test_default_roster_excludes_deprecated_codex_models() -> None:
+    roster_path = SCRIPT_DIR.parent / "references" / "roster.json"
+    roster = json.loads(roster_path.read_text(encoding="utf-8"))
+
+    served_deprecated = [
+        variant
+        for variant in roster["variants"]
+        if variant.get("state", "active") == "active"
+        and (
+            str(variant.get("model") or "").startswith("gpt-5.3-codex")
+            or str(variant.get("id") or "").startswith("gpt-5.3-codex")
+        )
+    ]
+
+    assert served_deprecated == []
+
+
 def test_reviewer_wait_line_uses_actual_count() -> None:
     assert _reviewer_wait_line({"runs": [{"slot": "alpha"}]}) == (
         "[review-suite] waiting for 1 reviewer; wrapper is active as long as output streams, do not stop it prematurely"
@@ -1045,9 +1062,15 @@ def test_launch_reviewer_process_writes_prompt_for_native_base_mode(
     )
 
     proc = captured["proc"]
+    command = captured["command"]
+    assert command[1] == "exec"
+    assert "review" in command
+    assert "--base" not in command
+    assert "--commit" not in command
+    assert command[-1] == "-"
     assert len(proc.stdin.writes) == 1
     assert "manual prompt" in proc.stdin.writes[0]
-    assert "base ref `main`" in proc.stdin.writes[0]
+    assert "commit range `main..new-head`" in proc.stdin.writes[0]
     assert "BEGIN DIFF" not in proc.stdin.writes[0]
     assert proc.stdin.closed is True
     assert launched["pid"] == 4242

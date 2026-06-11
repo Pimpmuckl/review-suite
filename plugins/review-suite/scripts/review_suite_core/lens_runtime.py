@@ -77,11 +77,6 @@ def _codex_command_prefix(
         command.extend(["-C", str(review_root)])
         if not unsafe_fallback:
             command.extend(["-s", "read-only"])
-    elif subcommand == "review":
-        if unsafe_fallback:
-            command.extend(["exec", "-C", str(review_root), "review", "--dangerously-bypass-approvals-and-sandbox"])
-        else:
-            command.append("review")
     elif subcommand == "exec-review":
         command.append("exec")
         if unsafe_fallback:
@@ -145,15 +140,29 @@ def codex_exec_command(
     return command
 
 
-def codex_review_stdin_text(*, prompt: str, base: str | None = None, commit: str | None = None) -> str | None:
+def codex_review_stdin_text(
+    *,
+    prompt: str,
+    base: str | None = None,
+    commit: str | None = None,
+    commit_end: str | None = None,
+) -> str | None:
     review_prompt = prompt.strip()
-    if not review_prompt:
-        return None
     base_ref = str(base or "").strip()
     commit_ref = str(commit or "").strip()
-    if bool(base_ref) == bool(commit_ref):
+    commit_end_ref = str(commit_end or "").strip()
+    if not review_prompt and not commit_end_ref:
+        return None
+    if commit_end_ref:
+        if not base_ref or commit_ref:
+            raise ValueError("commit-range review prompt requires base and commit_end")
+        target = (
+            f"Review target: review commit range `{base_ref}..{commit_end_ref}`. "
+            "Use local git commands to inspect that bounded range; no inline diff is provided."
+        )
+    elif bool(base_ref) == bool(commit_ref):
         raise ValueError("targeted review prompt requires exactly one of base or commit")
-    if base_ref:
+    elif base_ref:
         target = (
             f"Review target: compare the current checkout against base ref `{base_ref}`. "
             "Use local git commands to inspect the diff; no inline diff is provided."
@@ -163,46 +172,10 @@ def codex_review_stdin_text(*, prompt: str, base: str | None = None, commit: str
             f"Review target: review the changes introduced by commit `{commit_ref}`. "
             "Use local git commands to inspect the commit; no inline diff is provided."
         )
-    return (
-        "You are running a focused code review. Do not modify files.\n"
-        f"{target}\n\n"
-        "Review instructions:\n"
-        f"{review_prompt}\n"
-    )
-
-
-def codex_review_command(
-    *,
-    tool_name: str,
-    model: str,
-    reasoning_effort: str,
-    service_tier: str | None = None,
-    title: str,
-    review_root: Path,
-    base: str | None = None,
-    commit: str | None = None,
-    allow_unsafe_windows_wsl_fallback: bool,
-) -> list[str]:
-    base_ref = str(base or "").strip()
-    commit_ref = str(commit or "").strip()
-    if bool(base_ref) == bool(commit_ref):
-        raise ValueError("native review requires exactly one of base or commit")
-    command = _codex_command_prefix(
-        tool_name=tool_name,
-        review_root=review_root,
-        allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
-        unsafe_command_hint="codex exec review --dangerously-bypass-approvals-and-sandbox",
-        subcommand="review",
-        model=model,
-        reasoning_effort=reasoning_effort,
-        service_tier=service_tier,
-        title=title,
-    )
-    if base_ref:
-        command.extend(["--base", base_ref])
-    else:
-        command.extend(["--commit", commit_ref])
-    return command
+    message = f"You are running a focused code review. Do not modify files.\n{target}\n"
+    if review_prompt:
+        message += f"\nReview instructions:\n{review_prompt}\n"
+    return message
 
 
 def codex_exec_review_command(
@@ -221,8 +194,13 @@ def codex_exec_review_command(
 ) -> list[str]:
     base_ref = str(base or "").strip()
     commit_ref = str(commit or "").strip()
-    if bool(base_ref) == bool(commit_ref):
-        raise ValueError("prompted review requires exactly one of base or commit")
+    prompt_text = prompt.strip()
+    if base_ref and commit_ref:
+        raise ValueError("native exec review requires at most one of base or commit")
+    if (base_ref or commit_ref) and prompt_text:
+        raise ValueError("native exec review cannot combine --base/--commit with a custom prompt")
+    if not (base_ref or commit_ref or prompt_text):
+        raise ValueError("exec review requires --base, --commit, or a custom prompt")
     command = _codex_command_prefix(
         tool_name=tool_name,
         review_root=review_root,
@@ -238,9 +216,9 @@ def codex_exec_review_command(
         command.extend(["-o", str(output_path)])
     if base_ref:
         command.extend(["--base", base_ref])
-    else:
+    elif commit_ref:
         command.extend(["--commit", commit_ref])
-    if prompt.strip():
+    else:
         command.append("-")
     return command
 
@@ -275,37 +253,29 @@ def prepare_codex_review_launch(
             commit_end_ref,
             label="native commit-range review launch",
         )
-    stdin_text = codex_review_stdin_text(prompt=prompt, base=base, commit=commit)
+    stdin_text = codex_review_stdin_text(prompt=prompt, base=base, commit=commit, commit_end=commit_end)
     final_message_path: Path | None = None
     if stdin_text is not None:
         prefix = output_prefix or f"{tool_name}-message-"
         final_message_path = _review_output_path(prefix)
+    command_kwargs = {
+        "tool_name": tool_name,
+        "model": model,
+        "reasoning_effort": reasoning_effort,
+        "service_tier": service_tier,
+        "title": title,
+        "output_path": final_message_path,
+        "review_root": review_root,
+        "allow_unsafe_windows_wsl_fallback": allow_unsafe_windows_wsl_fallback,
+    }
     if stdin_text is not None:
-        command = codex_exec_review_command(
-            tool_name=tool_name,
-            model=model,
-            reasoning_effort=reasoning_effort,
-            service_tier=service_tier,
-            title=title,
-            review_root=review_root,
-            base=base,
-            commit=commit,
-            prompt=stdin_text,
-            output_path=final_message_path,
-            allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
-        )
+        # Codex rejects native --base/--commit targets when custom review instructions are supplied.
+        # Keep the review subcommand, but put the git target in stdin with the lens instructions.
+        command_kwargs["prompt"] = stdin_text
     else:
-        command = codex_review_command(
-            tool_name=tool_name,
-            model=model,
-            reasoning_effort=reasoning_effort,
-            service_tier=service_tier,
-            title=title,
-            review_root=review_root,
-            base=base,
-            commit=commit,
-            allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
-        )
+        command_kwargs["base"] = base
+        command_kwargs["commit"] = commit
+    command = codex_exec_review_command(**command_kwargs)
     cwd = (
         wrapper_launch_cwd()
         if use_unsafe_windows_wsl_fallback(review_root, allow_unsafe_windows_wsl_fallback)

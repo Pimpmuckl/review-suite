@@ -524,6 +524,103 @@ def test_arena_recovery_action_surfaces_reroll_and_dismiss(tmp_path: Path) -> No
     assert "--id rvw_example" in str(action["next"])
 
 
+def test_arena_recovery_action_dismisses_unsupported_blocked_slots(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    state = {
+        "public_id": "rvw_example",
+        "stage": "retry-requested",
+        "pending_action": {
+            "kind": "arena-blocked",
+            "round_id": "arena-round-1",
+            "lane": "review_t1",
+        },
+        "identity": {"cwd": str(repo), "base": "main", "branch": "feature/arena"},
+        "deslop": {"tracked": False, "status": "closed"},
+        "rounds": [
+            {
+                "round_id": "arena-round-1",
+                "lane": "review_t1",
+                "grading_required": False,
+                "arena_round": True,
+                "status": "completed",
+                "runs": [{"slot": "charlie", "blocked": True}],
+            }
+        ],
+    }
+
+    action = review._action_payload(state, state_dir=tmp_path / "state")
+
+    assert action is not None
+    assert "review_suite_arena.py dismiss-round" in str(action["cmd"])
+    assert "reroll" not in action
+    assert "--id rvw_example" in str(action["next"])
+
+
+def test_arena_recovery_action_dismisses_mixed_supported_and_unsupported_blocked_slots(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    state = {
+        "public_id": "rvw_example",
+        "stage": "retry-requested",
+        "pending_action": {
+            "kind": "arena-blocked",
+            "round_id": "arena-round-1",
+            "lane": "review_t1",
+        },
+        "identity": {"cwd": str(repo), "base": "main", "branch": "feature/arena"},
+        "deslop": {"tracked": False, "status": "closed"},
+        "rounds": [
+            {
+                "round_id": "arena-round-1",
+                "lane": "review_t1",
+                "grading_required": False,
+                "arena_round": True,
+                "status": "completed",
+                "runs": [{"slot": "bravo", "blocked": True}, {"slot": "charlie", "blocked": True}],
+            }
+        ],
+    }
+
+    action = review._action_payload(state, state_dir=tmp_path / "state")
+
+    assert action is not None
+    assert "review_suite_arena.py dismiss-round" in str(action["cmd"])
+    assert "reroll" not in action
+    assert "--id rvw_example" in str(action["next"])
+
+
+def test_arena_recovery_action_advances_after_dismissed_blocked_round(tmp_path: Path) -> None:
+    state = {
+        "public_id": "rvw_example",
+        "stage": "retry-requested",
+        "pending_action": {
+            "kind": "arena-blocked",
+            "round_id": "arena-round-1",
+            "lane": "review_t1",
+        },
+        "identity": {"branch": "feature/arena"},
+        "deslop": {"tracked": False, "status": "closed"},
+        "rounds": [
+            {
+                "round_id": "arena-round-1",
+                "lane": "review_t1",
+                "grading_required": False,
+                "arena_round": True,
+                "status": "dismissed",
+                "runs": [{"slot": "charlie", "blocked": True}],
+            }
+        ],
+    }
+
+    action = review._action_payload(state, state_dir=tmp_path / "state")
+
+    assert action is not None
+    assert "--id rvw_example" in str(action["cmd"])
+    assert "reroll-slot" not in str(action)
+    assert "dismiss-round" not in str(action)
+
+
 def test_arena_recovery_action_surfaces_run_for_sampled_replacement(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()

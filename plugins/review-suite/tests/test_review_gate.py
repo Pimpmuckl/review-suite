@@ -573,6 +573,66 @@ def test_select_gate_variants_rejects_ineligible_champion_override(tmp_path: Pat
         )
 
 
+def test_select_gate_variants_uses_backup_when_persisted_champions_are_retired(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    task_id = "feature/retired-champion"
+    _write_json(
+        state_dir / "operational_state.json",
+        {
+            "generated_at": "2026-06-11T00:00:00Z",
+            "task_classes": {
+                "phase_review": {
+                    "champion_variant_ids": ["gpt-5.3-codex-medium"],
+                    "cooldowns": {},
+                    "probation_variant_ids": [],
+                    "stable_variant_ids": [],
+                    "mode": "champion",
+                },
+                "pr_review": {
+                    "champion_variant_ids": [],
+                    "cooldowns": {},
+                    "probation_variant_ids": [],
+                    "stable_variant_ids": [],
+                    "mode": "scramble",
+                },
+            },
+        },
+    )
+    (state_dir / "gate_runs.jsonl").write_text(
+        json.dumps(
+            {
+                "task_class": "phase_gate",
+                "task_id": task_id,
+                "review_cwd_normalized": str(repo.resolve()),
+                "signoff_status": "pending",
+                "runs": [{"review_status": "completed", "grade_blocked": False}],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    roster = {
+        "variants": [
+            {"id": "gpt-5.3-codex-medium", "state": "retired", "task_classes": ["phase_review"]},
+            {"id": "gpt-5.4-medium", "state": "active", "task_classes": ["phase_review"]},
+        ]
+    }
+
+    selection = _select_gate_variants(
+        roster=roster,
+        state_dir=state_dir,
+        gate_task_class="phase_gate",
+        review_cwd=repo,
+        task_id=task_id,
+    )
+
+    assert selection.mode == "provisional_backup_double_pass"
+    assert [variant["id"] for variant in selection.variants] == ["gpt-5.4-medium", "gpt-5.4-medium"]
+    assert selection.champion_ids == ()
+
+
 def test_select_gate_variants_falls_through_provisional_backup_order_when_primary_is_cooling(tmp_path: Path) -> None:
     state_dir = tmp_path / "state"
     _write_json(

@@ -17,7 +17,7 @@ from review_suite_core.codex_runtime import (
 )
 from review_suite_core.lens_runtime import (
     codex_exec_command,
-    codex_review_command,
+    codex_exec_review_command,
     codex_review_stdin_text,
     prepare_codex_review_launch,
     progress_heartbeat_line,
@@ -44,30 +44,7 @@ def test_codex_exec_command_includes_service_tier_when_configured(monkeypatch: p
     assert command.index('service_tier="fast"') < command.index("--color")
 
 
-def test_codex_review_command_keeps_native_target_without_prompt(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    state_dir = tmp_path / "state"
-    monkeypatch.setattr("review_suite_core.lens_runtime.shutil.which", lambda name: "codex")
-    monkeypatch.setattr("review_suite_core.lens_runtime.validate_codex_runtime", lambda **kwargs: None)
-    monkeypatch.setattr("review_suite_core.lens_runtime.default_review_suite_state_dir", lambda: state_dir)
-
-    command = codex_review_command(
-        tool_name="review-suite",
-        model="gpt-5.5",
-        reasoning_effort="medium",
-        title="review-suite::round::alpha::gpt-5.5-medium",
-        review_root=tmp_path,
-        base="origin/main",
-        allow_unsafe_windows_wsl_fallback=False,
-    )
-
-    assert command[0:2] == ["codex", "review"]
-    assert command[-2:] == ["--base", "origin/main"]
-
-
-def test_prepare_codex_review_launch_creates_prompted_exec_with_output_file(
+def test_prepare_codex_review_launch_creates_prompted_exec_without_native_target(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -93,7 +70,8 @@ def test_prepare_codex_review_launch_creates_prompted_exec_with_output_file(
         assert launch.command[0:2] == ["codex", "exec"]
         assert "review" in launch.command
         assert launch.command[launch.command.index("--title") + 1] == "review-suite::round::alpha::gpt-5.5-medium"
-        assert launch.command[-3:] == ["--base", "origin/main", "-"]
+        assert "--base" not in launch.command
+        assert "--commit" not in launch.command
         assert launch.command[-1] == "-"
         assert 'service_tier="fast"' in launch.command
         assert launch.command.index('service_tier="fast"') < launch.command.index("--title")
@@ -107,6 +85,61 @@ def test_prepare_codex_review_launch_creates_prompted_exec_with_output_file(
     finally:
         if launch.final_message_path is not None:
             launch.final_message_path.unlink(missing_ok=True)
+
+
+def test_prepare_codex_review_launch_uses_native_exec_review_without_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    state_dir = tmp_path / "state"
+    monkeypatch.setattr("review_suite_core.lens_runtime.shutil.which", lambda name: "codex")
+    monkeypatch.setattr("review_suite_core.lens_runtime.validate_codex_runtime", lambda **kwargs: None)
+    monkeypatch.setattr("review_suite_core.lens_runtime.default_review_suite_state_dir", lambda: state_dir)
+
+    launch = prepare_codex_review_launch(
+        tool_name="review-suite",
+        model="gpt-5.5",
+        reasoning_effort="medium",
+        title="review-suite::round::alpha::gpt-5.5-medium",
+        review_root=tmp_path,
+        base="origin/main",
+        prompt="",
+        output_prefix="review-test-",
+        allow_unsafe_windows_wsl_fallback=False,
+    )
+
+    try:
+        assert launch.command[0:2] == ["codex", "exec"]
+        assert "review" in launch.command
+        assert launch.command[launch.command.index("--title") + 1] == "review-suite::round::alpha::gpt-5.5-medium"
+        assert launch.command[-2:] == ["--base", "origin/main"]
+        assert launch.command[-1] != "-"
+        assert launch.stdin_text is None
+        assert launch.final_message_path is None
+        assert "-o" not in launch.command
+    finally:
+        if launch.final_message_path is not None:
+            launch.final_message_path.unlink(missing_ok=True)
+
+
+def test_codex_exec_review_command_rejects_prompted_native_target(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr("review_suite_core.lens_runtime.shutil.which", lambda name: "codex")
+    monkeypatch.setattr("review_suite_core.lens_runtime.validate_codex_runtime", lambda **kwargs: None)
+
+    with pytest.raises(ValueError, match="cannot combine"):
+        codex_exec_review_command(
+            tool_name="review-suite",
+            model="gpt-5.5",
+            reasoning_effort="medium",
+            title="review-suite::round::alpha::gpt-5.5-medium",
+            review_root=tmp_path,
+            base="origin/main",
+            prompt="Review for correctness.",
+            allow_unsafe_windows_wsl_fallback=False,
+        )
 
 
 def test_prepare_codex_review_launch_validates_base_commit_end_range(
@@ -138,7 +171,50 @@ def test_prepare_codex_review_launch_validates_base_commit_end_range(
     try:
         assert calls == [(tmp_path, "old-head", "new-head", "native commit-range review launch")]
         assert launch.stdin_text is not None
-        assert "old-head" in launch.stdin_text
+        assert "commit range `old-head..new-head`" in launch.stdin_text
+        assert "current checkout against base ref" not in launch.stdin_text
+        assert "--base" not in launch.command
+        assert "--commit" not in launch.command
+        assert launch.command[-1] == "-"
+    finally:
+        if launch.final_message_path is not None:
+            launch.final_message_path.unlink(missing_ok=True)
+
+
+def test_prepare_codex_review_launch_uses_prompt_for_promptless_commit_end(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    state_dir = tmp_path / "state"
+    calls: list[tuple[Path, str, str, str]] = []
+    monkeypatch.setattr("review_suite_core.lens_runtime.shutil.which", lambda name: "codex")
+    monkeypatch.setattr("review_suite_core.lens_runtime.validate_codex_runtime", lambda **kwargs: None)
+    monkeypatch.setattr("review_suite_core.lens_runtime.default_review_suite_state_dir", lambda: state_dir)
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime.validated_linear_review_range",
+        lambda cwd, start_ref, end_ref, label: calls.append((cwd, start_ref, end_ref, label)),
+    )
+
+    launch = prepare_codex_review_launch(
+        tool_name="review-suite",
+        model="gpt-5.5",
+        reasoning_effort="medium",
+        title="review-suite::round::alpha::gpt-5.5-medium",
+        review_root=tmp_path,
+        base="old-head",
+        commit_end="new-head",
+        prompt="",
+        allow_unsafe_windows_wsl_fallback=False,
+    )
+
+    try:
+        assert calls == [(tmp_path, "old-head", "new-head", "native commit-range review launch")]
+        assert launch.stdin_text is not None
+        assert "commit range `old-head..new-head`" in launch.stdin_text
+        assert "Review instructions:" not in launch.stdin_text
+        assert "--base" not in launch.command
+        assert "--commit" not in launch.command
+        assert launch.command[-1] == "-"
     finally:
         if launch.final_message_path is not None:
             launch.final_message_path.unlink(missing_ok=True)

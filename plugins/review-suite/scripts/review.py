@@ -78,6 +78,7 @@ FOLLOWUP_LANE = "review-followup"
 GATE_LANES = {"review_t2", "review_t4"}
 CLI_VALIDATION_STATUSES = ("passed", "failed", "pending", "waived", "classified")
 VALIDATION_READY_STATUSES = {"passed", "waived", "classified"}
+ARENA_REROLL_SLOTS = {"alpha", "bravo"}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -275,17 +276,12 @@ def _arena_recovery_action(state: dict[str, Any], *, state_dir: Path, public_id:
     payload = _load_output_round_payload(state_dir, round_record)
     round_state_dir = _round_action_state_dir(state_dir, round_record)
     next_cmd = _review_command(public_id)
-    slots = _round_blocked_slots(payload)
-    if slots:
-        reroll = {slot: _arena_reroll_command(state, state_dir=round_state_dir, round_id=round_id, slot=slot) for slot in slots}
-        return {
-            "cmd": reroll[slots[0]],
-            "reroll": reroll,
-            "dismiss": _arena_dismiss_command(state_dir=round_state_dir, round_id=round_id),
-            "next": next_cmd,
-            "note": "Reroll blocked arena slot(s), then rerun this review id. Dismiss reruns the arena step.",
-        }
     status = str(payload.get("status") or "").strip()
+    if status == "dismissed":
+        return {
+            "cmd": next_cmd,
+            "note": "Arena round dismissed; rerun this review id.",
+        }
     if status == "sampled":
         return {
             "cmd": _arena_run_round_command(state, payload, state_dir=round_state_dir, round_id=round_id),
@@ -305,6 +301,26 @@ def _arena_recovery_action(state: dict[str, Any], *, state_dir: Path, public_id:
             "cmd": _arena_dismiss_command(state_dir=round_state_dir, round_id=round_id),
             "next": next_cmd,
             "note": f"Arena replacement round is {status}; dismiss it, then rerun this review id.",
+        }
+    slots = _round_blocked_slots(payload)
+    if slots:
+        rerollable_slots = [slot for slot in slots if slot in ARENA_REROLL_SLOTS]
+        if len(rerollable_slots) != len(slots):
+            return {
+                "cmd": _arena_dismiss_command(state_dir=round_state_dir, round_id=round_id),
+                "next": next_cmd,
+                "note": "Blocked arena slot(s) cannot be rerolled safely; dismiss the round, then rerun this review id.",
+            }
+        reroll = {
+            slot: _arena_reroll_command(state, state_dir=round_state_dir, round_id=round_id, slot=slot)
+            for slot in rerollable_slots
+        }
+        return {
+            "cmd": reroll[rerollable_slots[0]],
+            "reroll": reroll,
+            "dismiss": _arena_dismiss_command(state_dir=round_state_dir, round_id=round_id),
+            "next": next_cmd,
+            "note": "Reroll supported blocked arena slot(s), then rerun this review id. Dismiss reruns the arena step.",
         }
     return {
         "cmd": next_cmd,
