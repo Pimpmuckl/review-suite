@@ -347,7 +347,7 @@ def _orchestrator_action(state: dict[str, object], public_id: str, *, state_dir:
     elif stage == "fix-pending":
         action = {
             "cmd": _review_command(public_id, state_dir=state_dir),
-            "note": "Fix valid findings, then rerun this command.",
+            "note": "Commit/amend valid fixes, then rerun this command.",
         }
     elif stage in {"review-green", "local-green-handoff"}:
         action = {

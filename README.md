@@ -37,6 +37,7 @@ Use `$review` for local review, `$review-state` to inspect progress, and `$revie
 Default local runs print reviewer text once in `Output:`, then one `Action.cmd`.
 
 Review orchestration expects committed review changes. If `git diff` is non-empty but `base..HEAD` is empty, commit the intended changes or stash unrelated worktree changes before rerunning the emitted command.
+If you accidentally repeat `--mode` after amending fixes on the same branch/base/merge-base, Review Suite reconnects to the active review id instead of starting a fresh ladder. Use `--fresh-token` only when you intentionally want a separate ladder.
 Review commands do not support a dirty-worktree override. Do not append `--allow-dirty`; commit intended review changes first.
 
 Modes are built from one phased stack. Discovery uses GPT 5.4 for high-recall bug finding; signoff uses GPT 5.5 for relevance, convergence, and current-head green checks.

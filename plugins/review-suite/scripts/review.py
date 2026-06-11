@@ -28,7 +28,9 @@ from review_suite_core import (
     emit_toon,
     format_command,
     has_worktree_changes,
+    is_ancestor,
     merge_base,
+    normalize_cwd,
     record_review_anchor,
     resolve_repo_root,
     write_text,
@@ -43,16 +45,20 @@ from review_suite_core.orchestrator_state import (
     GITHUB_RESULT_FINDINGS,
     GITHUB_RESULT_WAIVED,
     GITHUB_RESULT_COMMANDS,
+    STAGE_BLOCKED,
+    STAGE_CRASHED,
     STAGE_CREATED,
     STAGE_DECISION_PENDING,
     STAGE_FIX_PENDING,
     STAGE_FOLLOWUP_PENDING,
     STAGE_GATE_RERUN_NEEDED,
+    STAGE_RUNNING,
     STAGE_LOCAL_GREEN_HANDOFF,
     STAGE_RETRY_REQUESTED,
     STAGE_REVIEW_GREEN,
     STAGE_ABORTED,
     DESLOP_STATUS_CLOSED,
+    DESLOP_STATUS_DONE,
     create_cycle,
     mark_deslop_closed,
     mark_fix_detected,
@@ -65,6 +71,7 @@ from review_suite_core.orchestrator_state import (
     abort_cycle,
 )
 from review_suite_core.orchestrator_store import (
+    cycles_dir,
     load_cycle_by_key,
     load_cycle_by_public_id,
     save_cycle,
@@ -77,6 +84,17 @@ GATE_LANES = {"review_t2", "review_t4"}
 CLI_VALIDATION_STATUSES = ("passed", "failed", "pending", "waived", "classified")
 VALIDATION_READY_STATUSES = {"passed", "waived", "classified"}
 ARENA_REROLL_SLOTS = {"alpha", "bravo"}
+CONTINUATION_REDIRECT_STAGES = {
+    STAGE_CREATED,
+    STAGE_RUNNING,
+    STAGE_DECISION_PENDING,
+    STAGE_FIX_PENDING,
+    STAGE_FOLLOWUP_PENDING,
+    STAGE_GATE_RERUN_NEEDED,
+    STAGE_RETRY_REQUESTED,
+    STAGE_BLOCKED,
+    STAGE_CRASHED,
+}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -717,16 +735,79 @@ def _identity_head(state: dict[str, Any]) -> str | None:
         return None
 
 
-def _resume_progress(state: dict[str, Any]) -> dict[str, Any]:
+def _current_cycle_head_if_compatible(state: dict[str, Any]) -> str | None:
+    identity = dict(state.get("identity") or {})
+    cwd = str(identity.get("cwd") or "").strip()
+    base = str(identity.get("base") or "").strip()
+    if not cwd or not base:
+        return None
+    review_root = cwd_path_from_normalized(cwd)
+    expected_branch = _normalized_branch(str(identity.get("branch") or ""))
+    branch = _normalized_branch(current_branch(review_root))
+    if branch != expected_branch:
+        return None
+    if has_worktree_changes(review_root):
+        return None
+    expected_merge_base = str(identity.get("merge_base") or "").strip()
+    if expected_merge_base and merge_base(review_root, base, "HEAD") != expected_merge_base:
+        return None
+    return current_head(review_root)
+
+
+def _auto_record_pending_decision_fix(
+    state: dict[str, Any],
+    *,
+    current_head_value: str,
+    state_dir: Path,
+) -> dict[str, Any]:
+    round_id, lane = _pending_decision(state)
+    round_payload = _round_by_id(state, round_id)
+    if bool(round_payload.get("review_blocked")) or _round_blocked_slots(round_payload):
+        return state
+    reviewed_head = str(round_payload.get("reviewed_head") or "").strip()
+    if not reviewed_head or reviewed_head == current_head_value:
+        return state
+    gate = _round_gate(round_payload, lane)
+    if lane == FOLLOWUP_LANE:
+        findings = record_followup_findings(state, round_id=round_id, reviewed_head=reviewed_head)
+    else:
+        findings = record_findings_decision(
+            state,
+            round_id=round_id,
+            lane=lane,
+            reviewed_head=reviewed_head,
+            gate=gate,
+        )
+    if gate and lane != FOLLOWUP_LANE:
+        _record_gate_decision(state_dir=state_dir, round_id=round_id, lane=lane, verdict=DECISION_FINDINGS)
+    return mark_fix_detected(findings, head=current_head_value)
+
+
+def _resume_progress(state: dict[str, Any], *, state_dir: Path | None = None) -> dict[str, Any]:
     stage = state.get("stage")
     if stage in {STAGE_CREATED, STAGE_FOLLOWUP_PENDING}:
+        return state
+    if stage == STAGE_DECISION_PENDING:
+        if state_dir is not None and _pending_grade_payload(state, state_dir=state_dir) is not None:
+            return state
+        try:
+            head = _current_cycle_head_if_compatible(state)
+        except (OSError, ValueError):
+            return state
+        if head:
+            if state_dir is None:
+                return state
+            return _auto_record_pending_decision_fix(state, current_head_value=head, state_dir=state_dir)
         return state
     if stage != STAGE_FIX_PENDING:
         return state
 
     active = dict(state.get("active_findings") or {})
     reviewed_head = str(active.get("reviewed_head") or "").strip()
-    head = _identity_head(state)
+    try:
+        head = _current_cycle_head_if_compatible(state)
+    except (OSError, ValueError):
+        head = None
     if head and reviewed_head and head != reviewed_head:
         return mark_fix_detected(state, head=head)
     return _with_fix_action(state)
@@ -768,6 +849,105 @@ def _apply_profile_resolution(state: dict[str, Any], resolution: Any) -> dict[st
     return state
 
 
+def _with_current_identity(state: dict[str, Any], *, head: str, merge_base_head: str) -> dict[str, Any]:
+    next_state = dict(state)
+    identity = dict(next_state.get("identity") or {})
+    identity["head"] = head
+    identity["merge_base"] = merge_base_head
+    next_state["identity"] = identity
+    review_heads = dict(next_state.get("review_heads") or {})
+    review_heads["head"] = head
+    review_heads["merge_base"] = merge_base_head
+    next_state["review_heads"] = review_heads
+    return next_state
+
+
+def _continuation_head_match_kind(state: dict[str, Any], *, review_root: Path, head: str) -> str | None:
+    identity = dict(state.get("identity") or {})
+    recorded_head = str(identity.get("head") or "").strip()
+    if not recorded_head:
+        return None
+    if recorded_head == head:
+        return "exact"
+    stage = str(state.get("stage") or "")
+    if stage == STAGE_CREATED:
+        deslop = dict(state.get("deslop") or {})
+        if str(deslop.get("status") or "").strip() != DESLOP_STATUS_DONE:
+            return None
+        try:
+            if is_ancestor(review_root, recorded_head, head) or is_ancestor(review_root, head, recorded_head):
+                return None
+            return "amended"
+        except ValueError:
+            return None
+    if stage in {
+        STAGE_DECISION_PENDING,
+        STAGE_FIX_PENDING,
+        STAGE_FOLLOWUP_PENDING,
+        STAGE_GATE_RERUN_NEEDED,
+    }:
+        return "changed"
+    return None
+
+
+def _compatible_continuation_cycle(
+    *,
+    state_dir: Path,
+    review_root: Path,
+    base: str,
+    branch: str | None,
+    head: str,
+    merge_base_head: str,
+    effective_mode: str,
+) -> dict[str, Any] | None:
+    normalized_cwd = normalize_cwd(str(review_root))
+    normalized_branch = _normalized_branch(branch)
+    candidates: list[tuple[float, str, dict[str, Any]]] = []
+    directory = cycles_dir(state_dir)
+    if not directory.exists():
+        return None
+    for path in directory.glob("*.json"):
+        try:
+            state = load_cycle_by_key(state_dir, path.stem)
+        except ValueError:
+            continue
+        if not isinstance(state, dict):
+            continue
+        if str(state.get("stage") or "") not in CONTINUATION_REDIRECT_STAGES:
+            continue
+        if isinstance(state.get("superseded_by"), dict):
+            continue
+        identity = dict(state.get("identity") or {})
+        if str(identity.get("cwd") or "") != normalized_cwd:
+            continue
+        if str(identity.get("base") or "").strip() != str(base or "").strip():
+            continue
+        if _normalized_branch(str(identity.get("branch") or "")) != normalized_branch:
+            continue
+        recorded_merge_base = str(identity.get("merge_base") or "").strip()
+        if recorded_merge_base != str(merge_base_head or "").strip():
+            continue
+        mode = dict(state.get("mode") or {})
+        state_mode = str(mode.get("effective") or mode.get("requested") or "").strip()
+        if state_mode != effective_mode:
+            continue
+        match_kind = _continuation_head_match_kind(state, review_root=review_root, head=head)
+        if match_kind is None:
+            continue
+        candidates.append((path.stat().st_mtime, match_kind, state))
+    if not candidates:
+        return None
+    exact_candidates = [candidate for candidate in candidates if candidate[1] == "exact"]
+    selected_candidates = exact_candidates or candidates
+    if len(selected_candidates) > 1:
+        public_ids = sorted(str(candidate[2].get("public_id") or candidate[2].get("cycle_key") or "") for candidate in selected_candidates)
+        raise ValueError(
+            "multiple active review cycles match this repo/base/branch/merge-base; "
+            f"rerun with --id for one of: {', '.join(public_ids)}"
+        )
+    return _with_current_identity(selected_candidates[0][2], head=head, merge_base_head=merge_base_head)
+
+
 def _create_or_resume_cycle(*, args: argparse.Namespace, state_dir: Path) -> dict[str, Any]:
     if not args.mode:
         raise ValueError("--mode is required when creating a review cycle")
@@ -780,6 +960,18 @@ def _create_or_resume_cycle(*, args: argparse.Namespace, state_dir: Path) -> dic
     merge_base_head = merge_base(review_root, base, "HEAD")
     config = load_config(state_dir)
     resolution = resolve_orchestrator_profile(config, mode=str(args.mode), selection=_configured_selection(config))
+    if not args.fresh_token:
+        continuation = _compatible_continuation_cycle(
+            state_dir=state_dir,
+            review_root=review_root,
+            base=base,
+            branch=branch,
+            head=head,
+            merge_base_head=merge_base_head,
+            effective_mode=resolution.effective_mode,
+        )
+        if continuation is not None:
+            return continuation
     state = create_cycle(
         cwd=review_root,
         base=base,
@@ -895,7 +1087,7 @@ def _restart_cycle(state: dict[str, Any], *, state_dir: Path, target_mode: str, 
 
 
 def _advance_without_decision(state: dict[str, Any], *, state_dir: Path) -> dict[str, Any]:
-    ready_state = _resume_progress(state)
+    ready_state = _resume_progress(state, state_dir=state_dir)
 
     def persist_running(next_state: dict[str, Any]) -> dict[str, Any]:
         saved = save_cycle(state_dir, next_state)
@@ -904,11 +1096,11 @@ def _advance_without_decision(state: dict[str, Any], *, state_dir: Path) -> dict
     result = run_one_expensive_step(ready_state, state_dir=state_dir, persist_state=persist_running)
     if result.ran_step:
         return result.state
-    return _resume_progress(ready_state)
+    return _resume_progress(ready_state, state_dir=state_dir)
 
 
 def _apply_decision(state: dict[str, Any], decision: str, *, state_dir: Path) -> dict[str, Any]:
-    ready_state = _resume_progress(state)
+    ready_state = _resume_progress(state, state_dir=state_dir)
     if ready_state.get("stage") != STAGE_DECISION_PENDING:
         raise ValueError("no decision is pending for this review cycle")
     round_id, lane = _pending_decision(ready_state)
@@ -1168,7 +1360,7 @@ def _action_payload(state: dict[str, Any], *, state_dir: Path) -> dict[str, Any]
             return _with_deslop_done_action(state, action, public_id, state_dir=state_dir)
         action = {
             "cmd": _review_command(public_id, state_dir=state_dir),
-            "note": "Fix valid findings, then rerun this command.",
+            "note": "Commit/amend valid fixes, then rerun this command.",
         }
         return _with_deslop_done_action(state, action, public_id, state_dir=state_dir)
     if stage in {STAGE_CREATED, STAGE_GATE_RERUN_NEEDED}:

@@ -56,6 +56,15 @@ def _commit_file(repo: Path, relative_path: str, content: str, message: str) -> 
     return _git(repo, "rev-parse", "HEAD")
 
 
+def _amend_file(repo: Path, relative_path: str, content: str) -> str:
+    path = repo / relative_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+    _git(repo, "add", relative_path)
+    _git(repo, "commit", "--amend", "--no-edit")
+    return _git(repo, "rev-parse", "HEAD")
+
+
 def _run_review(monkeypatch: pytest.MonkeyPatch, args: list[str]) -> tuple[int, dict[str, object]]:
     emitted: list[dict[str, object]] = []
     monkeypatch.setattr(review, "emit_toon", lambda payload: emitted.append(payload))
@@ -1706,7 +1715,7 @@ def test_github_result_findings_reenters_existing_cycle_for_final_signoff(
 
     assert exit_code == 0
     assert github_findings["github_review"] == "findings"
-    assert github_findings["Action"]["note"] == "Fix valid findings, then rerun this command."
+    assert github_findings["Action"]["note"] == "Commit/amend valid fixes, then rerun this command."
     state = _cycle_payload(state_dir, public_id)
     assert state["active_findings"]["lane"] == "review-github"
     assert state["active_findings"]["profile_round_id"] == "signoff-round-1"
@@ -1832,11 +1841,314 @@ def test_github_result_findings_does_not_auto_start_followup_when_fix_already_co
     )
 
     assert exit_code == 0
-    assert findings["Action"]["note"] == "Fix valid findings, then rerun this command."
+    assert findings["Action"]["note"] == "Commit/amend valid fixes, then rerun this command."
     assert len(followup_calls) == 0
     state = _cycle_payload(state_dir, public_id)
     assert state["stage"] == "fix-pending"
     assert state["active_findings"]["reviewed_head"] == state["review_heads"]["last_reviewed_head"]
+
+
+def test_mode_rerun_after_deslop_amend_reuses_existing_cycle_without_rerunning_deslop(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    deslop_calls = _stub_deslop(monkeypatch)
+    review_calls = _stub_review(monkeypatch, "phase_review-round-1")
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _use_compact_normal_profile(monkeypatch, state_dir, include_deep=True)
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/deslop-amend")
+    original_head = _commit_file(repo, "app.txt", "feature\n", "feature")
+
+    _, created = _run_review(
+        monkeypatch,
+        ["--mode", "normal", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)],
+    )
+    public_id = str(created["review"])
+    state = _cycle_payload(state_dir, public_id)
+    assert state["stage"] == "created"
+    assert state["deslop"]["status"] == "done"
+    assert state["identity"]["head"] == original_head
+    assert len(deslop_calls) == 1
+
+    amended_head = _amend_file(repo, "app.txt", "feature\nfix from deslop\n")
+    assert amended_head != original_head
+
+    exit_code, resumed = _run_review(
+        monkeypatch,
+        ["--mode", "normal", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)],
+    )
+
+    assert exit_code == 0
+    assert resumed["review"] == public_id
+    assert "--decision clean" in str(resumed["Action"]["cmd"])
+    assert len(deslop_calls) == 1
+    assert len(review_calls) == 1
+    assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 1
+    state = _cycle_payload(state_dir, public_id)
+    assert state["identity"]["head"] == amended_head
+    assert state["review_heads"]["head"] == amended_head
+    assert state["rounds"][0]["reviewed_head"] == amended_head
+
+    exit_code, restarted = _run_review(
+        monkeypatch,
+        [
+            "--id",
+            public_id,
+            "--restart-mode",
+            "deep",
+            "--reason",
+            "rerun deeper after amended continuation",
+            "--state-dir",
+            str(state_dir),
+        ],
+    )
+    assert exit_code == 0
+    assert restarted["review"] != public_id
+    assert len(deslop_calls) == 2
+
+
+def test_mode_rerun_after_new_pre_review_commit_starts_fresh_cycle(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    deslop_calls = _stub_deslop(monkeypatch)
+    _stub_review(monkeypatch, "phase_review-round-1")
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _use_compact_normal_profile(monkeypatch, state_dir)
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/deslop-new-commit")
+    _commit_file(repo, "app.txt", "feature\n", "feature")
+
+    _, created = _run_review(
+        monkeypatch,
+        ["--mode", "normal", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)],
+    )
+    old_id = str(created["review"])
+    new_head = _commit_file(repo, "app.txt", "feature\nnew work\n", "continue feature")
+
+    exit_code, fresh = _run_review(
+        monkeypatch,
+        ["--mode", "normal", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)],
+    )
+
+    assert exit_code == 0
+    assert fresh["review"] != old_id
+    assert len(deslop_calls) == 2
+    state = _cycle_payload(state_dir, str(fresh["review"]))
+    assert state["identity"]["head"] == new_head
+    assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 2
+
+
+def test_mode_rerun_after_pre_review_reset_starts_fresh_cycle(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    deslop_calls = _stub_deslop(monkeypatch)
+    _stub_review(monkeypatch, "phase_review-round-1")
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _use_compact_normal_profile(monkeypatch, state_dir)
+    _init_repo(repo)
+    base_head = _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/deslop-reset")
+    _commit_file(repo, "app.txt", "feature\n", "feature")
+
+    _, created = _run_review(
+        monkeypatch,
+        ["--mode", "normal", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)],
+    )
+    old_id = str(created["review"])
+    _git(repo, "checkout", "-B", "feature/deslop-reset", "main")
+
+    exit_code, fresh = _run_review(
+        monkeypatch,
+        ["--mode", "normal", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)],
+    )
+
+    assert exit_code == 0
+    assert fresh["review"] != old_id
+    assert len(deslop_calls) == 2
+    state = _cycle_payload(state_dir, str(fresh["review"]))
+    assert state["identity"]["head"] == base_head
+    assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 2
+
+
+def test_mode_rerun_on_base_branch_after_new_commit_starts_fresh_cycle(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    deslop_calls = _stub_deslop(monkeypatch)
+    _stub_review(monkeypatch, "phase_review-round-1")
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _use_compact_normal_profile(monkeypatch, state_dir)
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+
+    _, created = _run_review(
+        monkeypatch,
+        ["--mode", "normal", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)],
+    )
+    old_id = str(created["review"])
+    new_head = _commit_file(repo, "app.txt", "base\nnew main work\n", "advance main")
+
+    exit_code, fresh = _run_review(
+        monkeypatch,
+        ["--mode", "normal", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)],
+    )
+
+    assert exit_code == 0
+    assert fresh["review"] != old_id
+    assert len(deslop_calls) == 2
+    state = _cycle_payload(state_dir, str(fresh["review"]))
+    assert state["identity"]["head"] == new_head
+    assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 2
+
+
+def test_mode_rerun_with_multiple_matching_cycles_requires_id(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _stub_deslop(monkeypatch)
+    _stub_review(monkeypatch, "phase_review-round-1")
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _use_compact_normal_profile(monkeypatch, state_dir)
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/ambiguous-review")
+    _commit_file(repo, "app.txt", "feature\n", "feature")
+
+    _, first = _run_review(
+        monkeypatch,
+        ["--mode", "normal", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)],
+    )
+    _, second = _run_review(
+        monkeypatch,
+        [
+            "--mode",
+            "normal",
+            "--cd",
+            str(repo),
+            "--base",
+            "main",
+            "--fresh-token",
+            "second-ladder",
+            "--state-dir",
+            str(state_dir),
+        ],
+    )
+    assert first["review"] != second["review"]
+
+    messages: list[str] = []
+    monkeypatch.setattr(review, "emit_error", lambda message, **kwargs: messages.append(str(message)) or 2)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["review.py", "--mode", "normal", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)],
+    )
+
+    assert review.main() == 2
+    assert "multiple active review cycles match" in messages[-1]
+    assert str(first["review"]) in messages[-1]
+    assert str(second["review"]) in messages[-1]
+
+
+def test_id_rerun_after_pending_decision_amend_auto_verifies_same_cycle(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _stub_deslop(monkeypatch)
+    review_calls = _stub_review(monkeypatch, "phase_review-round-1", "phase_review-round-2")
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _use_compact_normal_profile(monkeypatch, state_dir)
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/pending-amend")
+    original_head = _commit_file(repo, "app.txt", "feature\n", "feature")
+
+    _, created = _run_review(
+        monkeypatch,
+        ["--mode", "normal", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)],
+    )
+    public_id = str(created["review"])
+    _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+    state = _cycle_payload(state_dir, public_id)
+    assert state["stage"] == "decision-pending"
+    assert state["rounds"][0]["reviewed_head"] == original_head
+
+    amended_head = _amend_file(repo, "app.txt", "feature\nfix pending finding\n")
+    assert amended_head != original_head
+
+    exit_code, verification = _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+
+    assert exit_code == 0
+    assert verification["review"] == public_id
+    assert "--decision clean" in str(verification["Action"]["cmd"])
+    assert len(review_calls) == 2
+    assert review_calls[1]["step_name"] == "precision-signoff"
+    state = _cycle_payload(state_dir, public_id)
+    assert state["decisions"][0]["command"] == "findings"
+    assert state["decisions"][0]["reviewed_head"] == original_head
+    assert state["review_heads"]["last_fix_head"] == amended_head
+    assert state["rounds"][1]["reviewed_head"] == amended_head
+    assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 1
+
+
+def test_id_rerun_after_gate_pending_amend_records_gate_findings(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _stub_deslop(monkeypatch)
+    _stub_review(monkeypatch, "phase_review-round-1", "phase_review-round-2")
+    gate_calls = _stub_gate(monkeypatch, "phase_gate-round-1", "phase_gate-round-2")
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    config = _use_compact_normal_profile(monkeypatch, state_dir)
+    config["orchestrator"]["profiles"]["stable"]["normal"]["steps"].append(
+        {"name": "local-signoff", "kind": "gate", "gate": "phase_gate"}
+    )
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/gate-pending-amend")
+    original_head = _commit_file(repo, "app.txt", "feature\n", "feature")
+
+    _, created = _run_review(
+        monkeypatch,
+        ["--mode", "normal", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)],
+    )
+    public_id = str(created["review"])
+    _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+    _run_review(monkeypatch, ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)])
+    _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+    _run_review(monkeypatch, ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)])
+    _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+    state = _cycle_payload(state_dir, public_id)
+    assert state["stage"] == "decision-pending"
+    assert state["pending_action"]["round_id"] == "phase_gate-round-1"
+    assert state["rounds"][2]["reviewed_head"] == original_head
+    assert _gate_signoff_decisions(state_dir) == []
+
+    amended_head = _amend_file(repo, "app.txt", "feature\nfix gate finding\n")
+    assert amended_head != original_head
+
+    exit_code, verification = _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+
+    assert exit_code == 0
+    assert verification["review"] == public_id
+    assert "--decision clean" in str(verification["Action"]["cmd"])
+    assert len(gate_calls) == 2
+    state = _cycle_payload(state_dir, public_id)
+    assert state["active_findings"]["status"] == "decision-pending"
+    assert state["pending_action"]["round_id"] == "phase_gate-round-2"
+    assert state["review_heads"]["last_fix_head"] == amended_head
+    assert [item["verdict"] for item in _gate_signoff_decisions(state_dir)] == ["findings"]
 
 
 def test_findings_fix_progression_and_clean_decision(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -1863,7 +2175,7 @@ def test_findings_fix_progression_and_clean_decision(monkeypatch: pytest.MonkeyP
     exit_code, findings = _run_review(monkeypatch, ["--id", public_id, "--decision", "findings", "--state-dir", str(state_dir)])
     assert exit_code == 0
     assert "stage" not in findings
-    assert findings["Action"]["note"] == "Fix valid findings, then rerun this command."
+    assert findings["Action"]["note"] == "Commit/amend valid fixes, then rerun this command."
     assert f"--id {public_id}" in str(findings["Action"]["cmd"])
     assert "--decision" not in str(findings["Action"]["cmd"])
     state = _cycle_payload(state_dir, public_id)
@@ -1949,7 +2261,7 @@ def test_findings_fix_progression_keeps_related_dirty_work_in_fix_pending_on_sam
     exit_code, reprint = _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
 
     assert exit_code == 0
-    assert reprint["Action"]["note"] == "Fix valid findings, then rerun this command."
+    assert reprint["Action"]["note"] == "Commit/amend valid fixes, then rerun this command."
     assert len(followup_calls) == 0
     assert _git(repo, "rev-parse", "HEAD") == reviewed_head
 
@@ -1982,7 +2294,7 @@ def test_findings_fix_progression_keeps_unrelated_dirty_work_in_fix_pending(
     exit_code, reprint = _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
 
     assert exit_code == 0
-    assert reprint["Action"]["note"] == "Fix valid findings, then rerun this command."
+    assert reprint["Action"]["note"] == "Commit/amend valid fixes, then rerun this command."
     assert len(followup_calls) == 0
     assert _git(repo, "rev-parse", "HEAD") == reviewed_head
 
@@ -2169,7 +2481,7 @@ def test_followup_findings_loops_back_to_fix_pending(monkeypatch: pytest.MonkeyP
 
     assert exit_code == 0
     assert "stage" not in findings
-    assert findings["Action"]["note"] == "Fix valid findings, then rerun this command."
+    assert findings["Action"]["note"] == "Commit/amend valid fixes, then rerun this command."
     state = _cycle_payload(state_dir, public_id)
     assert state["active_findings"]["round_id"] == "followup-round-1"
     assert state["active_findings"]["lane"] == "review-followup"
@@ -2181,6 +2493,52 @@ def test_followup_findings_loops_back_to_fix_pending(monkeypatch: pytest.MonkeyP
     assert exit_code == 0
     assert "stage" not in reprint
     assert len(followup_calls) == 1
+
+
+def test_id_rerun_after_followup_pending_amend_preserves_followup_findings(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _stub_deslop(monkeypatch)
+    _stub_review(monkeypatch, "phase_review-round-1")
+    followup_calls = _stub_followup(monkeypatch, "followup-round-1", "followup-round-2")
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/followup-pending-amend")
+    _commit_file(repo, "app.txt", "feature\n", "feature")
+
+    _, created = _run_review(
+        monkeypatch,
+        ["--mode", "deep", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)],
+    )
+    public_id = str(created["review"])
+    _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+    _run_review(monkeypatch, ["--id", public_id, "--decision", "findings", "--state-dir", str(state_dir)])
+    _commit_file(repo, "app.txt", "fixed once\n", "fix findings")
+    _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+    state = _cycle_payload(state_dir, public_id)
+    followup_head = state["rounds"][1]["reviewed_head"]
+    assert state["stage"] == "decision-pending"
+    assert state["pending_action"]["round_id"] == "followup-round-1"
+
+    amended_head = _amend_file(repo, "app.txt", "fixed once\nfix followup finding\n")
+    assert amended_head != followup_head
+
+    exit_code, verification = _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+
+    assert exit_code == 0
+    assert verification["review"] == public_id
+    assert "--decision clean" in str(verification["Action"]["cmd"])
+    assert len(followup_calls) == 2
+    state = _cycle_payload(state_dir, public_id)
+    assert state["decisions"][1]["command"] == "findings"
+    assert state["decisions"][1]["round_id"] == "followup-round-1"
+    assert state["review_heads"]["last_followup_head"] == amended_head
+    assert state["active_findings"]["round_id"] == "followup-round-1"
+    assert state["active_findings"]["previous_round_id"] == "phase_review-round-1"
+    assert state["active_findings"]["followup_round_id"] == "followup-round-2"
 
 
 def test_validation_flags_do_not_run_expensive_resume(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -2340,6 +2698,8 @@ def test_emergency_mode_stops_after_two_local_review_rounds(
     state_dir = tmp_path / "state"
     _init_repo(repo)
     _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/emergency-budget")
+    _commit_file(repo, "app.txt", "feature\n", "feature")
 
     _, opened = _run_review(
         monkeypatch,
@@ -2347,13 +2707,13 @@ def test_emergency_mode_stops_after_two_local_review_rounds(
     )
     public_id = str(opened["review"])
     _run_review(monkeypatch, ["--id", public_id, "--decision", "findings", "--state-dir", str(state_dir)])
-    _commit_file(repo, "app.txt", "base\nfix one\n", "fix first emergency finding")
+    _commit_file(repo, "app.txt", "feature\nfix one\n", "fix first emergency finding")
     _, second_round = _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
     assert "--decision findings" in str(second_round["Action"]["alt"])
     assert len(review_calls) == 2
 
     _run_review(monkeypatch, ["--id", public_id, "--decision", "findings", "--state-dir", str(state_dir)])
-    _commit_file(repo, "app.txt", "base\nfix one\nfix two\n", "fix second emergency finding")
+    _commit_file(repo, "app.txt", "feature\nfix one\nfix two\n", "fix second emergency finding")
     _, exhausted = _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
 
     assert len(review_calls) == 2
