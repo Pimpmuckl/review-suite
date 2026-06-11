@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import time
+import tomllib
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,6 +25,7 @@ DEFAULT_PROGRESS_INTERVAL_SECONDS = 60
 DEFAULT_TIMEOUT_SECONDS = 0
 WRAPPER_SESSION_LOG_FILENAME = "wrapper_sessions.jsonl"
 SUPPORTED_CODEX_SERVICE_TIERS = {"fast", "flex"}
+ISOLATED_RUNTIME_USER_CONFIG_ROOTS = ("model_provider", "model_providers", "openai_base_url", "oss_provider")
 
 
 @dataclass(frozen=True)
@@ -46,6 +49,84 @@ def compact_tool_label(tool_name: str) -> str:
     if tool_name.startswith("review-"):
         return tool_name[len("review-") :]
     return tool_name
+
+
+def _codex_user_config_path() -> Path:
+    codex_home = str(os.environ.get("CODEX_HOME") or "").strip()
+    if codex_home:
+        return Path(codex_home).expanduser().resolve(strict=False) / "config.toml"
+    return Path.home() / ".codex" / "config.toml"
+
+
+def _toml_key_segment(value: str) -> str:
+    if re.fullmatch(r"[A-Za-z0-9_-]+", value):
+        return value
+    return json.dumps(value)
+
+
+def _toml_literal(value: object) -> str | None:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int | float) and not isinstance(value, bool):
+        return str(value).lower()
+    if isinstance(value, str):
+        return json.dumps(value)
+    if isinstance(value, list):
+        items = [_toml_literal(item) for item in value]
+        if any(item is None for item in items):
+            return None
+        return "[" + ", ".join(str(item) for item in items) + "]"
+    if isinstance(value, dict):
+        items: list[str] = []
+        for key, nested in value.items():
+            key_text = str(key or "").strip()
+            literal = _toml_literal(nested)
+            if not key_text or literal is None:
+                return None
+            items.append(f"{_toml_key_segment(key_text)} = {literal}")
+        return "{" + ", ".join(items) + "}"
+    return None
+
+
+def _flatten_config_overrides(value: object, path: tuple[str, ...]) -> list[str]:
+    if isinstance(value, dict):
+        overrides: list[str] = []
+        for key, nested in value.items():
+            key_text = str(key or "").strip()
+            if key_text:
+                overrides.extend(_flatten_config_overrides(nested, (*path, key_text)))
+        return overrides
+    literal = _toml_literal(value)
+    if literal is None:
+        return []
+    dotted_path = ".".join(_toml_key_segment(item) for item in path)
+    return [f"{dotted_path}={literal}"]
+
+
+def isolated_runtime_user_config_overrides(config_path: Path | None = None) -> list[str]:
+    path = config_path or _codex_user_config_path()
+    try:
+        with path.open("rb") as handle:
+            config = tomllib.load(handle)
+    except (OSError, tomllib.TOMLDecodeError):
+        return []
+    overrides: list[str] = []
+    for key in ISOLATED_RUNTIME_USER_CONFIG_ROOTS:
+        if key in config:
+            if key == "model_providers":
+                literal = _toml_literal(config[key])
+                if literal is not None:
+                    overrides.append(f"{key}={literal}")
+            else:
+                overrides.extend(_flatten_config_overrides(config[key], (key,)))
+    return overrides
+
+
+def _isolated_runtime_user_config_args() -> list[str]:
+    args: list[str] = []
+    for override in isolated_runtime_user_config_overrides():
+        args.extend(["-c", override])
+    return args
 
 
 def _codex_command_prefix(
@@ -72,6 +153,7 @@ def _codex_command_prefix(
     command = [codex_executable]
     if subcommand == "exec":
         command.append("exec")
+        command.append("--ignore-user-config")
         if unsafe_fallback:
             command.append("--dangerously-bypass-approvals-and-sandbox")
         command.extend(["-C", str(review_root)])
@@ -79,6 +161,7 @@ def _codex_command_prefix(
             command.extend(["-s", "read-only"])
     elif subcommand == "exec-review":
         command.append("exec")
+        command.append("--ignore-user-config")
         if unsafe_fallback:
             command.append("--dangerously-bypass-approvals-and-sandbox")
         command.extend(["-C", str(review_root)])
@@ -87,12 +170,15 @@ def _codex_command_prefix(
         command.append("review")
     else:
         raise ValueError(f"unsupported Codex subcommand: {subcommand}")
+    command.extend(_isolated_runtime_user_config_args())
     command.extend(
         [
             "-c",
             f'model="{model}"',
             "-c",
             f'model_reasoning_effort="{reasoning_effort}"',
+            "-c",
+            'approval_policy="never"',
         ]
     )
     normalized_service_tier = normalize_service_tier(service_tier)
