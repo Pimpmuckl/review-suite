@@ -26,6 +26,7 @@ from review_suite_core.orchestrator_state import (
     record_clean_decision,
     record_findings_decision,
 )
+from review_suite_local import write_round
 
 
 def _cycle(tmp_path: Path, *, mode: str = "normal", deslop_enabled: bool = True, step_names: tuple[str, ...] = ("precision",)) -> dict[str, object]:
@@ -749,7 +750,8 @@ def test_runner_blocks_when_collecting_blocked_arena_round(monkeypatch, tmp_path
     assert result.state["rounds"][0]["review_blocked"] is True
 
 
-def test_runner_recovers_blocked_arena_round_after_successful_reroll(monkeypatch, tmp_path: Path) -> None:
+def test_runner_recovers_blocked_arena_round_after_successful_reroll(tmp_path: Path) -> None:
+    round_state_dir = tmp_path / "state" / "rounds"
     state = _cycle(tmp_path, deslop_enabled=False, step_names=("arena-discovery", "broad-discovery", "precision-signoff"))
     state["review_plan"]["steps"][0] = {
         "kind": "arena",
@@ -774,45 +776,41 @@ def test_runner_recovers_blocked_arena_round_after_successful_reroll(monkeypatch
         lane="review_t3",
         step_index=0,
         step_name="arena-discovery",
-        round_state_dir="state/rounds",
+        round_state_dir=str(round_state_dir),
     )
-    monkeypatch.setattr(
-        orchestrator_runner,
-        "load_round",
-        lambda state_dir, round_id: {
-            "round_id": round_id,
+    write_round(
+        round_state_dir,
+        {
+            "round_id": "pr_review-round-1",
             "status": "completed",
             "review_scope": {"reviewed_head": "head-1"},
             "runs": [{"slot": "alpha", "review_status": "timeout", "grade_blocked": True}],
         },
     )
-    monkeypatch.setattr(
-        orchestrator_runner,
-        "iter_round_payloads",
-        lambda state_dir: [
-            {
-                "round_id": "pr_review-round-2",
-                "rerolled_from_round_id": "pr_review-round-1",
-                "status": "completed",
-                "review_scope": {"reviewed_head": "head-1"},
-                "runs": [
-                    {
-                        "slot": "alpha",
-                        "review_status": "completed",
-                        "grade_blocked": False,
-                        "reviewer_output": "No findings.",
-                        "reviewer_output_ref": "rollout://pr_review-round-2/alpha",
-                    },
-                    {
-                        "slot": "bravo",
-                        "review_status": "completed",
-                        "grade_blocked": False,
-                        "reviewer_output": "No findings.",
-                        "reviewer_output_ref": "rollout://pr_review-round-2/bravo",
-                    },
-                ],
-            }
-        ],
+    write_round(
+        round_state_dir,
+        {
+            "round_id": "pr_review-round-2",
+            "rerolled_from_round_id": "pr_review-round-1",
+            "status": "completed",
+            "review_scope": {"reviewed_head": "head-1"},
+            "runs": [
+                {
+                    "slot": "alpha",
+                    "review_status": "completed",
+                    "grade_blocked": False,
+                    "reviewer_output": "No findings.",
+                    "reviewer_output_ref": "rollout://pr_review-round-2/alpha",
+                },
+                {
+                    "slot": "bravo",
+                    "review_status": "completed",
+                    "grade_blocked": False,
+                    "reviewer_output": "No findings.",
+                    "reviewer_output_ref": "rollout://pr_review-round-2/bravo",
+                },
+            ],
+        },
     )
 
     result = orchestrator_runner.run_one_expensive_step(blocked, state_dir=tmp_path / "state")
@@ -824,12 +822,14 @@ def test_runner_recovers_blocked_arena_round_after_successful_reroll(monkeypatch
     assert result.state["pending_action"]["grading_required"] is True
     assert result.state["pending_action"]["arena_round"] is True
     assert result.state["rounds"][1]["round_id"] == "pr_review-round-2"
+    assert result.state["rounds"][1]["round_state_dir"] == str(round_state_dir)
     assert result.state["rounds"][1]["output_refs"] == ["rollout://pr_review-round-2/alpha", "rollout://pr_review-round-2/bravo"]
     assert result.state["rounds"][1]["runs"][0]["reviewer_output_ref"] == "rollout://pr_review-round-2/alpha"
     assert result.state["recovery"]["status"] == "none"
 
 
-def test_runner_retargets_recovery_to_blocked_reroll_replacement(monkeypatch, tmp_path: Path) -> None:
+def test_runner_retargets_recovery_to_blocked_reroll_replacement(tmp_path: Path) -> None:
+    round_state_dir = tmp_path / "state" / "rounds"
     state = _cycle(tmp_path, deslop_enabled=False, step_names=("arena-discovery", "broad-discovery", "precision-signoff"))
     state["review_plan"]["steps"][0] = {
         "kind": "arena",
@@ -854,24 +854,24 @@ def test_runner_retargets_recovery_to_blocked_reroll_replacement(monkeypatch, tm
         lane="review_t3",
         step_index=0,
         step_name="arena-discovery",
-        round_state_dir="state/rounds",
+        round_state_dir=str(round_state_dir),
     )
-    monkeypatch.setattr(
-        orchestrator_runner,
-        "load_round",
-        lambda state_dir, round_id: {"round_id": round_id, "status": "completed", "runs": [{"slot": "alpha", "grade_blocked": True}]},
+    write_round(
+        round_state_dir,
+        {
+            "round_id": "pr_review-round-1",
+            "status": "completed",
+            "runs": [{"slot": "alpha", "grade_blocked": True}],
+        },
     )
-    monkeypatch.setattr(
-        orchestrator_runner,
-        "iter_round_payloads",
-        lambda state_dir: [
-            {
-                "round_id": "pr_review-round-2",
-                "rerolled_from_round_id": "pr_review-round-1",
-                "status": "completed",
-                "runs": [{"slot": "bravo", "review_status": "timeout", "grade_blocked": True}],
-            }
-        ],
+    write_round(
+        round_state_dir,
+        {
+            "round_id": "pr_review-round-2",
+            "rerolled_from_round_id": "pr_review-round-1",
+            "status": "completed",
+            "runs": [{"slot": "bravo", "review_status": "timeout", "grade_blocked": True}],
+        },
     )
 
     result = orchestrator_runner.run_one_expensive_step(blocked, state_dir=tmp_path / "state")
@@ -880,6 +880,8 @@ def test_runner_retargets_recovery_to_blocked_reroll_replacement(monkeypatch, tm
     assert result.state["stage"] == STAGE_RETRY_REQUESTED
     assert result.state["pending_action"]["kind"] == "arena-blocked"
     assert result.state["pending_action"]["round_id"] == "pr_review-round-2"
+    assert result.state["pending_action"]["round_state_dir"] == str(round_state_dir)
+    assert result.state["rounds"][1]["round_state_dir"] == str(round_state_dir)
 
 
 def test_runner_reruns_arena_step_after_blocked_round_is_dismissed(monkeypatch, tmp_path: Path) -> None:

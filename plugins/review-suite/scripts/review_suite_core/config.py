@@ -11,7 +11,7 @@ DEFAULT_CONFIG_FILENAME = "default_config.json"
 USER_CONFIG_FILENAME = "config.json"
 SUPPORTED_REASONING_EFFORTS = {"low", "medium", "high", "xhigh"}
 SUPPORTED_SERVICE_TIERS = {"fast", "flex"}
-SUPPORTED_ORCHESTRATOR_SELECTIONS = {"auto", "stable", "benchmark"}
+SUPPORTED_ORCHESTRATOR_SELECTIONS = {"auto", "stable"}
 
 
 @dataclass(frozen=True)

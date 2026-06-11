@@ -70,7 +70,7 @@ def test_default_stable_profiles_cover_all_modes(tmp_path: Path) -> None:
         ("review", "urgent-signoff", 2, "gpt-5.5", "medium", False)
     ]
     assert profiles["stable"]["emergency"].steps[0].max_review_rounds == 2
-    assert profiles["benchmark"]["emergency"].steps[0].max_review_rounds == 2
+    assert set(profiles) == {"stable"}
 
 
 def test_profile_step_kind_defaults_to_review(tmp_path: Path) -> None:
@@ -267,7 +267,6 @@ def test_auto_selection_uses_stable_profile_when_configured(tmp_path: Path, mode
     assert resolution.requested_selection == "auto"
     assert resolution.effective_selection == "stable"
     assert resolution.selection_reason == "auto_stable_profile"
-    assert resolution.requires_grading is False
     assert resolution.steps
 
 
@@ -279,30 +278,21 @@ def test_explicit_stable_selection_records_reason_and_skips_grading(tmp_path: Pa
     assert resolution.effective_selection == "stable"
     assert resolution.selection_reason == "explicit_stable"
     assert resolution.selection_reason in SUPPORTED_SELECTION_REASONS
-    assert resolution.requires_grading is False
 
 
-def test_benchmark_selection_requires_grading(tmp_path: Path) -> None:
+def test_benchmark_selection_is_not_supported(tmp_path: Path) -> None:
     config = load_config(tmp_path / "state")
 
-    resolution = resolve_orchestrator_profile(config, mode="normal", selection="benchmark")
-
-    assert resolution.effective_selection == "benchmark"
-    assert resolution.selection_reason == "explicit_benchmark"
-    assert resolution.requires_grading is True
-    assert resolution.profile.profile == "benchmark"
+    with pytest.raises(ValueError, match="orchestrator selection must be one of"):
+        resolve_orchestrator_profile(config, mode="normal", selection="benchmark")
 
 
-def test_auto_selection_falls_back_to_benchmark_when_stable_mode_missing(tmp_path: Path) -> None:
+def test_auto_selection_requires_stable_profile(tmp_path: Path) -> None:
     config = deepcopy(load_config(tmp_path / "state"))
     del config["orchestrator"]["profiles"]["stable"]["normal"]
 
-    resolution = resolve_orchestrator_profile(config, mode="normal", selection="auto")
-
-    assert resolution.effective_selection == "benchmark"
-    assert resolution.selection_reason == "auto_benchmark_missing_stable"
-    assert resolution.requires_grading is True
-    assert resolution.steps[0].name == "benchmark"
+    with pytest.raises(ValueError, match="missing orchestrator stable profile for mode normal"):
+        resolve_orchestrator_profile(config, mode="normal", selection="auto")
 
 
 def test_calibration_auto_promotion_is_not_enabled(tmp_path: Path) -> None:

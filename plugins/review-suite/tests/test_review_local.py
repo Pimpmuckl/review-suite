@@ -4,7 +4,6 @@ import argparse
 import subprocess
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -451,207 +450,6 @@ def test_build_local_review_request_with_custom_instructions_does_not_build_patc
     assert "=== BEGIN DIFF ===" not in request.prompt
 
 
-@pytest.mark.parametrize(
-    ("module", "runner_attr"),
-    [
-        (review_t1, "run_benchmarked_round"),
-        (review_t2, "run_gate_round"),
-    ],
-)
-def test_t1_t2_commit_review_with_custom_instructions_uses_prompt_only(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    module,
-    runner_attr: str,
-) -> None:
-    captured: dict[str, object] = {}
-
-    def fake_run(args, **kwargs):
-        raise AssertionError(args)
-
-    monkeypatch.setattr(review_suite_local.subprocess, "run", fake_run)
-    monkeypatch.setattr(
-        review_suite_local,
-        "dirty_worktree_scope",
-        lambda review_cwd, base: {"all_dirty_paths_outside_branch_diff": False},
-    )
-    monkeypatch.setattr(module, "resolve_repo_root", lambda cd: tmp_path)
-    if module is review_t1:
-        monkeypatch.setattr(module, "resolve_caller_id", lambda caller_id: ("caller-1", "explicit"))
-        monkeypatch.setattr(module, runner_attr, lambda **kwargs: captured.update(kwargs) or 0)
-    else:
-        monkeypatch.setattr(module, "emit_toon", lambda payload: None)
-        monkeypatch.setattr(module, runner_attr, lambda **kwargs: (captured.update(kwargs) or {"status": "ok"}, 0))
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [f"{module.__name__}.py", "--commit", "abc123", "--instructions", "Do not talk about backwards compatibility."],
-    )
-
-    exit_code = module.main()
-
-    assert exit_code == 0
-    assert captured["review_scope"]["commit"] == "abc123"
-    assert "Additional review instructions:" in str(captured["prompt"])
-    assert "Do not talk about backwards compatibility." in str(captured["prompt"])
-    assert "=== BEGIN DIFF ===" not in str(captured["prompt"])
-
-
-@pytest.mark.parametrize(
-    ("module", "runner_attr"),
-    [
-        (review_t3, "run_benchmarked_round"),
-        (review_t4, "run_gate_round"),
-    ],
-)
-def test_t3_t4_without_custom_instructions_keep_native_base_review(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    module,
-    runner_attr: str,
-) -> None:
-    captured: dict[str, object] = {}
-
-    def fake_run(args, **kwargs):
-        if args[:2] == ["git", "merge-base"]:
-            return subprocess.CompletedProcess(args, 0, stdout="merge-base-sha\n", stderr="")
-        if args[:3] == ["git", "rev-parse", "--abbrev-ref"]:
-            return subprocess.CompletedProcess(args, 0, stdout="feature/test\n", stderr="")
-        if args[:3] == ["git", "rev-parse", "HEAD"]:
-            return subprocess.CompletedProcess(args, 0, stdout="head-sha\n", stderr="")
-        if args[:2] == ["git", "diff"]:
-            if "--quiet" in args:
-                return subprocess.CompletedProcess(args, 1, stdout="", stderr="")
-            return subprocess.CompletedProcess(args, 0, stdout="diff --git a/app.py b/app.py\n", stderr="")
-        raise AssertionError(args)
-
-    monkeypatch.setattr(review_suite_local.subprocess, "run", fake_run)
-    monkeypatch.setattr(
-        review_suite_local,
-        "dirty_worktree_scope",
-        lambda review_cwd, base: {"all_dirty_paths_outside_branch_diff": False},
-    )
-    monkeypatch.setattr(module, "resolve_repo_root", lambda cd: tmp_path)
-    if module is review_t3:
-        monkeypatch.setattr(module, "resolve_caller_id", lambda caller_id: ("caller-1", "explicit"))
-        monkeypatch.setattr(module, runner_attr, lambda **kwargs: captured.update(kwargs) or 0)
-    else:
-        monkeypatch.setattr(module, "guard_branch_signoff_lane", lambda **kwargs: None)
-        monkeypatch.setattr(module, "emit_toon", lambda payload: None)
-        monkeypatch.setattr(module, runner_attr, lambda **kwargs: (captured.update(kwargs) or {"status": "ok"}, 0))
-    monkeypatch.setattr(sys, "argv", [f"{module.__name__}.py", "--base", "main"])
-
-    exit_code = module.main()
-
-    assert exit_code == 0
-    assert captured["review_scope"]["base"] == "main"
-    assert captured["review_scope"]["merge_base"] == "merge-base-sha"
-    assert captured["review_scope"]["reviewed_head"] == "head-sha"
-    assert captured["prompt"] == ""
-
-
-@pytest.mark.parametrize(
-    ("module", "argv"),
-    [
-        (review_t2, ["review_t2.py", "--commit", "abc123", "--champion-override", "gpt-5.5-medium"]),
-        (review_t4, ["review_t4.py", "--base", "main", "--champion-override", "gpt-5.5-xhigh"]),
-    ],
-)
-def test_t2_t4_pass_champion_override_to_gate_runner(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    module,
-    argv: list[str],
-) -> None:
-    captured: dict[str, object] = {}
-
-    def fake_run(args, **kwargs):
-        if args[:2] == ["git", "show"]:
-            return subprocess.CompletedProcess(args, 0, stdout="diff --git a/x b/x\n", stderr="")
-        if args[:2] == ["git", "merge-base"]:
-            return subprocess.CompletedProcess(args, 0, stdout="merge-base-sha\n", stderr="")
-        if args[:3] == ["git", "rev-parse", "--abbrev-ref"]:
-            return subprocess.CompletedProcess(args, 0, stdout="feature/test\n", stderr="")
-        if args[:3] == ["git", "rev-parse", "HEAD"]:
-            return subprocess.CompletedProcess(args, 0, stdout="head-sha\n", stderr="")
-        if args[:2] == ["git", "diff"]:
-            if "--quiet" in args:
-                return subprocess.CompletedProcess(args, 1, stdout="", stderr="")
-            return subprocess.CompletedProcess(args, 0, stdout="diff --git a/app.py b/app.py\n", stderr="")
-        raise AssertionError(args)
-
-    monkeypatch.setattr(review_suite_local.subprocess, "run", fake_run)
-    monkeypatch.setattr(
-        review_suite_local,
-        "dirty_worktree_scope",
-        lambda review_cwd, base: {"all_dirty_paths_outside_branch_diff": False},
-    )
-    monkeypatch.setattr(module, "resolve_repo_root", lambda cd: tmp_path)
-    if module is review_t4:
-        monkeypatch.setattr(module, "guard_branch_signoff_lane", lambda **kwargs: None)
-    monkeypatch.setattr(module, "emit_toon", lambda payload: None)
-    monkeypatch.setattr(module, "run_gate_round", lambda **kwargs: (captured.update(kwargs) or {"status": "ok"}, 0))
-    monkeypatch.setattr(sys, "argv", argv)
-
-    exit_code = module.main()
-
-    assert exit_code == 0
-    assert captured["champion_override"] == argv[-1]
-
-
-@pytest.mark.parametrize(
-    ("module", "runner_attr"),
-    [
-        (review_t3, "run_benchmarked_round"),
-        (review_t4, "run_gate_round"),
-    ],
-)
-def test_t3_t4_with_custom_instructions_keep_native_base_review(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    module,
-    runner_attr: str,
-) -> None:
-    captured: dict[str, object] = {}
-
-    def fake_run(args, **kwargs):
-        if args[:2] == ["git", "merge-base"]:
-            return subprocess.CompletedProcess(args, 0, stdout="merge-base-sha\n", stderr="")
-        if args[:3] == ["git", "rev-parse", "--abbrev-ref"]:
-            return subprocess.CompletedProcess(args, 0, stdout="feature/test\n", stderr="")
-        if args[:3] == ["git", "rev-parse", "HEAD"]:
-            return subprocess.CompletedProcess(args, 0, stdout="head-sha\n", stderr="")
-        if args[:2] == ["git", "diff"]:
-            if "--quiet" in args:
-                return subprocess.CompletedProcess(args, 1, stdout="", stderr="")
-            return subprocess.CompletedProcess(args, 0, stdout="diff --git a/x b/x\n", stderr="")
-        raise AssertionError(args)
-
-    monkeypatch.setattr(review_suite_local.subprocess, "run", fake_run)
-    monkeypatch.setattr(module, "resolve_repo_root", lambda cd: tmp_path)
-    if module is review_t3:
-        monkeypatch.setattr(module, "resolve_caller_id", lambda caller_id: ("caller-1", "explicit"))
-        monkeypatch.setattr(module, runner_attr, lambda **kwargs: captured.update(kwargs) or 0)
-    else:
-        monkeypatch.setattr(module, "guard_branch_signoff_lane", lambda **kwargs: None)
-        monkeypatch.setattr(module, "emit_toon", lambda payload: None)
-        monkeypatch.setattr(module, runner_attr, lambda **kwargs: (captured.update(kwargs) or {"status": "ok"}, 0))
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [f"{module.__name__}.py", "--base", "main", "--instructions", "Ignore backwards compatibility."]
-    )
-
-    exit_code = module.main()
-
-    assert exit_code == 0
-    assert captured["review_scope"]["base"] == "main"
-    assert captured["review_scope"]["reviewed_head"] == "head-sha"
-    assert "Additional review instructions:" in str(captured["prompt"])
-    assert "Ignore backwards compatibility." in str(captured["prompt"])
-    assert "=== BEGIN DIFF ===" not in str(captured["prompt"])
-
-
 def test_review_plan_deslop_and_github_do_not_expose_custom_instruction_flags() -> None:
     assert "--instructions" not in review_plan.build_parser().format_help()
     assert "--instructions-file" not in review_plan.build_parser().format_help()
@@ -678,10 +476,6 @@ def test_agent_wrapper_help_omits_low_roi_runtime_knobs() -> None:
         review_plan.build_parser().format_help(),
         review_deslop.build_parser().format_help(),
         review_followup.build_parser().format_help(),
-        review_t1.build_parser().format_help(),
-        review_t2.build_parser().format_help(),
-        review_t3.build_parser().format_help(),
-        review_t4.build_parser().format_help(),
         _subparser_help(review_github.build_parser(), "run"),
         _subparser_help(review_suite_arena.build_parser(), "run"),
         _subparser_help(review_suite_arena.build_parser(), "run-round"),
@@ -712,10 +506,6 @@ def test_primary_wrappers_hide_operator_state_knobs_from_help() -> None:
     )
     help_texts = [
         review_followup.build_parser().format_help(),
-        review_t1.build_parser().format_help(),
-        review_t2.build_parser().format_help(),
-        review_t3.build_parser().format_help(),
-        review_t4.build_parser().format_help(),
         _subparser_help(review_github.build_parser(), "run"),
         _subparser_help(review_state.build_parser(), "status"),
     ]
@@ -725,35 +515,86 @@ def test_primary_wrappers_hide_operator_state_knobs_from_help() -> None:
             assert flag not in help_text
 
 
+@pytest.mark.parametrize("module", [review_t1, review_t2, review_t3, review_t4])
+def test_legacy_tier_wrappers_point_to_review_py(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], module) -> None:
+    monkeypatch.setattr(sys, "argv", [f"{module.__name__}.py", "--base", "main"])
+
+    exit_code = module.main()
+
+    rendered = capsys.readouterr().out
+    assert exit_code == 2
+    assert "retired as a direct agent entrypoint" in rendered
+    assert "review.py" in rendered
+    assert "Action" not in rendered
+    assert "REPO_ROOT" not in rendered
+
+
+def test_legacy_tier_wrapper_rejects_unsupported_legacy_flags(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["review_t1.py", "--commit", "abc123"])
+
+    exit_code = review_t1.main()
+
+    rendered = capsys.readouterr().out
+    assert exit_code == 2
+    assert "retired as a direct agent entrypoint" in rendered
+    assert "Action" not in rendered
+
+
+def test_legacy_tier_wrapper_malformed_old_flags_still_report_retired(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["review_t1.py", "--base"])
+
+    exit_code = review_t1.main()
+
+    rendered = capsys.readouterr().out
+    assert exit_code == 2
+    assert "status: usage_error" in rendered
+    assert "retired as a direct agent entrypoint" in rendered
+    assert "Action" not in rendered
+
+
+def test_legacy_tier_wrapper_targeting_flags_do_not_emit_action(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    state_dir = tmp_path / "state"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["review_t1.py", "--cd", str(tmp_path), "--base", "feature/base", "--state-dir", str(state_dir), "--wsl"],
+    )
+
+    exit_code = review_t1.main()
+
+    rendered = capsys.readouterr().out
+    assert exit_code == 2
+    assert "Action" not in rendered
+    assert "REPO_ROOT" not in rendered
+
+
+def test_legacy_tier_wrappers_own_installed_cache_bootstrap() -> None:
+    for module in (review_t1, review_t2, review_t3, review_t4):
+        wrapper_source = Path(module.__file__).read_text(encoding="utf-8")
+        assert "from review_suite_runtime_bootstrap import bootstrap_from_installed_cache" in wrapper_source
+        assert "bootstrap_from_installed_cache(__file__)" in wrapper_source
+
+
 def test_agent_wrapper_help_keeps_useful_targeting_controls_visible() -> None:
     assert "--input-file" in review_plan.build_parser().format_help()
     assert "--focus" in review_deslop.build_parser().format_help()
     assert "--note-file" in review_followup.build_parser().format_help()
-    assert "--commit" in review_t1.build_parser().format_help()
-    assert "--commit" in review_t2.build_parser().format_help()
-    assert "--instructions-file" in review_t3.build_parser().format_help()
-    assert "--instructions-file" in review_t4.build_parser().format_help()
     assert "--pr-number" in _subparser_help(review_github.build_parser(), "run")
     assert "--base" in _subparser_help(review_state.build_parser(), "status")
 
 
-def test_arena_wrapper_help_mentions_blocking_round_recovery() -> None:
-    for help_text in (
-        review_t1.build_parser().format_help(),
-        review_t3.build_parser().format_help(),
-    ):
-        assert "blocks this wrapper" in help_text
-        assert "round id" in help_text
-        assert "next Action" in help_text
-        assert "selection_mode" not in help_text
-
-
 def test_local_review_wrappers_expose_short_wsl_flag() -> None:
     for help_text in (
-        review_t1.build_parser().format_help(),
-        review_t2.build_parser().format_help(),
-        review_t3.build_parser().format_help(),
-        review_t4.build_parser().format_help(),
         review_followup.build_parser().format_help(),
         review_plan.build_parser().format_help(),
         review_deslop.build_parser().format_help(),
@@ -828,231 +669,3 @@ def test_guard_branch_signoff_lane_skips_commit_scope(monkeypatch: pytest.Monkey
         state_dir=tmp_path / "state",
         review_scope={"commit": "abc123"},
     )
-
-
-@pytest.mark.parametrize("module", [review_t2, review_t4])
-def test_gate_wrappers_fail_fast_when_branch_signoff_guard_blocks(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    module,
-) -> None:
-    captured_errors: list[str] = []
-
-    monkeypatch.setattr(module, "resolve_repo_root", lambda cd: tmp_path)
-    monkeypatch.setattr(
-        module,
-        "build_local_review_request",
-        lambda **kwargs: SimpleNamespace(review_scope={"base": "main"}, prompt=""),
-    )
-    monkeypatch.setattr(
-        module,
-        "guard_branch_signoff_lane",
-        lambda **kwargs: (_ for _ in ()).throw(ValueError("guard blocked this signoff")),
-    )
-    monkeypatch.setattr(
-        module,
-        "run_gate_round",
-        lambda **kwargs: (_ for _ in ()).throw(AssertionError("guarded signoff must not launch gate reviewers")),
-    )
-    monkeypatch.setattr(module, "emit_error", lambda message, **kwargs: captured_errors.append(message) or 2)
-    monkeypatch.setattr(sys, "argv", [f"{module.__name__}.py", "--base", "main"])
-
-    exit_code = module.main()
-
-    assert exit_code == 2
-    assert captured_errors == ["guard blocked this signoff"]
-
-
-@pytest.mark.parametrize("module", [review_t2, review_t4])
-def test_gate_wrappers_fail_fast_when_stage_step_down_guard_blocks(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    module,
-) -> None:
-    captured_errors: list[str] = []
-
-    monkeypatch.setattr(module, "resolve_repo_root", lambda cd: tmp_path)
-    monkeypatch.setattr(
-        module,
-        "build_local_review_request",
-        lambda **kwargs: SimpleNamespace(review_scope={"base": "main"}, prompt=""),
-    )
-    monkeypatch.setattr(
-        module,
-        "guard_no_stage_step_down",
-        lambda **kwargs: (_ for _ in ()).throw(ValueError("stage step-down blocked")),
-    )
-    monkeypatch.setattr(
-        module,
-        "guard_branch_signoff_lane",
-        lambda **kwargs: (_ for _ in ()).throw(AssertionError("stage guard should run first")),
-    )
-    monkeypatch.setattr(
-        module,
-        "run_gate_round",
-        lambda **kwargs: (_ for _ in ()).throw(AssertionError("guarded signoff must not launch gate reviewers")),
-    )
-    monkeypatch.setattr(module, "emit_error", lambda message, **kwargs: captured_errors.append(message) or 2)
-    monkeypatch.setattr(sys, "argv", [f"{module.__name__}.py", "--base", "main"])
-
-    exit_code = module.main()
-
-    assert exit_code == 2
-    assert captured_errors == ["stage step-down blocked"]
-
-
-@pytest.mark.parametrize("module", [review_t2, review_t4])
-def test_gate_wrappers_stage_step_down_escape_hatch_bypasses_guard(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    module,
-) -> None:
-    captured: dict[str, object] = {}
-
-    monkeypatch.setattr(module, "resolve_repo_root", lambda cd: tmp_path)
-    monkeypatch.setattr(
-        module,
-        "build_local_review_request",
-        lambda **kwargs: SimpleNamespace(review_scope={"base": "main"}, prompt=""),
-    )
-    monkeypatch.setattr(
-        module,
-        "guard_no_stage_step_down",
-        lambda **kwargs: (_ for _ in ()).throw(AssertionError("escape hatch should bypass stage guard")),
-    )
-    monkeypatch.setattr(module, "guard_branch_signoff_lane", lambda **kwargs: None)
-    monkeypatch.setattr(module, "run_gate_round", lambda **kwargs: (captured.update(kwargs) or {"status": "completed"}, 0))
-    monkeypatch.setattr(module, "output_isatty", lambda: True)
-    monkeypatch.setattr(sys, "argv", [f"{module.__name__}.py", "--base", "main", "--allow-stage-step-down"])
-
-    exit_code = module.main()
-
-    assert exit_code == 0
-    assert captured["review_scope"]["base"] == "main"
-
-
-@pytest.mark.parametrize("module", [review_t2, review_t4])
-def test_gate_wrappers_skip_final_toon_in_live_tty_mode(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, module) -> None:
-    captured: dict[str, object] = {}
-
-    monkeypatch.setattr(module, "resolve_repo_root", lambda cd: tmp_path)
-    monkeypatch.setattr(
-        module,
-        "build_local_review_request",
-        lambda **kwargs: SimpleNamespace(review_scope={"base": "main"}, prompt=""),
-    )
-    monkeypatch.setattr(
-        module,
-        "run_gate_round",
-        lambda **kwargs: (captured.update(kwargs) or {"status": "completed"}, 0),
-    )
-    monkeypatch.setattr(module, "guard_branch_signoff_lane", lambda **kwargs: None)
-    monkeypatch.setattr(module, "output_isatty", lambda: True)
-    monkeypatch.setattr(
-        module,
-        "emit_toon",
-        lambda payload: (_ for _ in ()).throw(AssertionError("live gate wrapper should not emit final TOON")),
-    )
-    monkeypatch.setattr(sys, "argv", [f"{module.__name__}.py", "--base", "main"])
-
-    exit_code = module.main()
-
-    assert exit_code == 0
-    assert captured["review_scope"]["base"] == "main"
-
-
-@pytest.mark.parametrize("module", [review_t2, review_t4])
-def test_gate_wrappers_emit_signoff_pending_toon_even_in_live_tty_mode(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    module,
-) -> None:
-    emitted: list[dict[str, object]] = []
-
-    monkeypatch.setattr(module, "resolve_repo_root", lambda cd: tmp_path)
-    monkeypatch.setattr(
-        module,
-        "build_local_review_request",
-        lambda **kwargs: SimpleNamespace(review_scope={"base": "main"}, prompt=""),
-    )
-    monkeypatch.setattr(
-        module,
-        "run_gate_round",
-        lambda **kwargs: (
-            {"status": "signoff_pending", "blocked": False, "action": {"cmd": "close --verdict VERDICT"}},
-            0,
-        ),
-    )
-    monkeypatch.setattr(module, "guard_branch_signoff_lane", lambda **kwargs: None)
-    monkeypatch.setattr(module, "output_isatty", lambda: True)
-    monkeypatch.setattr(module, "emit_toon", lambda payload: emitted.append(payload))
-    monkeypatch.setattr(sys, "argv", [f"{module.__name__}.py", "--base", "main"])
-
-    exit_code = module.main()
-
-    assert exit_code == 0
-    assert emitted == [{"Action": {"cmd": "close --verdict VERDICT"}}]
-
-
-@pytest.mark.parametrize("module", [review_t2, review_t4])
-def test_gate_wrappers_skip_final_toon_for_completed_noninteractive_runs(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    module,
-) -> None:
-    captured: dict[str, object] = {}
-
-    monkeypatch.setattr(module, "resolve_repo_root", lambda cd: tmp_path)
-    monkeypatch.setattr(
-        module,
-        "build_local_review_request",
-        lambda **kwargs: SimpleNamespace(review_scope={"base": "main"}, prompt=""),
-    )
-    monkeypatch.setattr(
-        module,
-        "run_gate_round",
-        lambda **kwargs: (captured.update(kwargs) or {"status": "completed", "blocked": False}, 0),
-    )
-    monkeypatch.setattr(module, "guard_branch_signoff_lane", lambda **kwargs: None)
-    monkeypatch.setattr(module, "output_isatty", lambda: False)
-    monkeypatch.setattr(
-        module,
-        "emit_toon",
-        lambda payload: (_ for _ in ()).throw(AssertionError("completed gate run should not emit final TOON")),
-    )
-    monkeypatch.setattr(sys, "argv", [f"{module.__name__}.py", "--base", "main"])
-
-    exit_code = module.main()
-
-    assert exit_code == 0
-    assert captured["review_scope"]["base"] == "main"
-
-
-@pytest.mark.parametrize("module", [review_t2, review_t4])
-def test_gate_wrappers_keep_final_toon_for_blocked_noninteractive_runs(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    module,
-) -> None:
-    emitted: list[dict[str, object]] = []
-
-    monkeypatch.setattr(module, "resolve_repo_root", lambda cd: tmp_path)
-    monkeypatch.setattr(
-        module,
-        "build_local_review_request",
-        lambda **kwargs: SimpleNamespace(review_scope={"base": "main"}, prompt=""),
-    )
-    monkeypatch.setattr(
-        module,
-        "run_gate_round",
-        lambda **kwargs: ({"status": "blocked", "blocked": True, "runs": []}, 1),
-    )
-    monkeypatch.setattr(module, "guard_branch_signoff_lane", lambda **kwargs: None)
-    monkeypatch.setattr(module, "output_isatty", lambda: False)
-    monkeypatch.setattr(module, "emit_toon", lambda payload: emitted.append(payload))
-    monkeypatch.setattr(sys, "argv", [f"{module.__name__}.py", "--base", "main"])
-
-    exit_code = module.main()
-
-    assert exit_code == 1
-    assert emitted == [{"Action": {"note": "review blocked; read Output, resolve blocker, then rerun the gate"}}]

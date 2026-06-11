@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import subprocess
 import sys
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -76,7 +77,14 @@ from review_suite_core.orchestrator_store import (
     load_cycle_by_public_id,
     save_cycle,
 )
-from review_suite_local import load_round, print_reviewer_output_section, public_task_name, round_needs_caller_grade
+from review_suite_local import (
+    latest_rerolled_round_payload,
+    load_round,
+    print_reviewer_output_section,
+    public_task_name,
+    round_needs_caller_grade,
+    unique_round_state_dirs,
+)
 
 
 FOLLOWUP_LANE = "review-followup"
@@ -117,11 +125,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--show-findings", action="store_true", help="Print stored reviewer output for --id without running review.")
     parser.add_argument("--fresh-token", help=argparse.SUPPRESS)
     parser.add_argument("--state-dir", default=str(default_state_dir()), help=argparse.SUPPRESS)
+    parser.add_argument("--wsl", action="store_true")
     return parser
 
 
 def _help_command() -> str:
     return format_command([sys.executable, str(Path(__file__).resolve()), "--help"])
+
+
+def _runtime_uses_wsl(state: dict[str, Any]) -> bool:
+    return bool(dict(state.get("runtime") or {}).get("allow_unsafe_windows_wsl_fallback"))
 
 
 def _review_command(public_id: str, *extra: str, state_dir: Path | None = None) -> str:
@@ -152,6 +165,8 @@ def _new_review_command(state: dict[str, Any], *, state_dir: Path, fresh_token: 
     ]
     if fresh_token:
         command.extend(["--fresh-token", fresh_token])
+    if _runtime_uses_wsl(state):
+        command.append("--wsl")
     return format_command(command)
 
 
@@ -193,7 +208,7 @@ def _arena_grade_command(state: dict[str, Any], *, state_dir: Path) -> str | Non
     )
 
 
-def _arena_reroll_command(state: dict[str, Any], *, state_dir: Path, round_id: str, slot: str) -> str:
+def _arena_reroll_argv(state: dict[str, Any], *, state_dir: Path, round_id: str, slot: str) -> list[str]:
     identity = dict(state.get("identity") or {})
     command = [
         sys.executable,
@@ -214,42 +229,40 @@ def _arena_reroll_command(state: dict[str, Any], *, state_dir: Path, round_id: s
     base = str(identity.get("base") or "").strip()
     if base:
         command.extend(["--base", base])
-    return format_command(command)
+    if _runtime_uses_wsl(state):
+        command.append("--wsl")
+    return command
 
 
-def _arena_dismiss_command(*, state_dir: Path, round_id: str) -> str:
-    return format_command(
-        [
-            sys.executable,
-            str(Path(__file__).resolve().with_name("review_suite_arena.py")),
-            "dismiss-round",
-            "--round-id",
-            round_id,
-            "--state-dir",
-            str(state_dir),
-            "--reason",
-            "orchestrator_arena_blocked",
-        ]
-    )
+def _arena_dismiss_argv(*, state_dir: Path, round_id: str) -> list[str]:
+    return [
+        sys.executable,
+        str(Path(__file__).resolve().with_name("review_suite_arena.py")),
+        "dismiss-round",
+        "--round-id",
+        round_id,
+        "--state-dir",
+        str(state_dir),
+        "--reason",
+        "orchestrator_arena_blocked",
+    ]
 
 
-def _arena_resume_command(*, state_dir: Path, round_id: str) -> str:
-    return format_command(
-        [
-            sys.executable,
-            str(Path(__file__).resolve().with_name("review_suite_arena.py")),
-            "resume-round",
-            "--round-id",
-            round_id,
-            "--state-dir",
-            str(state_dir),
-            "--sqlite-path",
-            str(Path.home() / ".codex" / "state_5.sqlite"),
-        ]
-    )
+def _arena_resume_argv(*, state_dir: Path, round_id: str) -> list[str]:
+    return [
+        sys.executable,
+        str(Path(__file__).resolve().with_name("review_suite_arena.py")),
+        "resume-round",
+        "--round-id",
+        round_id,
+        "--state-dir",
+        str(state_dir),
+        "--sqlite-path",
+        str(Path.home() / ".codex" / "state_5.sqlite"),
+    ]
 
 
-def _arena_run_round_command(state: dict[str, Any], payload: dict[str, Any], *, state_dir: Path, round_id: str) -> str:
+def _arena_run_round_argv(state: dict[str, Any], payload: dict[str, Any], *, state_dir: Path, round_id: str) -> list[str]:
     identity = dict(state.get("identity") or {})
     review_scope = dict(payload.get("review_scope") or {})
     base = str(review_scope.get("base") or identity.get("base") or "").strip()
@@ -269,7 +282,9 @@ def _arena_run_round_command(state: dict[str, Any], payload: dict[str, Any], *, 
     cwd = str(identity.get("cwd") or payload.get("review_cwd") or "").strip()
     if cwd:
         command.extend(["--cd", str(cwd_path_from_normalized(cwd))])
-    return format_command(command)
+    if _runtime_uses_wsl(state):
+        command.append("--wsl")
+    return command
 
 
 def _round_blocked_slots(payload: dict[str, Any]) -> list[str]:
@@ -284,84 +299,163 @@ def _round_blocked_slots(payload: dict[str, Any]) -> list[str]:
     return slots
 
 
-def _arena_recovery_action(state: dict[str, Any], *, state_dir: Path, public_id: str) -> dict[str, Any] | None:
+def _arena_recovery_plan(state: dict[str, Any], *, state_dir: Path) -> dict[str, Any] | None:
     pending = dict(state.get("pending_action") or {})
     if state.get("stage") != STAGE_RETRY_REQUESTED or str(pending.get("kind") or "") != "arena-blocked":
         return None
     round_id = str(pending.get("round_id") or "").strip()
     if not round_id:
-        return {"cmd": _review_command(public_id, state_dir=state_dir), "note": "Arena recovery is missing round id."}
+        return {"operation": "none", "note": "Arena recovery is missing round id."}
     round_record = _round_by_id(state, round_id)
-    payload = _load_output_round_payload(state_dir, round_record)
-    round_state_dir = _round_action_state_dir(state_dir, round_record)
-    next_cmd = _review_command(public_id, state_dir=state_dir)
+    pending_state_dir = str(pending.get("round_state_dir") or "").strip()
+    extra_state_dirs = [Path(pending_state_dir)] if pending_state_dir else None
+    payload = _load_output_round_payload(state_dir, round_record, extra_state_dirs=extra_state_dirs)
+    round_id, payload, round_state_dir = latest_rerolled_round_payload(
+        round_id=round_id,
+        payload=payload,
+        search_dirs=_round_state_dir_candidates(state_dir, round_record, extra_state_dirs=extra_state_dirs),
+    )
     status = str(payload.get("status") or "").strip()
     if status == "dismissed":
         return {
-            "cmd": next_cmd,
+            "operation": "none",
             "note": "Arena round dismissed; rerun this review id.",
         }
     if status == "sampled":
         return {
-            "cmd": _arena_run_round_command(state, payload, state_dir=round_state_dir, round_id=round_id),
-            "dismiss": _arena_dismiss_command(state_dir=round_state_dir, round_id=round_id),
-            "next": next_cmd,
-            "note": "Run the arena replacement round, then rerun this review id.",
+            "operation": "run",
+            "round_id": round_id,
+            "payload": payload,
+            "round_state_dir": round_state_dir,
+            "note": "Arena replacement round is sampled; rerun this review id to continue backend recovery.",
         }
     if status == "running":
         return {
-            "cmd": _arena_resume_command(state_dir=round_state_dir, round_id=round_id),
-            "dismiss": _arena_dismiss_command(state_dir=round_state_dir, round_id=round_id),
-            "next": next_cmd,
-            "note": "Resume the arena replacement round, then rerun this review id.",
+            "operation": "resume",
+            "round_id": round_id,
+            "round_state_dir": round_state_dir,
+            "note": "Arena replacement round is running; rerun this review id to continue backend recovery.",
         }
     if status and status not in {"completed", "dismissed"}:
         return {
-            "cmd": _arena_dismiss_command(state_dir=round_state_dir, round_id=round_id),
-            "next": next_cmd,
-            "note": f"Arena replacement round is {status}; dismiss it, then rerun this review id.",
+            "operation": "dismiss",
+            "round_id": round_id,
+            "round_state_dir": round_state_dir,
+            "note": f"Arena replacement round is {status}; rerun this review id to continue backend recovery.",
         }
     slots = _round_blocked_slots(payload)
     if slots:
         rerollable_slots = [slot for slot in slots if slot in ARENA_REROLL_SLOTS]
         if len(rerollable_slots) != len(slots):
             return {
-                "cmd": _arena_dismiss_command(state_dir=round_state_dir, round_id=round_id),
-                "next": next_cmd,
-                "note": "Blocked arena slot(s) cannot be rerolled safely; dismiss the round, then rerun this review id.",
+                "operation": "dismiss",
+                "round_id": round_id,
+                "round_state_dir": round_state_dir,
+                "note": "Blocked arena slot(s) cannot be rerolled safely; rerun this review id to continue backend recovery.",
             }
-        reroll = {
-            slot: _arena_reroll_command(state, state_dir=round_state_dir, round_id=round_id, slot=slot)
-            for slot in rerollable_slots
-        }
         return {
-            "cmd": reroll[rerollable_slots[0]],
-            "reroll": reroll,
-            "dismiss": _arena_dismiss_command(state_dir=round_state_dir, round_id=round_id),
-            "next": next_cmd,
-            "note": "Reroll supported blocked arena slot(s), then rerun this review id. Dismiss reruns the arena step.",
+            "operation": "reroll",
+            "round_id": round_id,
+            "round_state_dir": round_state_dir,
+            "slot": rerollable_slots[0],
+            "note": f"Blocked arena slot {rerollable_slots[0]} can be rerolled; rerun this review id to continue backend recovery.",
         }
     return {
-        "cmd": next_cmd,
-        "dismiss": _arena_dismiss_command(state_dir=round_state_dir, round_id=round_id),
+        "operation": "none",
         "note": "Arena recovery is ready; rerun this review id.",
     }
 
 
-def _blocked_decision_action(state: dict[str, Any], *, state_dir: Path, public_id: str) -> dict[str, Any] | None:
+def _arena_recovery_action(state: dict[str, Any], *, state_dir: Path, public_id: str) -> dict[str, Any] | None:
+    plan = _arena_recovery_plan(state, state_dir=state_dir)
+    if plan is None:
+        return None
+    return {
+        "cmd": _review_command(public_id, state_dir=state_dir),
+        "note": str(plan.get("note") or "Arena recovery is ready; rerun this review id."),
+    }
+
+
+def _arena_recovery_backend_argv(state: dict[str, Any], *, state_dir: Path) -> list[str] | None:
+    plan = _arena_recovery_plan(state, state_dir=state_dir)
+    if plan is None:
+        return None
+    operation = str(plan.get("operation") or "")
+    round_id = str(plan.get("round_id") or "").strip()
+    round_state_dir = plan.get("round_state_dir")
+    if operation == "run":
+        payload = dict(plan.get("payload") or {})
+        return _arena_run_round_argv(state, payload, state_dir=round_state_dir, round_id=round_id)
+    if operation == "resume":
+        return _arena_resume_argv(state_dir=round_state_dir, round_id=round_id)
+    if operation == "dismiss":
+        return _arena_dismiss_argv(state_dir=round_state_dir, round_id=round_id)
+    if operation == "reroll":
+        return _arena_reroll_argv(state, state_dir=round_state_dir, round_id=round_id, slot=str(plan.get("slot") or ""))
+    return None
+
+
+def _run_arena_recovery_backend_once(state: dict[str, Any], *, state_dir: Path) -> bool:
+    command = _arena_recovery_backend_argv(state, state_dir=state_dir)
+    if command is None:
+        return False
+    proc = subprocess.run(
+        command,
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    stderr = str(proc.stderr or "")
+    if stderr:
+        sys.stderr.write(stderr)
+    if proc.returncode != 0:
+        details = stderr.strip() or str(proc.stdout or "").strip()
+        suffix = f": {details}" if details else ""
+        raise ValueError(
+            f"arena backend recovery command failed with exit code {proc.returncode}: {format_command(command)}{suffix}"
+        )
+    return True
+
+
+def _blocked_decision_recovery_state(state: dict[str, Any], *, state_dir: Path) -> dict[str, Any]:
     pending = dict(state.get("pending_action") or {})
     if str(pending.get("kind") or "") != "decision":
-        return None
+        return state
     round_id = str(pending.get("round_id") or "").strip()
     if not round_id:
-        return None
+        return state
     round_record = _round_by_id(state, round_id)
     payload = _load_output_round_payload(state_dir, round_record)
     if not (bool(round_record.get("review_blocked")) or bool(payload.get("review_blocked")) or _round_blocked_slots(payload)):
-        return None
+        return state
+    profile_step = dict(round_record.get("profile_step") or {})
+    step_index = profile_step.get("index")
+    if step_index is None:
+        step_index = pending.get("step_index")
     recovery_state = dict(state)
     recovery_state["stage"] = STAGE_RETRY_REQUESTED
-    recovery_state["pending_action"] = {"kind": "arena-blocked", "round_id": round_id}
+    action = {
+        "kind": "arena-blocked",
+        "round_id": round_id,
+        "lane": str(pending.get("lane") or round_record.get("lane") or "review_t1"),
+        "step_index": int(step_index if step_index is not None else 0),
+        "step": str(profile_step.get("name") or pending.get("step") or "arena-recovery"),
+    }
+    if bool(pending.get("post_findings_rerun")):
+        action["post_findings_rerun"] = True
+    fix_verification = pending.get("fix_verification")
+    if isinstance(fix_verification, dict) and fix_verification:
+        action["fix_verification"] = deepcopy(fix_verification)
+    recovery_state["pending_action"] = action
+    return recovery_state
+
+
+def _blocked_decision_action(state: dict[str, Any], *, state_dir: Path, public_id: str) -> dict[str, Any] | None:
+    recovery_state = _blocked_decision_recovery_state(state, state_dir=state_dir)
+    if recovery_state is state:
+        return None
     return _arena_recovery_action(recovery_state, state_dir=state_dir, public_id=public_id)
 
 
@@ -520,38 +614,19 @@ def _orchestrator_review_state_dir(state_dir: Path) -> Path:
     return state_dir / "orchestrator" / "review-rounds"
 
 
-def _unique_paths(paths: list[Path]) -> list[Path]:
-    seen: set[str] = set()
-    result: list[Path] = []
-    for path in paths:
-        resolved = path.resolve(strict=False)
-        key = str(resolved).lower() if sys.platform == "win32" else str(resolved)
-        if key in seen:
-            continue
-        seen.add(key)
-        result.append(path)
-    return result
-
-
-def _round_state_dir_candidates(state_dir: Path, round_record: dict[str, Any]) -> list[Path]:
+def _round_state_dir_candidates(
+    state_dir: Path,
+    round_record: dict[str, Any],
+    *,
+    extra_state_dirs: list[Path] | None = None,
+) -> list[Path]:
     candidates: list[Path] = []
+    candidates.extend(extra_state_dirs or [])
     round_state_dir = str(round_record.get("round_state_dir") or "").strip()
     if round_state_dir:
         candidates.append(Path(round_state_dir))
     candidates.extend([_orchestrator_review_state_dir(state_dir), state_dir])
-    return _unique_paths(candidates)
-
-
-def _round_action_state_dir(state_dir: Path, round_record: dict[str, Any]) -> Path:
-    round_state_dir = str(round_record.get("round_state_dir") or "").strip()
-    if round_state_dir:
-        return Path(round_state_dir)
-    round_id = str(round_record.get("round_id") or "").strip()
-    if round_id:
-        for candidate in _round_state_dir_candidates(state_dir, round_record):
-            if (candidate / "rounds" / f"{round_id}.json").exists():
-                return candidate
-    return state_dir
+    return unique_round_state_dirs(candidates)
 
 
 def _task_class_for_lane(lane: str) -> str:
@@ -592,11 +667,16 @@ def _round_record_by_id(state: dict[str, Any], round_id: str) -> dict[str, Any]:
     return {}
 
 
-def _load_output_round_payload(state_dir: Path, round_record: dict[str, Any]) -> dict[str, Any]:
+def _load_output_round_payload(
+    state_dir: Path,
+    round_record: dict[str, Any],
+    *,
+    extra_state_dirs: list[Path] | None = None,
+) -> dict[str, Any]:
     round_id = str(round_record.get("round_id") or "").strip()
     if not round_id:
         return _fallback_round_payload(round_record)
-    for candidate in _round_state_dir_candidates(state_dir, round_record):
+    for candidate in _round_state_dir_candidates(state_dir, round_record, extra_state_dirs=extra_state_dirs):
         try:
             return load_round(candidate, round_id)
         except ValueError:
@@ -741,17 +821,20 @@ def _current_cycle_head_if_compatible(state: dict[str, Any]) -> str | None:
     base = str(identity.get("base") or "").strip()
     if not cwd or not base:
         return None
-    review_root = cwd_path_from_normalized(cwd)
-    expected_branch = _normalized_branch(str(identity.get("branch") or ""))
-    branch = _normalized_branch(current_branch(review_root))
-    if branch != expected_branch:
+    try:
+        review_root = cwd_path_from_normalized(cwd)
+        expected_branch = _normalized_branch(str(identity.get("branch") or ""))
+        branch = _normalized_branch(current_branch(review_root))
+        if branch != expected_branch:
+            return None
+        if has_worktree_changes(review_root):
+            return None
+        expected_merge_base = str(identity.get("merge_base") or "").strip()
+        if expected_merge_base and merge_base(review_root, base, "HEAD") != expected_merge_base:
+            return None
+        return current_head(review_root)
+    except (AttributeError, OSError, ValueError):
         return None
-    if has_worktree_changes(review_root):
-        return None
-    expected_merge_base = str(identity.get("merge_base") or "").strip()
-    if expected_merge_base and merge_base(review_root, base, "HEAD") != expected_merge_base:
-        return None
-    return current_head(review_root)
 
 
 def _auto_record_pending_decision_fix(
@@ -815,7 +898,6 @@ def _resume_progress(state: dict[str, Any], *, state_dir: Path | None = None) ->
 
 def _apply_profile_resolution(state: dict[str, Any], resolution: Any) -> dict[str, Any]:
     state["selection"]["reason"] = resolution.selection_reason
-    state["grading"] = {"required": bool(resolution.requires_grading)}
 
     def step_payload(step: Any) -> dict[str, Any]:
         payload = {
@@ -990,10 +1072,30 @@ def _create_or_resume_cycle(*, args: argparse.Namespace, state_dir: Path) -> dic
     for key in EFFECTIVE_BASE_METADATA_KEYS:
         if key in base_info:
             state["identity"][key] = base_info[key]
+    state = _apply_runtime_options(state, args)
     existing = load_cycle_by_key(state_dir, str(state["cycle_key"]))
     if existing is not None:
-        return existing
+        return _apply_runtime_options(existing, args)
     return _apply_profile_resolution(state, resolution)
+
+
+def _apply_runtime_options(state: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
+    if not bool(getattr(args, "wsl", False)):
+        return state
+    next_state = dict(state)
+    runtime = dict(next_state.get("runtime") or {})
+    runtime["allow_unsafe_windows_wsl_fallback"] = True
+    next_state["runtime"] = runtime
+    return next_state
+
+
+def _copy_runtime_options(target: dict[str, Any], source: dict[str, Any]) -> dict[str, Any]:
+    runtime = dict(source.get("runtime") or {})
+    if not runtime:
+        return target
+    next_target = dict(target)
+    next_target["runtime"] = runtime
+    return next_target
 
 
 def _current_restart_identity(state: dict[str, Any]) -> tuple[Path, str, str | None, str, str]:
@@ -1053,7 +1155,8 @@ def _create_restart_cycle(
     )
     existing = load_cycle_by_key(state_dir, str(replacement["cycle_key"]))
     if existing is not None:
-        return existing, True
+        return _copy_runtime_options(existing, state), True
+    replacement = _copy_runtime_options(replacement, state)
     replacement["restart"].update(
         {
             "supersedes": str(state.get("public_id") or ""),
@@ -1088,6 +1191,7 @@ def _restart_cycle(state: dict[str, Any], *, state_dir: Path, target_mode: str, 
 
 def _advance_without_decision(state: dict[str, Any], *, state_dir: Path) -> dict[str, Any]:
     ready_state = _resume_progress(state, state_dir=state_dir)
+    ready_state = _blocked_decision_recovery_state(ready_state, state_dir=state_dir)
 
     def persist_running(next_state: dict[str, Any]) -> dict[str, Any]:
         saved = save_cycle(state_dir, next_state)
@@ -1096,6 +1200,8 @@ def _advance_without_decision(state: dict[str, Any], *, state_dir: Path) -> dict
     result = run_one_expensive_step(ready_state, state_dir=state_dir, persist_state=persist_running)
     if result.ran_step:
         return result.state
+    if _run_arena_recovery_backend_once(ready_state, state_dir=state_dir):
+        return _resume_progress(ready_state, state_dir=state_dir)
     return _resume_progress(ready_state, state_dir=state_dir)
 
 
@@ -1387,9 +1493,6 @@ def _render(state: dict[str, Any], *, state_dir: Path) -> None:
     payload: dict[str, Any] = {
         "review": state.get("public_id"),
     }
-    grading = dict(state.get("grading") or {})
-    if grading.get("required"):
-        payload["grading"] = "required"
     action = _action_payload(state, state_dir=state_dir)
     if action:
         payload["Action"] = action
@@ -1492,6 +1595,7 @@ def main() -> int:
             raise ValueError("--show-findings cannot be combined with decisions, GitHub review, GitHub results, validation status flags, or restart")
         if args.id:
             state_dir, state = _load_cycle_and_state_dir(state_dir, str(args.id))
+            state = _apply_runtime_options(state, args)
             _reject_id_creation_args(args, state)
             if args.show_findings:
                 return _show_findings(state, state_dir=state_dir)
@@ -1510,7 +1614,8 @@ def main() -> int:
                 _render(state, state_dir=state_dir)
                 return 0
             if args.github_review:
-                return _run_github_review(state, state_dir=state_dir, force=bool(args.github_force))
+                saved = save_cycle(state_dir, state)
+                return _run_github_review(saved, state_dir=state_dir, force=bool(args.github_force))
             if args.github_result:
                 state = _record_github_result(state, args)
                 saved = save_cycle(state_dir, state)

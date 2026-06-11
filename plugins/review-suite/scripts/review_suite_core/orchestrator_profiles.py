@@ -4,13 +4,11 @@ from dataclasses import dataclass
 from typing import Any
 
 SUPPORTED_MODES = ("brief", "normal", "deep", "emergency")
-SUPPORTED_SELECTIONS = ("stable", "benchmark", "auto")
+SUPPORTED_SELECTIONS = ("stable", "auto")
 RESTART_MODE_ORDER = {"brief": 0, "normal": 1, "deep": 2}
 SUPPORTED_SELECTION_REASONS = (
     "explicit_stable",
-    "explicit_benchmark",
     "auto_stable_profile",
-    "auto_benchmark_missing_stable",
 )
 SUPPORTED_REASONING_EFFORTS = {"low", "medium", "high", "xhigh"}
 SUPPORTED_SERVICE_TIERS = {"fast", "flex"}
@@ -44,7 +42,6 @@ class OrchestratorProfile:
     mode: str
     profile: str
     deslop_enabled: bool
-    requires_grading: bool
     steps: tuple[OrchestratorProfileStep, ...]
 
 
@@ -60,10 +57,6 @@ class OrchestratorProfileResolution:
     @property
     def steps(self) -> tuple[OrchestratorProfileStep, ...]:
         return self.profile.steps
-
-    @property
-    def requires_grading(self) -> bool:
-        return self.profile.requires_grading
 
 
 def _non_empty_text(value: Any, *, field: str) -> str:
@@ -383,14 +376,10 @@ def _normalize_profile(
         config=config,
         stable_defaults=stable_defaults,
     )
-    requires_grading = profile == "benchmark"
-    if "requires_grading" in raw_profile and bool(raw_profile.get("requires_grading")) is not requires_grading:
-        raise ValueError(f"orchestrator.profiles.{profile}.{mode}.requires_grading must be {str(requires_grading).lower()}")
     return OrchestratorProfile(
         mode=mode,
         profile=profile,
         deslop_enabled=bool(raw_profile.get("deslop_enabled", True)),
-        requires_grading=requires_grading,
         steps=steps,
     )
 
@@ -420,23 +409,22 @@ def load_orchestrator_profiles(config: dict[str, Any]) -> dict[str, dict[str, Or
     if not isinstance(raw_profiles, dict):
         raise ValueError("orchestrator.profiles config must be an object")
 
-    normalized: dict[str, dict[str, OrchestratorProfile]] = {}
-    for profile in ("stable", "benchmark"):
-        raw_modes = raw_profiles.get(profile) or {}
-        if not isinstance(raw_modes, dict):
-            raise ValueError(f"orchestrator.profiles.{profile} must be an object")
-        normalized[profile] = {
+    raw_modes = raw_profiles.get("stable") or {}
+    if not isinstance(raw_modes, dict):
+        raise ValueError("orchestrator.profiles.stable must be an object")
+    return {
+        "stable": {
             mode: _normalize_profile(
                 raw_modes[mode],
                 mode=mode,
-                profile=profile,
+                profile="stable",
                 config=config,
-                stable_defaults=stable_defaults if profile == "stable" else {},
+                stable_defaults=stable_defaults,
             )
             for mode in SUPPORTED_MODES
             if mode in raw_modes
         }
-    return normalized
+    }
 
 
 def resolve_orchestrator_profile(
@@ -452,12 +440,8 @@ def resolve_orchestrator_profile(
     effective_selection = requested_selection
     selection_reason = f"explicit_{requested_selection}"
     if requested_selection == "auto":
-        if requested_mode in profiles["stable"]:
-            effective_selection = "stable"
-            selection_reason = "auto_stable_profile"
-        else:
-            effective_selection = "benchmark"
-            selection_reason = "auto_benchmark_missing_stable"
+        effective_selection = "stable"
+        selection_reason = "auto_stable_profile"
 
     profile = profiles[effective_selection].get(requested_mode)
     if profile is None:
