@@ -999,6 +999,61 @@ def iter_round_payloads(state_dir: Path) -> list[dict[str, Any]]:
     return entries
 
 
+def _round_state_dir_key(path: Path) -> str:
+    resolved = path.resolve(strict=False)
+    return str(resolved).lower() if sys.platform == "win32" else str(resolved)
+
+
+def unique_round_state_dirs(paths: list[Path]) -> list[Path]:
+    seen: set[str] = set()
+    result: list[Path] = []
+    for path in paths:
+        key = _round_state_dir_key(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(path)
+    return result
+
+
+def _rerolled_round_sort_key(payload: dict[str, Any]) -> tuple[str, str]:
+    return (
+        str(payload.get("sampled_at") or payload.get("started_at") or payload.get("completed_at") or ""),
+        str(payload.get("round_id") or ""),
+    )
+
+
+def latest_rerolled_round_payload(
+    *,
+    round_id: str,
+    payload: dict[str, Any],
+    search_dirs: list[Path],
+) -> tuple[str, dict[str, Any], Path]:
+    current_id = round_id
+    current_payload = dict(payload)
+    current_state_dir = unique_round_state_dirs(search_dirs)[0] if search_dirs else Path(".")
+    seen = {current_id}
+    while True:
+        replacements: list[tuple[Path, dict[str, Any]]] = []
+        for candidate_dir in unique_round_state_dirs([current_state_dir, *search_dirs]):
+            replacements.extend(
+                (candidate_dir, dict(candidate_payload))
+                for candidate_payload in iter_round_payloads(candidate_dir)
+                if str(candidate_payload.get("rerolled_from_round_id") or "").strip() == current_id
+            )
+        if not replacements:
+            return current_id, current_payload, current_state_dir
+        current_state_dir, current_payload = max(replacements, key=lambda item: _rerolled_round_sort_key(item[1]))
+        recorded_state_dir = str(current_payload.get("round_state_dir") or "").strip()
+        if recorded_state_dir:
+            current_state_dir = Path(recorded_state_dir)
+        next_id = str(current_payload.get("round_id") or "").strip()
+        if not next_id or next_id in seen:
+            return next_id or current_id, current_payload, current_state_dir
+        current_id = next_id
+        seen.add(current_id)
+
+
 def ungraded_round_exposure_records(state_dir: Path) -> list[dict[str, Any]]:
     cleanup_stale_ungraded_rounds(state_dir)
     records: list[dict[str, Any]] = []

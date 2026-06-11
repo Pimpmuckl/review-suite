@@ -36,7 +36,6 @@
       "stable": {
         "brief": {
           "deslop_enabled": true,
-          "requires_grading": false,
           "steps": [
             {"name": "broad-discovery", "count": 4, "model_ref": "discovery_brief_model"},
             {"name": "precision-signoff", "count": 2, "model_ref": "signoff_brief_model", "rerun_on_findings": true}
@@ -44,7 +43,6 @@
         },
         "normal": {
           "deslop_enabled": true,
-          "requires_grading": false,
           "steps": [
             {"kind": "arena", "name": "arena-phase-review", "lane": "review_t1", "task_class": "phase_review", "loop_ref": "normal_arena_loops", "enabled_ref": "arena.enabled"},
             {"name": "broad-discovery", "count": 4, "model_ref": "discovery_brief_model", "loop_ref": "normal_discovery_loops", "subtract_loop_ref": "normal_arena_loops", "subtract_if": "arena.enabled", "min_loops": 1},
@@ -53,7 +51,6 @@
         },
         "deep": {
           "deslop_enabled": true,
-          "requires_grading": false,
           "steps": [
             {"kind": "arena", "name": "arena-phase-review", "lane": "review_t1", "task_class": "phase_review", "loop_ref": "normal_arena_loops", "enabled_ref": "arena.enabled"},
             {"name": "broad-discovery", "count": 4, "model_ref": "discovery_brief_model", "loop_ref": "normal_discovery_loops", "subtract_loop_ref": "normal_arena_loops", "subtract_if": "arena.enabled", "min_loops": 1},
@@ -65,39 +62,8 @@
         },
         "emergency": {
           "deslop_enabled": false,
-          "requires_grading": false,
           "steps": [
             {"name": "urgent-signoff", "count": 2, "model_ref": "signoff_brief_model", "max_review_rounds": 2}
-          ]
-        }
-      },
-      "benchmark": {
-        "brief": {
-          "deslop_enabled": true,
-          "requires_grading": true,
-          "steps": [
-            {"name": "benchmark", "count": 1, "model": "gpt-5.5", "reasoning_effort": "medium"}
-          ]
-        },
-        "normal": {
-          "deslop_enabled": true,
-          "requires_grading": true,
-          "steps": [
-            {"name": "benchmark", "count": 1, "model": "gpt-5.5", "reasoning_effort": "medium"}
-          ]
-        },
-        "deep": {
-          "deslop_enabled": true,
-          "requires_grading": true,
-          "steps": [
-            {"name": "benchmark", "count": 1, "model": "gpt-5.5", "reasoning_effort": "xhigh"}
-          ]
-        },
-        "emergency": {
-          "deslop_enabled": false,
-          "requires_grading": true,
-          "steps": [
-            {"name": "benchmark", "count": 1, "model": "gpt-5.5", "reasoning_effort": "medium", "max_review_rounds": 2}
           ]
         }
       }

@@ -18,7 +18,7 @@ from review_suite_local import (
     build_local_review_request,
     build_phase_instructions,
     default_roster_path,
-    iter_round_payloads,
+    latest_rerolled_round_payload,
     load_round,
     payload_has_blocked_runs,
     round_needs_caller_grade,
@@ -88,9 +88,13 @@ def _identity_text(state: dict[str, Any], key: str) -> str:
     return value
 
 
+def _allow_unsafe_windows_wsl_fallback(state: dict[str, Any]) -> bool:
+    return bool(dict(state.get("runtime") or {}).get("allow_unsafe_windows_wsl_fallback"))
+
+
 def deslop_command(state: dict[str, Any]) -> list[str]:
     cwd = cwd_path_from_normalized(_identity_text(state, "cwd"))
-    return [
+    command = [
         sys.executable,
         str(_script_path("review_deslop.py")),
         "--output-only",
@@ -99,6 +103,9 @@ def deslop_command(state: dict[str, Any]) -> list[str]:
         "--base",
         _identity_text(state, "base"),
     ]
+    if _allow_unsafe_windows_wsl_fallback(state):
+        command.append("--wsl")
+    return command
 
 
 def run_deslop_subprocess(
@@ -455,15 +462,25 @@ def _orchestrator_review_state_dir(state_dir: Path) -> Path:
     return state_dir / "orchestrator" / "review-rounds"
 
 
-def _load_arena_recovery_payload(state: dict[str, Any], *, state_dir: Path, round_id: str) -> dict[str, object]:
+def _arena_recovery_search_dirs(state: dict[str, Any], *, state_dir: Path, round_id: str) -> list[Path]:
     round_record = _round_by_id(state, round_id)
     candidates: list[Path] = []
+    pending = dict(state.get("pending_action") or {})
+    if str(pending.get("round_id") or "").strip() == round_id:
+        pending_round_state_dir = str(pending.get("round_state_dir") or "").strip()
+        if pending_round_state_dir:
+            candidates.append(Path(pending_round_state_dir))
     round_state_dir = str(round_record.get("round_state_dir") or "").strip()
     if round_state_dir:
         candidates.append(Path(round_state_dir))
     candidates.extend([_orchestrator_review_state_dir(state_dir), state_dir])
+    return candidates
+
+
+def _load_arena_recovery_payload(state: dict[str, Any], *, state_dir: Path, round_id: str) -> dict[str, object]:
+    round_record = _round_by_id(state, round_id)
     seen: set[str] = set()
-    for candidate in candidates:
+    for candidate in _arena_recovery_search_dirs(state, state_dir=state_dir, round_id=round_id):
         key = str(candidate.resolve(strict=False)).lower() if sys.platform == "win32" else str(candidate.resolve(strict=False))
         if key in seen:
             continue
@@ -475,30 +492,16 @@ def _load_arena_recovery_payload(state: dict[str, Any], *, state_dir: Path, roun
     return round_record
 
 
-def _arena_replacement_sort_key(payload: dict[str, object]) -> tuple[str, str]:
-    return (
-        str(payload.get("sampled_at") or payload.get("started_at") or payload.get("completed_at") or ""),
-        str(payload.get("round_id") or ""),
+def _latest_arena_recovery_payload(
+    state: dict[str, Any], *, state_dir: Path, round_id: str
+) -> tuple[str, dict[str, object], Path]:
+    payload = _load_arena_recovery_payload(state, state_dir=state_dir, round_id=round_id)
+    target_round_id, target_payload, target_state_dir = latest_rerolled_round_payload(
+        round_id=round_id,
+        payload=dict(payload),
+        search_dirs=_arena_recovery_search_dirs(state, state_dir=state_dir, round_id=round_id),
     )
-
-
-def _latest_arena_recovery_payload(state: dict[str, Any], *, state_dir: Path, round_id: str) -> tuple[str, dict[str, object]]:
-    current_id = round_id
-    current = _load_arena_recovery_payload(state, state_dir=state_dir, round_id=current_id)
-    seen = {current_id}
-    while True:
-        replacements = [
-            payload
-            for payload in iter_round_payloads(state_dir)
-            if str(payload.get("rerolled_from_round_id") or "").strip() == current_id
-        ]
-        if not replacements:
-            return current_id, current
-        current = max(replacements, key=_arena_replacement_sort_key)
-        current_id = str(current.get("round_id") or "").strip()
-        if not current_id or current_id in seen:
-            return current_id or round_id, current
-        seen.add(current_id)
+    return target_round_id, target_payload, target_state_dir
 
 
 def _arena_round_ready_for_decision(payload: dict[str, object]) -> bool:
@@ -591,7 +594,6 @@ def _run_profile_review_once(
             step_name=str(step["name"]),
             reviewed_head=str(round_info.get("reviewed_head") or scope.get("reviewed_head") or "").strip() or None,
             round_state_dir=str(round_info.get("round_state_dir") or "").strip() or None,
-            grading_required=bool(dict(state.get("grading") or {}).get("required")),
             post_findings_rerun=post_findings_rerun,
             fix_verification=fix_context,
         )
@@ -616,8 +618,7 @@ def _run_profile_review_once(
         review_scope=scope,
         task_id=_task_id(state),
         progress_interval_seconds=DEFAULT_PROGRESS_INTERVAL_SECONDS,
-        allow_unsafe_windows_wsl_fallback=False,
-        grading_required=bool(dict(state.get("grading") or {}).get("required")),
+        allow_unsafe_windows_wsl_fallback=_allow_unsafe_windows_wsl_fallback(state),
         on_round_started=on_round_started,
         custom_instructions=custom_instructions,
     )
@@ -695,7 +696,7 @@ def _run_profile_arena_once(
         review_scope=scope,
         task_id=_task_id(state),
         progress_interval_seconds=DEFAULT_PROGRESS_INTERVAL_SECONDS,
-        allow_unsafe_windows_wsl_fallback=False,
+        allow_unsafe_windows_wsl_fallback=_allow_unsafe_windows_wsl_fallback(state),
         step_position=step_position,
         step_total=step_total,
         on_round_started=on_round_started,
@@ -751,11 +752,7 @@ def _collect_running_review_once(state: dict[str, Any], *, state_dir: Path) -> O
     round_payload = _round_by_id(state, round_id)
     round_state_dir_text = str(pending.get("round_state_dir") or round_payload.get("round_state_dir") or "").strip()
     round_state_dir = Path(round_state_dir_text) if round_state_dir_text else None
-    grading_required = (
-        bool(dict(state.get("grading") or {}).get("required"))
-        or bool(pending.get("grading_required"))
-        or bool(round_payload.get("grading_required"))
-    )
+    grading_required = bool(pending.get("grading_required")) or bool(round_payload.get("grading_required"))
     arena_round = bool(pending.get("arena_round")) or bool(round_payload.get("arena_round"))
     post_findings_rerun = bool(pending.get("post_findings_rerun")) or bool(
         dict(round_payload.get("profile_step") or {}).get("post_findings_rerun")
@@ -821,7 +818,7 @@ def _recover_blocked_arena_once(state: dict[str, Any], *, state_dir: Path) -> Or
     fix_verification = pending.get("fix_verification")
     fix_context = fix_verification if isinstance(fix_verification, dict) else None
     post_findings_rerun = bool(pending.get("post_findings_rerun"))
-    target_round_id, payload = _latest_arena_recovery_payload(state, state_dir=state_dir, round_id=round_id)
+    target_round_id, payload, target_state_dir = _latest_arena_recovery_payload(state, state_dir=state_dir, round_id=round_id)
     status = str(payload.get("status") or "").strip()
     if status == "dismissed" or bool(payload.get("dismissed")):
         return OrchestratorRunnerResult(
@@ -852,7 +849,10 @@ def _recover_blocked_arena_once(state: dict[str, Any], *, state_dir: Path) -> Or
                 post_findings_rerun=post_findings_rerun,
                 fix_verification=fix_context,
             )
-            next_state = _attach_review_result(next_state, _arena_recovery_review_result(payload, lane=lane, state_dir=state_dir))
+            next_state = _attach_review_result(
+                next_state,
+                _arena_recovery_review_result(payload, lane=lane, state_dir=target_state_dir),
+            )
             return OrchestratorRunnerResult(
                 _mark_arena_recovery(
                     next_state,
@@ -860,7 +860,7 @@ def _recover_blocked_arena_once(state: dict[str, Any], *, state_dir: Path) -> Or
                     lane=lane,
                     step_index=step_index,
                     step_name=step_name,
-                    round_state_dir=str(state_dir),
+                    round_state_dir=str(target_state_dir),
                 ),
                 ran_step=True,
                 step="arena-recovery",
@@ -878,7 +878,10 @@ def _recover_blocked_arena_once(state: dict[str, Any], *, state_dir: Path) -> Or
         post_findings_rerun=post_findings_rerun,
         fix_verification=fix_context,
     )
-    next_state = _attach_review_result(next_state, _arena_recovery_review_result(payload, lane=lane, state_dir=state_dir))
+    next_state = _attach_review_result(
+        next_state,
+        _arena_recovery_review_result(payload, lane=lane, state_dir=target_state_dir),
+    )
     return OrchestratorRunnerResult(next_state, ran_step=True, step="arena-recovery")
 
 
@@ -943,7 +946,7 @@ def _run_profile_gate_once(
         task_id=_task_id(state),
         progress_interval_seconds=DEFAULT_PROGRESS_INTERVAL_SECONDS,
         timeout_seconds=DEFAULT_TIMEOUT_SECONDS,
-        allow_unsafe_windows_wsl_fallback=False,
+        allow_unsafe_windows_wsl_fallback=_allow_unsafe_windows_wsl_fallback(state),
         review_scope=review_scope,
         prompt=prompt,
     )
@@ -1081,7 +1084,7 @@ def _run_followup_review_once(state: dict[str, Any], *, state_dir: Path) -> Orch
         prompt=prompt,
         task_id=_task_id(state),
         progress_interval_seconds=DEFAULT_PROGRESS_INTERVAL_SECONDS,
-        allow_unsafe_windows_wsl_fallback=False,
+        allow_unsafe_windows_wsl_fallback=_allow_unsafe_windows_wsl_fallback(state),
     )
     round_id = str(review_result.get("round_id") or "").strip()
     if not round_id:

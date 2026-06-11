@@ -22,8 +22,8 @@ codex plugin add review-suite@review-suite
 Modes are built from one phased stack. Discovery uses GPT 5.4 for high-recall bug finding; signoff uses GPT 5.5 for relevance, convergence, and current-head green checks.
 Deslop passes are folded into any review that isn't using `emergency` as target; close the sidecar with `review.py --id <id> --deslop-done`.
 
-Arena loops are only used when user config opts in with `arena.enabled` plus a nonzero `normal_arena_loops` or `deep_arena_loops` budget.
-When enabled, arena loops spend discovery budget first. Each discovery phase still keeps at least one fixed GPT 5.4 pass as the safety net.
+Arena loops are backend-injected by `review.py` only when user config opts in with `arena.enabled` plus a nonzero `normal_arena_loops` or `deep_arena_loops` budget.
+When enabled, arena loops spend discovery budget first. Each discovery phase still keeps at least one fixed GPT 5.4 pass as the safety net. Agents should keep following `review.py` actions; the only arena-specific agent action is grading an arena round when prompted.
 
 ```text
 |---- Emergency Phase ----
@@ -39,7 +39,7 @@ Emergency turns green immediately on a clean urgent signoff. If findings are fix
 |    |
 |    |--- Medium Discovery - Until: normal_discovery_loops
 |    |    |- Brief:  GPT 5.4 Medium x4, fixed fast pass
-|    |    |- Normal: optional review_t1 arena rounds
+|    |    |- Normal: optional backend-injected phase arena rounds
 |    |    |- Normal: GPT 5.4 Medium x4 for remaining passes, min once
 |    |
 |    |--- Medium Signoff - Until: Green
@@ -53,7 +53,7 @@ Emergency turns green immediately on a clean urgent signoff. If findings are fix
 |    |    |- Medium Signoff
 |    |
 |    |--- Deep Discovery - Until: deep_discovery_loops
-|    |    |- optional review_t3 arena rounds
+|    |    |- optional backend-injected PR arena rounds
 |    |    |- GPT 5.4 XHigh x2 for remaining passes, min once
 |    |
 |    |--- Deep Signoff - Until: Green

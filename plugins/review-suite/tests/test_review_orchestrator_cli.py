@@ -5,6 +5,7 @@ import subprocess
 import sys
 from copy import deepcopy
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -501,7 +502,7 @@ def test_decision_action_surfaces_arena_grade_command(tmp_path: Path) -> None:
     assert "alt" not in action
 
 
-def test_arena_recovery_action_surfaces_reroll_and_dismiss(tmp_path: Path) -> None:
+def test_arena_recovery_action_surfaces_single_reroll(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     state = {
@@ -531,11 +532,16 @@ def test_arena_recovery_action_surfaces_reroll_and_dismiss(tmp_path: Path) -> No
     action = review._action_payload(state, state_dir=tmp_path / "state")
 
     assert action is not None
-    assert "review_suite_arena.py reroll-slot" in str(action["cmd"])
-    assert "--round-id arena-round-1" in str(action["cmd"])
-    assert "--slot alpha" in str(action["cmd"])
-    assert "review_suite_arena.py dismiss-round" in str(action["dismiss"])
-    assert "--id rvw_example" in str(action["next"])
+    assert "review.py" in str(action["cmd"])
+    assert "--id rvw_example" in str(action["cmd"])
+    assert "review_suite_arena.py" not in str(action)
+    backend = review._arena_recovery_backend_argv(state, state_dir=tmp_path / "state")
+    assert backend is not None
+    assert "reroll-slot" in backend
+    assert "--round-id" in backend
+    assert "arena-round-1" in backend
+    assert "--slot" in backend
+    assert "alpha" in backend
 
 
 def test_arena_recovery_action_dismisses_unsupported_blocked_slots(tmp_path: Path) -> None:
@@ -566,9 +572,13 @@ def test_arena_recovery_action_dismisses_unsupported_blocked_slots(tmp_path: Pat
     action = review._action_payload(state, state_dir=tmp_path / "state")
 
     assert action is not None
-    assert "review_suite_arena.py dismiss-round" in str(action["cmd"])
-    assert "reroll" not in action
-    assert "--id rvw_example" in str(action["next"])
+    assert "review.py" in str(action["cmd"])
+    assert "--id rvw_example" in str(action["cmd"])
+    assert "review_suite_arena.py" not in str(action)
+    backend = review._arena_recovery_backend_argv(state, state_dir=tmp_path / "state")
+    assert backend is not None
+    assert "dismiss-round" in backend
+    assert "reroll-slot" not in backend
 
 
 def test_arena_recovery_action_dismisses_mixed_supported_and_unsupported_blocked_slots(tmp_path: Path) -> None:
@@ -599,9 +609,13 @@ def test_arena_recovery_action_dismisses_mixed_supported_and_unsupported_blocked
     action = review._action_payload(state, state_dir=tmp_path / "state")
 
     assert action is not None
-    assert "review_suite_arena.py dismiss-round" in str(action["cmd"])
-    assert "reroll" not in action
-    assert "--id rvw_example" in str(action["next"])
+    assert "review.py" in str(action["cmd"])
+    assert "--id rvw_example" in str(action["cmd"])
+    assert "review_suite_arena.py" not in str(action)
+    backend = review._arena_recovery_backend_argv(state, state_dir=tmp_path / "state")
+    assert backend is not None
+    assert "dismiss-round" in backend
+    assert "reroll-slot" not in backend
 
 
 def test_arena_recovery_action_advances_after_dismissed_blocked_round(tmp_path: Path) -> None:
@@ -633,6 +647,7 @@ def test_arena_recovery_action_advances_after_dismissed_blocked_round(tmp_path: 
     assert "--id rvw_example" in str(action["cmd"])
     assert "reroll-slot" not in str(action)
     assert "dismiss-round" not in str(action)
+    assert review._arena_recovery_backend_argv(state, state_dir=tmp_path / "state") is None
 
 
 def test_arena_recovery_action_surfaces_run_for_sampled_replacement(tmp_path: Path) -> None:
@@ -665,10 +680,149 @@ def test_arena_recovery_action_surfaces_run_for_sampled_replacement(tmp_path: Pa
     action = review._action_payload(state, state_dir=tmp_path / "state")
 
     assert action is not None
-    assert "review_suite_arena.py run-round" in str(action["cmd"])
-    assert "--round-id arena-round-2" in str(action["cmd"])
-    assert "review_suite_arena.py dismiss-round" in str(action["dismiss"])
-    assert "--id rvw_example" in str(action["next"])
+    assert "review.py" in str(action["cmd"])
+    assert "--id rvw_example" in str(action["cmd"])
+    assert "review_suite_arena.py" not in str(action)
+    backend = review._arena_recovery_backend_argv(state, state_dir=tmp_path / "state")
+    assert backend is not None
+    assert "run-round" in backend
+    assert "arena-round-2" in backend
+
+
+def test_arena_recovery_action_follows_latest_rerolled_replacement(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    state_dir = tmp_path / "state"
+    round_state_dir = state_dir / "orchestrator" / "review-rounds"
+    state = {
+        "public_id": "rvw_example",
+        "stage": "retry-requested",
+        "pending_action": {
+            "kind": "arena-blocked",
+            "round_id": "arena-round-1",
+            "lane": "review_t3",
+            "step_index": 0,
+            "step": "arena-discovery",
+            "round_state_dir": str(round_state_dir),
+        },
+        "identity": {"cwd": str(repo), "base": "main", "branch": "feature/arena"},
+        "deslop": {"tracked": False, "status": "closed"},
+        "rounds": [
+            {
+                "round_id": "arena-round-1",
+                "lane": "review_t3",
+                "grading_required": True,
+                "arena_round": True,
+                "status": "completed",
+                "runs": [{"slot": "alpha", "blocked": True}],
+            }
+        ],
+    }
+    write_round(
+        round_state_dir,
+        {
+            "round_id": "arena-round-2",
+            "rerolled_from_round_id": "arena-round-1",
+            "lane": "review_t3",
+            "grading_required": True,
+            "arena_round": True,
+            "status": "sampled",
+            "review_scope": {"base": "main"},
+            "review_cwd": str(repo),
+            "runs": [{"slot": "alpha"}],
+        },
+    )
+
+    action = review._action_payload(state, state_dir=state_dir)
+
+    assert action is not None
+    assert "review_suite_arena.py" not in str(action)
+    backend = review._arena_recovery_backend_argv(state, state_dir=state_dir)
+    assert backend is not None
+    assert "run-round" in backend
+    assert "arena-round-2" in backend
+    assert "reroll-slot" not in backend
+
+
+def test_arena_recovery_backend_runs_internal_action(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    state = {
+        "public_id": "rvw_example",
+        "stage": "retry-requested",
+        "pending_action": {"kind": "arena-blocked", "round_id": "arena-round-2", "lane": "review_t3"},
+        "identity": {"cwd": str(repo), "base": "main", "branch": "feature/arena"},
+        "rounds": [
+            {
+                "round_id": "arena-round-2",
+                "lane": "review_t3",
+                "grading_required": True,
+                "arena_round": True,
+                "status": "sampled",
+                "runs": [{"slot": "alpha"}],
+            }
+        ],
+    }
+    calls: list[list[str]] = []
+
+    def fake_run(command: list[str], check: bool, **kwargs: object) -> subprocess.CompletedProcess:
+        assert check is False
+        assert kwargs["capture_output"] is True
+        assert kwargs["text"] is True
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="child toon\n", stderr="child progress\n")
+
+    monkeypatch.setattr(review.subprocess, "run", fake_run)
+
+    assert review._run_arena_recovery_backend_once(state, state_dir=tmp_path / "state") is True
+    captured = capsys.readouterr()
+    assert "child toon" not in captured.out
+    assert "child progress" in captured.err
+    assert calls
+    assert "review_suite_arena.py" in calls[0][1]
+    assert "run-round" in calls[0]
+
+
+def test_arena_recovery_action_surfaces_resume_for_running_replacement(tmp_path: Path) -> None:
+    state = {
+        "public_id": "rvw_example",
+        "stage": "retry-requested",
+        "pending_action": {
+            "kind": "arena-blocked",
+            "round_id": "arena-round-2",
+            "lane": "review_t3",
+            "step_index": 0,
+            "step": "arena-discovery",
+        },
+        "identity": {"branch": "feature/arena"},
+        "runtime": {"allow_unsafe_windows_wsl_fallback": True},
+        "deslop": {"tracked": False, "status": "closed"},
+        "rounds": [
+            {
+                "round_id": "arena-round-2",
+                "lane": "review_t3",
+                "grading_required": True,
+                "arena_round": True,
+                "status": "running",
+                "round_state_dir": str(tmp_path / "round-state"),
+                "runs": [{"slot": "alpha"}],
+            }
+        ],
+    }
+
+    action = review._action_payload(state, state_dir=tmp_path / "state")
+
+    assert action is not None
+    assert "review.py" in str(action["cmd"])
+    assert "--id rvw_example" in str(action["cmd"])
+    assert "review_suite_arena.py" not in str(action)
+    backend = review._arena_recovery_backend_argv(state, state_dir=tmp_path / "state")
+    assert backend is not None
+    assert "resume-round" in backend
+    assert "arena-round-2" in backend
+    assert "--wsl" not in backend
 
 
 def test_decision_rejects_ungraded_arena_round(tmp_path: Path) -> None:
@@ -728,7 +882,18 @@ def test_action_payload_surfaces_recovery_for_blocked_decision_round(tmp_path: P
     state = {
         "public_id": "rvw_example",
         "stage": "decision-pending",
-        "pending_action": {"kind": "decision", "round_id": "blocked-round-1", "lane": "review_t1"},
+        "pending_action": {
+            "kind": "decision",
+            "round_id": "blocked-round-1",
+            "lane": "review_t1",
+            "post_findings_rerun": True,
+            "fix_verification": {
+                "source_round_id": "findings-round-1",
+                "source_lane": "review_t1",
+                "findings_reviewed_head": "head-before-fix",
+                "fix_head": "head-after-fix",
+            },
+        },
         "identity": {"branch": "feature/blocked", "base": "main", "cwd": str(tmp_path)},
         "rounds": [
             {
@@ -745,26 +910,88 @@ def test_action_payload_surfaces_recovery_for_blocked_decision_round(tmp_path: P
     action = review._action_payload(state, state_dir=tmp_path / "state")
 
     assert action is not None
-    assert "reroll-slot" in str(action["cmd"])
-    assert str(round_state_dir) in str(action["cmd"])
-    assert str(round_state_dir) in str(action["dismiss"])
-    assert "--slot alpha" in str(action["cmd"])
+    assert "review.py" in str(action["cmd"])
+    assert "--id rvw_example" in str(action["cmd"])
+    assert "review_suite_arena.py" not in str(action)
+    assert "dismiss" not in action
     assert "--decision" not in str(action["cmd"])
-    assert "--id rvw_example" in str(action["next"])
-    assert str(tmp_path / "state") in str(action["next"])
+    assert str(tmp_path / "state") in str(action["cmd"])
 
 
-def test_benchmark_grading_required_round_does_not_use_arena_grade_gate(tmp_path: Path) -> None:
+def test_advance_moves_blocked_decision_round_into_arena_recovery(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    round_state_dir = tmp_path / "state" / "orchestrator" / "review-rounds"
     state = {
         "public_id": "rvw_example",
         "stage": "decision-pending",
-        "pending_action": {"kind": "decision", "round_id": "benchmark-round-1", "lane": "review_t1"},
-        "identity": {"branch": "feature/benchmark"},
-        "review_progress": {"next_step_index": 1, "completed_steps": []},
-        "review_plan": {"steps": [{"name": "benchmark", "count": 1, "model": "gpt-5.5", "reasoning_effort": "medium"}]},
+        "pending_action": {
+            "kind": "decision",
+            "round_id": "blocked-round-1",
+            "lane": "review_t1",
+            "post_findings_rerun": True,
+            "fix_verification": {
+                "source_round_id": "findings-round-1",
+                "source_lane": "review_t1",
+                "findings_reviewed_head": "head-before-fix",
+                "fix_head": "head-after-fix",
+            },
+        },
+        "identity": {"branch": "feature/blocked", "base": "main", "cwd": str(tmp_path)},
         "rounds": [
             {
-                "round_id": "benchmark-round-1",
+                "round_id": "blocked-round-1",
+                "lane": "review_t1",
+                "review_blocked": True,
+                "status": "completed",
+                "round_state_dir": str(round_state_dir),
+                "runs": [{"slot": "alpha", "grade_blocked": True}],
+                "profile_step": {"name": "arena-pr-review", "index": 3},
+            }
+        ],
+    }
+    backend_calls: list[list[str]] = []
+
+    def fake_run(command: list[str], check: bool, **kwargs: object) -> subprocess.CompletedProcess:
+        assert check is False
+        assert kwargs["capture_output"] is True
+        backend_calls.append(command)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(review, "run_one_expensive_step", lambda state, **kwargs: SimpleNamespace(ran_step=False, state=state))
+    monkeypatch.setattr(review, "_current_cycle_head_if_compatible", lambda state: None)
+    monkeypatch.setattr(review.subprocess, "run", fake_run)
+
+    advanced = review._advance_without_decision(state, state_dir=tmp_path / "state")
+
+    assert advanced["stage"] == "retry-requested"
+    assert advanced["pending_action"]["kind"] == "arena-blocked"
+    assert advanced["pending_action"]["round_id"] == "blocked-round-1"
+    assert advanced["pending_action"]["step"] == "arena-pr-review"
+    assert advanced["pending_action"]["step_index"] == 3
+    assert advanced["pending_action"]["post_findings_rerun"] is True
+    assert advanced["pending_action"]["fix_verification"] == {
+        "source_round_id": "findings-round-1",
+        "source_lane": "review_t1",
+        "findings_reviewed_head": "head-before-fix",
+        "fix_head": "head-after-fix",
+    }
+    assert backend_calls
+    assert "reroll-slot" in backend_calls[0]
+
+
+def test_legacy_non_arena_grading_required_round_does_not_use_arena_grade_gate(tmp_path: Path) -> None:
+    state = {
+        "public_id": "rvw_example",
+        "stage": "decision-pending",
+        "pending_action": {"kind": "decision", "round_id": "legacy-round-1", "lane": "review_t1"},
+        "identity": {"branch": "feature/legacy"},
+        "review_progress": {"next_step_index": 1, "completed_steps": []},
+        "review_plan": {"steps": [{"name": "legacy", "count": 1, "model": "gpt-5.5", "reasoning_effort": "medium"}]},
+        "rounds": [
+            {
+                "round_id": "legacy-round-1",
                 "lane": "review_t1",
                 "grading_required": True,
                 "status": "completed",
@@ -817,7 +1044,7 @@ def test_create_resume_and_id_reprint_use_one_pending_action(monkeypatch: pytest
         "effective": "stable",
         "reason": "auto_stable_profile",
     }
-    assert state["grading"] == {"required": False}
+    assert "grading" not in state
     assert state["deslop"]["status"] == "done"
     assert state["rounds"] == []
 
@@ -955,6 +1182,33 @@ def test_create_resume_and_id_reprint_use_one_pending_action(monkeypatch: pytest
     assert state["validation"]["ci"] == "classified"
     assert len(deslop_calls) == 1
     assert len(review_calls) == 2
+
+
+def test_wsl_flag_persists_to_orchestrated_steps(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    deslop_calls = _stub_deslop(monkeypatch)
+    review_calls = _stub_review(monkeypatch, "phase_review-round-1")
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _use_compact_normal_profile(monkeypatch, state_dir)
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/wsl-review")
+    _commit_file(repo, "app.txt", "feature\n", "feature")
+
+    args = ["--mode", "normal", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir), "--wsl"]
+    exit_code, payload = _run_review(monkeypatch, args)
+    public_id = str(payload["review"])
+
+    assert exit_code == 0
+    assert "--wsl" in deslop_calls[0]
+    state = _cycle_payload(state_dir, public_id)
+    assert state["runtime"] == {"allow_unsafe_windows_wsl_fallback": True}
+    assert "--wsl" in review._new_review_command(state, state_dir=state_dir, fresh_token="next")
+
+    exit_code, _resumed = _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+
+    assert exit_code == 0
+    assert review_calls[0]["allow_unsafe_windows_wsl_fallback"] is True
 
 
 def test_relative_state_dir_is_resolved_in_followup_actions(
@@ -1155,7 +1409,7 @@ def test_restart_mode_supersedes_cycle_and_starts_fresh_deep_ladder(
 
     _, created = _run_review(
         monkeypatch,
-        ["--mode", "normal", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)],
+        ["--mode", "normal", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir), "--wsl"],
     )
     old_id = str(created["review"])
     _run_review(monkeypatch, ["--id", old_id, "--state-dir", str(state_dir)])
@@ -1194,6 +1448,7 @@ def test_restart_mode_supersedes_cycle_and_starts_fresh_deep_ladder(
     }
     assert new_state["mode"] == {"requested": "deep", "effective": "deep"}
     assert new_state["identity"] == old_state["identity"]
+    assert new_state["runtime"] == {"allow_unsafe_windows_wsl_fallback": True}
     assert new_state["cycle_key"] != old_state["cycle_key"]
     assert new_state["restart"]["token"] == f"{old_state['cycle_key']}:deep"
     assert new_state["restart"]["supersedes"] == old_id
@@ -1234,6 +1489,7 @@ def test_restart_mode_supersedes_cycle_and_starts_fresh_deep_ladder(
     assert "--decision clean" in str(deep_review["Action"]["cmd"])
     assert len(review_calls) == 2
     assert review_calls[1]["step_name"] == "broad-discovery"
+    assert review_calls[1]["allow_unsafe_windows_wsl_fallback"] is True
     assert review_calls[1]["step_position"] == 1
     assert review_calls[1]["step_total"] == 4
 
@@ -1670,6 +1926,38 @@ def test_github_review_runs_existing_lane_with_canonical_state_dir_and_force(mon
         ]
     ]
     assert len(review_calls) == 1
+
+
+def test_github_review_persists_resumed_wsl_runtime(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _stub_review(monkeypatch)
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "default-state"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+
+    _, opened = _run_review(
+        monkeypatch,
+        ["--mode", "emergency", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)],
+    )
+    public_id = str(opened["review"])
+    _, _clean = _run_review(monkeypatch, ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)])
+
+    calls: list[list[str]] = []
+
+    def fake_subprocess_run(command: list[str], check: bool) -> subprocess.CompletedProcess:
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(review.subprocess, "run", fake_subprocess_run)
+    monkeypatch.setattr(sys, "argv", ["review.py", "--id", public_id, "--github-review", "--wsl", "--state-dir", str(state_dir)])
+
+    exit_code = review.main()
+
+    assert exit_code == 0
+    assert calls
+    assert "--wsl" not in calls[0]
+    state = _cycle_payload(state_dir, public_id)
+    assert state["runtime"] == {"allow_unsafe_windows_wsl_fallback": True}
 
 
 def test_github_result_findings_reenters_existing_cycle_for_final_signoff(
@@ -2576,9 +2864,9 @@ def test_validation_flags_do_not_run_expensive_resume(monkeypatch: pytest.Monkey
     assert state["active_findings"]["round_id"] == "phase_review-round-1"
 
 
-def test_benchmark_selection_keeps_only_grading_requirement_in_output(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    _stub_deslop(monkeypatch)
-    _stub_review(monkeypatch)
+def test_benchmark_selection_is_rejected(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
     _init_repo(repo)
@@ -2587,9 +2875,11 @@ def test_benchmark_selection_keeps_only_grading_requirement_in_output(monkeypatc
     config["orchestrator"]["selection"] = "benchmark"
     monkeypatch.setattr(review, "load_config", lambda state_dir: config)
 
-    exit_code, payload = _run_review(
-        monkeypatch,
+    monkeypatch.setattr(
+        sys,
+        "argv",
         [
+            "review.py",
             "--mode",
             "normal",
             "--cd",
@@ -2601,23 +2891,18 @@ def test_benchmark_selection_keeps_only_grading_requirement_in_output(monkeypatc
         ],
     )
 
-    assert exit_code == 0
-    assert "selection" not in payload
-    assert "stage" not in payload
-    assert payload["grading"] == "required"
-    public_id = str(payload["review"])
-    state = _cycle_payload(state_dir, public_id)
-    assert state["selection"] == {
-        "requested": "benchmark",
-        "effective": "benchmark",
-        "reason": "explicit_benchmark",
-    }
-    assert state["grading"] == {"required": True}
+    exit_code = review.main()
+    rendered = capsys.readouterr().out
+
+    assert exit_code == 2
+    assert "status: usage_error" in rendered
+    assert "orchestrator selection must be one of" in rendered
+    assert not (state_dir / "orchestrator" / "index.json").exists()
 
 
-def test_auto_selection_fallback_to_benchmark_persists_reason(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    _stub_deslop(monkeypatch)
-    _stub_review(monkeypatch)
+def test_auto_selection_requires_stable_profile(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
     _init_repo(repo)
@@ -2626,9 +2911,11 @@ def test_auto_selection_fallback_to_benchmark_persists_reason(monkeypatch: pytes
     del config["orchestrator"]["profiles"]["stable"]["normal"]
     monkeypatch.setattr(review, "load_config", lambda state_dir: config)
 
-    exit_code, payload = _run_review(
-        monkeypatch,
+    monkeypatch.setattr(
+        sys,
+        "argv",
         [
+            "review.py",
             "--mode",
             "normal",
             "--cd",
@@ -2640,17 +2927,13 @@ def test_auto_selection_fallback_to_benchmark_persists_reason(monkeypatch: pytes
         ],
     )
 
-    assert exit_code == 0
-    assert "selection" not in payload
-    assert "stage" not in payload
-    assert payload["grading"] == "required"
-    state = _cycle_payload(state_dir, str(payload["review"]))
-    assert state["selection"] == {
-        "requested": "auto",
-        "effective": "benchmark",
-        "reason": "auto_benchmark_missing_stable",
-    }
-    assert state["grading"] == {"required": True}
+    exit_code = review.main()
+    rendered = capsys.readouterr().out
+
+    assert exit_code == 2
+    assert "status: usage_error" in rendered
+    assert "missing orchestrator stable profile for mode normal" in rendered
+    assert not (state_dir / "orchestrator" / "index.json").exists()
 
 
 def test_emergency_mode_skips_deslop_and_runs_review(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
