@@ -248,9 +248,14 @@ def _assert_github_handoff(action: object, *, public_id: str, state_dir: Path, b
     cmd = str(payload["cmd"])
     assert f"--id {public_id}" in cmd
     assert "--github-review" in cmd
-    assert "--state-dir" not in cmd
-    assert str(state_dir) not in cmd
+    assert "--state-dir" in cmd
+    assert str(state_dir) in cmd
     assert "--github-force" not in cmd
+    for result_cmd in dict(payload["result"]).values():
+        result_command = str(result_cmd)
+        assert f"--id {public_id}" in result_command
+        assert "--state-dir" in result_command
+        assert str(state_dir) in result_command
     if blocked_by:
         assert payload["blocked_by"] == blocked_by
     else:
@@ -736,7 +741,8 @@ def test_action_payload_surfaces_recovery_for_blocked_decision_round(tmp_path: P
     assert str(round_state_dir) in str(action["dismiss"])
     assert "--slot alpha" in str(action["cmd"])
     assert "--decision" not in str(action["cmd"])
-    assert action["next"].endswith("--id rvw_example")
+    assert "--id rvw_example" in str(action["next"])
+    assert str(tmp_path / "state") in str(action["next"])
 
 
 def test_benchmark_grading_required_round_does_not_use_arena_grade_gate(tmp_path: Path) -> None:
@@ -771,7 +777,7 @@ def test_create_resume_and_id_reprint_use_one_pending_action(monkeypatch: pytest
     deslop_calls = _stub_deslop(monkeypatch)
     review_calls = _stub_review(monkeypatch, "phase_review-round-1", "phase_review-round-2")
     repo = tmp_path / "repo"
-    state_dir = tmp_path / "state"
+    state_dir = tmp_path / "default-state"
     _use_compact_normal_profile(monkeypatch, state_dir)
     _init_repo(repo)
     _commit_file(repo, "app.txt", "base\n", "base")
@@ -790,11 +796,12 @@ def test_create_resume_and_id_reprint_use_one_pending_action(monkeypatch: pytest
     assert "grading" not in payload
     assert set(dict(payload["Action"])) == {"cmd", "deslop_done"}
     assert f"--id {public_id}" in str(payload["Action"]["cmd"])
+    assert str(state_dir) in str(payload["Action"]["cmd"])
     assert "--decision" not in str(payload["Action"]["cmd"])
     assert "--deslop-done" in str(payload["Action"]["deslop_done"])
+    assert str(state_dir) in str(payload["Action"]["deslop_done"])
     assert len(deslop_calls) == 1
-    locator = json.loads((tmp_path / "default-state" / "orchestrator" / "state_dirs.json").read_text(encoding="utf-8"))
-    assert locator["ids"][public_id] == str(state_dir.resolve())
+    assert not (state_dir / "orchestrator" / "state_dirs.json").exists()
     state = _cycle_payload(state_dir, public_id)
     assert state["selection"] == {
         "requested": "auto",
@@ -812,6 +819,8 @@ def test_create_resume_and_id_reprint_use_one_pending_action(monkeypatch: pytest
     assert set(dict(resumed["Action"])) == {"cmd", "alt", "deslop_done"}
     assert "--decision clean" in str(resumed["Action"]["cmd"])
     assert "--decision findings" in str(resumed["Action"]["alt"])
+    assert str(state_dir) in str(resumed["Action"]["cmd"])
+    assert str(state_dir) in str(resumed["Action"]["alt"])
     assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 1
     state = _cycle_payload(state_dir, public_id)
     assert len(state["rounds"]) == 1
@@ -822,19 +831,23 @@ def test_create_resume_and_id_reprint_use_one_pending_action(monkeypatch: pytest
     assert len(deslop_calls) == 1
     assert len(review_calls) == 1
 
-    exit_code, by_id = _run_review(monkeypatch, ["--id", public_id])
+    exit_code, by_id = _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
     assert exit_code == 0
     assert by_id["review"] == public_id
     assert by_id["Action"] == resumed["Action"]
     assert len(_cycle_payload(state_dir, public_id)["rounds"]) == 1
     assert len(review_calls) == 1
 
-    exit_code, first_clean = _run_review(monkeypatch, ["--id", public_id, "--decision", "clean"])
+    exit_code, first_clean = _run_review(
+        monkeypatch,
+        ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)],
+    )
     assert exit_code == 0
     assert first_clean["review"] == public_id
     assert "stage" not in first_clean
     assert set(dict(first_clean["Action"])) == {"cmd", "deslop_done"}
     assert f"--id {public_id}" in str(first_clean["Action"]["cmd"])
+    assert str(state_dir) in str(first_clean["Action"]["cmd"])
     assert "--decision" not in str(first_clean["Action"]["cmd"])
     state = _cycle_payload(state_dir, public_id)
     assert state["pending_action"] == {"kind": "run-review-step", "step_index": 1, "step": "precision-signoff"}
@@ -933,6 +946,38 @@ def test_create_resume_and_id_reprint_use_one_pending_action(monkeypatch: pytest
     assert state["validation"]["ci"] == "classified"
     assert len(deslop_calls) == 1
     assert len(review_calls) == 2
+
+
+def test_relative_state_dir_is_resolved_in_followup_actions(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _stub_review(monkeypatch)
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    monkeypatch.chdir(tmp_path)
+
+    exit_code, payload = _run_review(
+        monkeypatch,
+        ["--mode", "emergency", "--cd", str(repo), "--base", "main", "--state-dir", "relative-state"],
+    )
+
+    expected_state_dir = tmp_path / "relative-state"
+    assert exit_code == 0
+    action = dict(payload["Action"])
+    assert str(expected_state_dir) in str(action["cmd"])
+    assert str(expected_state_dir) in str(action["alt"])
+
+
+def test_id_lookup_ignores_legacy_review_suite_state_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    legacy_state_dir = tmp_path / ".codex" / "review-suite-state" / "old-runtime"
+    saved = review.save_cycle(legacy_state_dir, {"cycle_key": "orc-1234567890abcdef"})
+    public_id = str(saved["public_id"])
+    monkeypatch.setattr(review.Path, "home", lambda: tmp_path)
+
+    with pytest.raises(ValueError, match=f"unknown review cycle id: {public_id}"):
+        review._load_cycle_and_state_dir(tmp_path / "requested-state", public_id)
 
 
 def test_id_show_findings_reads_orchestrator_round_payload_without_running(
@@ -1333,10 +1378,11 @@ def test_deslop_done_closes_tracked_sidecar_without_rerunning_deslop(
 
 def test_deslop_done_is_primary_action_when_no_other_action_remains() -> None:
     state = {"deslop": {"tracked": True, "status": "done"}}
+    state_dir = Path("state")
 
-    action = review._with_deslop_done_action(state, None, "rvw_example")
+    action = review._with_deslop_done_action(state, None, "rvw_example", state_dir=state_dir)
 
-    assert action == {"cmd": review._review_command("rvw_example", "--deslop-done")}
+    assert action == {"cmd": review._review_command("rvw_example", "--deslop-done", state_dir=state_dir)}
 
 
 def test_deslop_done_requires_id_and_rejects_other_actions(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -1495,7 +1541,7 @@ def test_review_step_output_is_not_reprinted_by_review_py(
 def test_id_rejects_creation_context_flags(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _stub_deslop(monkeypatch)
     repo = tmp_path / "repo"
-    state_dir = tmp_path / "state"
+    state_dir = tmp_path / "default-state"
     _init_repo(repo)
     _commit_file(repo, "app.txt", "base\n", "base")
 
@@ -1571,10 +1617,10 @@ def test_github_review_rejects_cycle_before_local_green(monkeypatch: pytest.Monk
     ]
 
 
-def test_github_review_runs_existing_lane_with_resolved_state_dir_and_force(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_github_review_runs_existing_lane_with_canonical_state_dir_and_force(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     review_calls = _stub_review(monkeypatch)
     repo = tmp_path / "repo"
-    state_dir = tmp_path / "state"
+    state_dir = tmp_path / "default-state"
     _init_repo(repo)
     _commit_file(repo, "app.txt", "base\n", "base")
 
@@ -1596,7 +1642,7 @@ def test_github_review_runs_existing_lane_with_resolved_state_dir_and_force(monk
     monkeypatch.setattr(
         sys,
         "argv",
-        ["review.py", "--id", public_id, "--github-review", "--github-force"],
+        ["review.py", "--id", public_id, "--github-review", "--github-force", "--state-dir", str(state_dir)],
     )
 
     exit_code = review.main()
