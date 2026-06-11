@@ -67,9 +67,7 @@ from review_suite_core.orchestrator_state import (
 from review_suite_core.orchestrator_store import (
     load_cycle_by_key,
     load_cycle_by_public_id,
-    register_cycle_state_dir,
     save_cycle,
-    state_dir_for_public_id,
 )
 from review_suite_local import load_round, print_reviewer_output_section, public_task_name, round_needs_caller_grade
 
@@ -108,8 +106,11 @@ def _help_command() -> str:
     return format_command([sys.executable, str(Path(__file__).resolve()), "--help"])
 
 
-def _review_command(public_id: str, *extra: str) -> str:
-    return format_command([sys.executable, str(Path(__file__).resolve()), "--id", public_id, *extra])
+def _review_command(public_id: str, *extra: str, state_dir: Path | None = None) -> str:
+    command = [sys.executable, str(Path(__file__).resolve()), "--id", public_id, *extra]
+    if state_dir is not None:
+        command.extend(["--state-dir", str(state_dir)])
+    return format_command(command)
 
 
 def _new_review_command(state: dict[str, Any], *, state_dir: Path, fresh_token: str | None = None) -> str:
@@ -136,16 +137,16 @@ def _new_review_command(state: dict[str, Any], *, state_dir: Path, fresh_token: 
     return format_command(command)
 
 
-def _github_review_action_command(public_id: str) -> str:
-    return _review_command(public_id, "--github-review")
+def _github_review_action_command(public_id: str, *, state_dir: Path) -> str:
+    return _review_command(public_id, "--github-review", state_dir=state_dir)
 
 
-def _github_result_command(public_id: str, result: str, *extra: str) -> str:
-    return _review_command(public_id, "--github-result", result, *extra)
+def _github_result_command(public_id: str, result: str, *extra: str, state_dir: Path) -> str:
+    return _review_command(public_id, "--github-result", result, *extra, state_dir=state_dir)
 
 
-def _deslop_done_command(public_id: str) -> str:
-    return _review_command(public_id, "--deslop-done")
+def _deslop_done_command(public_id: str, *, state_dir: Path) -> str:
+    return _review_command(public_id, "--deslop-done", state_dir=state_dir)
 
 
 def _arena_grade_command(state: dict[str, Any], *, state_dir: Path) -> str | None:
@@ -271,11 +272,11 @@ def _arena_recovery_action(state: dict[str, Any], *, state_dir: Path, public_id:
         return None
     round_id = str(pending.get("round_id") or "").strip()
     if not round_id:
-        return {"cmd": _review_command(public_id), "note": "Arena recovery is missing round id."}
+        return {"cmd": _review_command(public_id, state_dir=state_dir), "note": "Arena recovery is missing round id."}
     round_record = _round_by_id(state, round_id)
     payload = _load_output_round_payload(state_dir, round_record)
     round_state_dir = _round_action_state_dir(state_dir, round_record)
-    next_cmd = _review_command(public_id)
+    next_cmd = _review_command(public_id, state_dir=state_dir)
     status = str(payload.get("status") or "").strip()
     if status == "dismissed":
         return {
@@ -379,43 +380,21 @@ def _append_unique_path(paths: list[Path], path: Path | None) -> None:
         paths.append(path)
 
 
-def _legacy_state_dir_candidates() -> list[Path]:
-    root = Path.home() / ".codex" / "review-suite-state"
-    if not root.exists():
-        return []
-    try:
-        return [item for item in sorted(root.iterdir()) if item.is_dir()]
-    except OSError:
-        return []
-
-
-def _cycle_candidates(initial_state_dir: Path, public_id: str) -> list[Path]:
+def _cycle_candidates(initial_state_dir: Path) -> list[Path]:
     candidates: list[Path] = []
     default_dir = Path(default_state_dir())
     _append_unique_path(candidates, initial_state_dir)
-    _append_unique_path(candidates, state_dir_for_public_id(default_dir, public_id))
     _append_unique_path(candidates, default_dir)
-    for candidate in _legacy_state_dir_candidates():
-        _append_unique_path(candidates, candidate)
     return candidates
 
 
 def _load_cycle_and_state_dir(initial_state_dir: Path, public_id: str) -> tuple[Path, dict[str, Any]]:
-    for candidate in _cycle_candidates(initial_state_dir, public_id):
+    for candidate in _cycle_candidates(initial_state_dir):
         try:
             return candidate, load_cycle_by_public_id(candidate, public_id)
         except ValueError:
             continue
     raise ValueError(f"unknown review cycle id: {public_id}")
-
-
-def _register_saved_cycle(state_dir: Path, state: dict[str, Any]) -> None:
-    register_cycle_state_dir(
-        locator_state_dir=Path(default_state_dir()),
-        state_dir=state_dir,
-        public_id=str(state.get("public_id") or ""),
-        cycle_key=str(state.get("cycle_key") or ""),
-    )
 
 
 def _base_arg(args: argparse.Namespace) -> str:
@@ -904,7 +883,6 @@ def _restart_cycle(state: dict[str, Any], *, state_dir: Path, target_mode: str, 
     if not existing_replacement:
         replacement = _advance_without_decision(replacement, state_dir=state_dir)
     saved_replacement = save_cycle(state_dir, replacement)
-    _register_saved_cycle(state_dir, saved_replacement)
     superseded = abort_cycle(state, reason=reason)
     superseded["superseded_by"] = {
         "review": str(saved_replacement.get("public_id") or ""),
@@ -913,7 +891,6 @@ def _restart_cycle(state: dict[str, Any], *, state_dir: Path, target_mode: str, 
         "reason": reason,
     }
     saved_superseded = save_cycle(state_dir, superseded)
-    _register_saved_cycle(state_dir, saved_superseded)
     return saved_replacement
 
 
@@ -922,7 +899,6 @@ def _advance_without_decision(state: dict[str, Any], *, state_dir: Path) -> dict
 
     def persist_running(next_state: dict[str, Any]) -> dict[str, Any]:
         saved = save_cycle(state_dir, next_state)
-        _register_saved_cycle(state_dir, saved)
         return saved
 
     result = run_one_expensive_step(ready_state, state_dir=state_dir, persist_state=persist_running)
@@ -1053,12 +1029,18 @@ def _continuation_note(state: dict[str, Any]) -> str | None:
 def _github_handoff_action(state: dict[str, Any], *, state_dir: Path) -> dict[str, Any]:
     public_id = str(state.get("public_id") or "").strip()
     action: dict[str, Any] = {
-        "cmd": _github_review_action_command(public_id),
+        "cmd": _github_review_action_command(public_id, state_dir=state_dir),
         "after": "PR create/update",
         "result": {
-            GITHUB_RESULT_CLEAN: _github_result_command(public_id, GITHUB_RESULT_CLEAN),
-            GITHUB_RESULT_FINDINGS: _github_result_command(public_id, GITHUB_RESULT_FINDINGS),
-            GITHUB_RESULT_WAIVED: _github_result_command(public_id, GITHUB_RESULT_WAIVED, "--github-note", "REASON"),
+            GITHUB_RESULT_CLEAN: _github_result_command(public_id, GITHUB_RESULT_CLEAN, state_dir=state_dir),
+            GITHUB_RESULT_FINDINGS: _github_result_command(public_id, GITHUB_RESULT_FINDINGS, state_dir=state_dir),
+            GITHUB_RESULT_WAIVED: _github_result_command(
+                public_id,
+                GITHUB_RESULT_WAIVED,
+                "--github-note",
+                "REASON",
+                state_dir=state_dir,
+            ),
         },
     }
     github_review = dict(state.get("github_review") or {})
@@ -1070,7 +1052,7 @@ def _github_handoff_action(state: dict[str, Any], *, state_dir: Path) -> dict[st
     return action
 
 
-def _validation_status_command(public_id: str, blockers: list[str], status: str) -> str:
+def _validation_status_command(public_id: str, blockers: list[str], status: str, *, state_dir: Path) -> str:
     args: list[str] = []
     for blocker in blockers:
         key = blocker.split(":", 1)[0]
@@ -1078,13 +1060,13 @@ def _validation_status_command(public_id: str, blockers: list[str], status: str)
             args.extend(["--full-suite", status])
         if key == "ci":
             args.extend(["--ci", status])
-    return _review_command(public_id, *args)
+    return _review_command(public_id, *args, state_dir=state_dir)
 
 
-def _validation_blocker_action(public_id: str, blockers: list[str]) -> dict[str, Any]:
+def _validation_blocker_action(public_id: str, blockers: list[str], *, state_dir: Path) -> dict[str, Any]:
     return {
-        "cmd": _validation_status_command(public_id, blockers, "passed"),
-        "alt": _validation_status_command(public_id, blockers, "waived"),
+        "cmd": _validation_status_command(public_id, blockers, "passed", state_dir=state_dir),
+        "alt": _validation_status_command(public_id, blockers, "waived", state_dir=state_dir),
         "blocked_by": blockers,
         "note": "GitHub result is recorded; record full-suite/CI before PR-final or merge-ready.",
     }
@@ -1106,10 +1088,10 @@ def _github_review_is_terminal(state: dict[str, Any]) -> bool:
     return bool(current_head_value) and reviewed_head == current_head_value
 
 
-def _github_terminal_action(state: dict[str, Any], public_id: str) -> dict[str, Any] | None:
+def _github_terminal_action(state: dict[str, Any], public_id: str, *, state_dir: Path) -> dict[str, Any] | None:
     blockers = _validation_blockers(state)
     if blockers:
-        return _validation_blocker_action(public_id, blockers)
+        return _validation_blocker_action(public_id, blockers, state_dir=state_dir)
     return None
 
 
@@ -1120,13 +1102,19 @@ def _deslop_is_open(state: dict[str, Any]) -> bool:
     return str(deslop.get("status") or "").strip() != DESLOP_STATUS_CLOSED
 
 
-def _with_deslop_done_action(state: dict[str, Any], action: dict[str, Any] | None, public_id: str) -> dict[str, Any] | None:
+def _with_deslop_done_action(
+    state: dict[str, Any],
+    action: dict[str, Any] | None,
+    public_id: str,
+    *,
+    state_dir: Path,
+) -> dict[str, Any] | None:
     if not _deslop_is_open(state):
         return action
     if action is None:
-        return {"cmd": _deslop_done_command(public_id)}
+        return {"cmd": _deslop_done_command(public_id, state_dir=state_dir)}
     next_action = dict(action or {})
-    next_action["deslop_done"] = _deslop_done_command(public_id)
+    next_action["deslop_done"] = _deslop_done_command(public_id, state_dir=state_dir)
     return next_action
 
 
@@ -1139,30 +1127,30 @@ def _action_payload(state: dict[str, Any], *, state_dir: Path) -> dict[str, Any]
         replacement_id = str(replacement.get("review") or "").strip()
         if replacement_id:
             action = {
-                "cmd": _review_command(replacement_id),
+                "cmd": _review_command(replacement_id, state_dir=state_dir),
                 "note": f"Review {public_id} was superseded by {replacement_id}.",
             }
-            return _with_deslop_done_action(state, action, public_id)
+            return _with_deslop_done_action(state, action, public_id, state_dir=state_dir)
     arena_recovery = _arena_recovery_action(state, state_dir=state_dir, public_id=public_id)
     if arena_recovery:
-        return _with_deslop_done_action(state, arena_recovery, public_id)
+        return _with_deslop_done_action(state, arena_recovery, public_id, state_dir=state_dir)
     if stage == STAGE_DECISION_PENDING:
         blocked_action = _blocked_decision_action(state, state_dir=state_dir, public_id=public_id)
         if blocked_action:
-            return _with_deslop_done_action(state, blocked_action, public_id)
+            return _with_deslop_done_action(state, blocked_action, public_id, state_dir=state_dir)
         grade = _arena_grade_command(state, state_dir=state_dir)
         if grade:
             action = {
                 "cmd": grade,
                 "note": "Grade the arena round, then rerun this review id to choose clean or findings.",
-                "next": _review_command(public_id),
+                "next": _review_command(public_id, state_dir=state_dir),
             }
-            return _with_deslop_done_action(state, action, public_id)
+            return _with_deslop_done_action(state, action, public_id, state_dir=state_dir)
         action = {
-            "cmd": _review_command(public_id, "--decision", DECISION_CLEAN),
-            "alt": _review_command(public_id, "--decision", DECISION_FINDINGS),
+            "cmd": _review_command(public_id, "--decision", DECISION_CLEAN, state_dir=state_dir),
+            "alt": _review_command(public_id, "--decision", DECISION_FINDINGS, state_dir=state_dir),
         }
-        return _with_deslop_done_action(state, action, public_id)
+        return _with_deslop_done_action(state, action, public_id, state_dir=state_dir)
     if stage == STAGE_FIX_PENDING:
         pending = dict(state.get("pending_action") or {})
         if pending.get("kind") == "review-round-budget-exhausted":
@@ -1177,25 +1165,30 @@ def _action_payload(state: dict[str, Any], *, state_dir: Path) -> dict[str, Any]
                     "Action.cmd starts a new review if the latest fix needs another local review pass."
                 ),
             }
-            return _with_deslop_done_action(state, action, public_id)
+            return _with_deslop_done_action(state, action, public_id, state_dir=state_dir)
         action = {
-            "cmd": _review_command(public_id),
+            "cmd": _review_command(public_id, state_dir=state_dir),
             "note": "Fix valid findings, then rerun this command.",
         }
-        return _with_deslop_done_action(state, action, public_id)
+        return _with_deslop_done_action(state, action, public_id, state_dir=state_dir)
     if stage in {STAGE_CREATED, STAGE_GATE_RERUN_NEEDED}:
-        action = {"cmd": _review_command(public_id)}
+        action = {"cmd": _review_command(public_id, state_dir=state_dir)}
         note = _continuation_note(state)
         if note:
             action["note"] = note
-        return _with_deslop_done_action(state, action, public_id)
+        return _with_deslop_done_action(state, action, public_id, state_dir=state_dir)
     if stage in {STAGE_REVIEW_GREEN, STAGE_LOCAL_GREEN_HANDOFF}:
         if _github_review_is_terminal(state):
-            action = _github_terminal_action(state, public_id)
+            action = _github_terminal_action(state, public_id, state_dir=state_dir)
         else:
             action = _github_handoff_action(state, state_dir=state_dir)
-        return _with_deslop_done_action(state, action, public_id)
-    return _with_deslop_done_action(state, {"cmd": _review_command(public_id)}, public_id)
+        return _with_deslop_done_action(state, action, public_id, state_dir=state_dir)
+    return _with_deslop_done_action(
+        state,
+        {"cmd": _review_command(public_id, state_dir=state_dir)},
+        public_id,
+        state_dir=state_dir,
+    )
 
 
 def _render(state: dict[str, Any], *, state_dir: Path) -> None:
@@ -1249,7 +1242,7 @@ def main() -> int:
     parser = build_parser()
     try:
         args = parser.parse_args()
-        state_dir = Path(args.state_dir)
+        state_dir = Path(args.state_dir).resolve(strict=False)
         has_validation_status = _has_validation_status(args)
         if args.restart_mode and not args.id:
             raise ValueError("--restart-mode requires --id")
@@ -1313,7 +1306,6 @@ def main() -> int:
             if args.deslop_done:
                 state = mark_deslop_closed(state)
                 saved = save_cycle(state_dir, state)
-                _register_saved_cycle(state_dir, saved)
                 _render(saved, state_dir=state_dir)
                 return 0
             if args.restart_mode:
@@ -1330,7 +1322,6 @@ def main() -> int:
             if args.github_result:
                 state = _record_github_result(state, args)
                 saved = save_cycle(state_dir, state)
-                _register_saved_cycle(state_dir, saved)
                 _render(saved, state_dir=state_dir)
                 return 0
             if args.decision:
@@ -1343,7 +1334,6 @@ def main() -> int:
             state = _create_or_resume_cycle(args=args, state_dir=state_dir)
             state = _advance_without_decision(state, state_dir=state_dir)
         saved = save_cycle(state_dir, state)
-        _register_saved_cycle(state_dir, saved)
         _render(saved, state_dir=state_dir)
         return 0
     except ValueError as exc:
