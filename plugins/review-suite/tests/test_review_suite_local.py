@@ -1046,6 +1046,7 @@ def test_launch_reviewer_process_writes_prompt_for_native_base_mode(
     monkeypatch.setattr("review_suite_local.subprocess.Popen", fake_popen)
     monkeypatch.setattr("review_suite_local.time.monotonic", lambda: 12.5)
     monkeypatch.setattr("review_suite_local.utc_now_iso", lambda: "2026-04-21T18:30:00Z")
+    monkeypatch.setattr("review_suite_core.lens_runtime.isolated_runtime_user_config_overrides", lambda: [])
     monkeypatch.setattr(
         "review_suite_core.lens_runtime.validated_linear_review_range",
         lambda cwd, start_ref, end_ref, label: None,
@@ -1064,10 +1065,12 @@ def test_launch_reviewer_process_writes_prompt_for_native_base_mode(
     proc = captured["proc"]
     command = captured["command"]
     assert command[1] == "exec"
+    assert "--ignore-user-config" in command
     assert "review" in command
     assert "--base" not in command
     assert "--commit" not in command
     assert command[-1] == "-"
+    assert 'approval_policy="never"' in command
     assert len(proc.stdin.writes) == 1
     assert "manual prompt" in proc.stdin.writes[0]
     assert "commit range `main..new-head`" in proc.stdin.writes[0]

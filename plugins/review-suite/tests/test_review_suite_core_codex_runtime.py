@@ -16,18 +16,100 @@ from review_suite_core.codex_runtime import (
     validate_codex_runtime,
 )
 from review_suite_core.lens_runtime import (
+    _codex_user_config_path,
     codex_exec_command,
     codex_exec_review_command,
     codex_review_stdin_text,
+    isolated_runtime_user_config_overrides,
     prepare_codex_review_launch,
     progress_heartbeat_line,
     record_wrapper_session,
 )
 
 
+def test_codex_user_config_path_honors_codex_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    codex_home = tmp_path / "codex-home"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+
+    assert _codex_user_config_path() == codex_home.resolve(strict=False) / "config.toml"
+
+
+def test_codex_user_config_path_expands_codex_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("CODEX_HOME", "~/.codex-alt")
+
+    assert _codex_user_config_path() == (home / ".codex-alt").resolve(strict=False) / "config.toml"
+
+
+def test_isolated_runtime_user_config_overrides_preserves_only_provider_config(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+model = "ignored-user-default"
+model_provider = "openrouter"
+openai_base_url = "https://openai-proxy.example/v1"
+oss_provider = "lmstudio"
+
+[model_providers.openrouter]
+name = "OpenRouter"
+base_url = "https://openrouter.example/v1"
+wire_api = "responses"
+
+[model_providers.openrouter.env]
+OPENROUTER_API_KEY = "env-var-name"
+
+[plugins."github@openai-curated"]
+enabled = true
+
+[mcp_servers.node_repl]
+command = "node_repl"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    overrides = isolated_runtime_user_config_overrides(config_path)
+
+    assert 'model_provider="openrouter"' in overrides
+    assert 'openai_base_url="https://openai-proxy.example/v1"' in overrides
+    assert 'oss_provider="lmstudio"' in overrides
+    assert (
+        'model_providers={openrouter = {name = "OpenRouter", base_url = "https://openrouter.example/v1", '
+        'wire_api = "responses", env = {OPENROUTER_API_KEY = "env-var-name"}}}'
+    ) in overrides
+    assert all(not item.startswith("plugins.") for item in overrides)
+    assert all(not item.startswith("mcp_servers.") for item in overrides)
+    assert all(not item.startswith("model=") for item in overrides)
+
+
+def test_isolated_runtime_user_config_overrides_preserves_dotted_provider_keys(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+model_provider = "azure.prod"
+
+[model_providers."azure.prod"]
+name = "Azure Prod"
+base_url = "https://azure.example/openai/v1"
+wire_api = "responses"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    overrides = isolated_runtime_user_config_overrides(config_path)
+
+    assert 'model_provider="azure.prod"' in overrides
+    assert (
+        'model_providers={"azure.prod" = {name = "Azure Prod", base_url = "https://azure.example/openai/v1", '
+        'wire_api = "responses"}}'
+    ) in overrides
+
+
 def test_codex_exec_command_includes_service_tier_when_configured(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr("review_suite_core.lens_runtime.shutil.which", lambda name: "codex")
     monkeypatch.setattr("review_suite_core.lens_runtime.validate_codex_runtime", lambda **kwargs: None)
+    monkeypatch.setattr("review_suite_core.lens_runtime.isolated_runtime_user_config_overrides", lambda: [])
 
     command = codex_exec_command(
         tool_name="review-followup",
@@ -42,6 +124,88 @@ def test_codex_exec_command_includes_service_tier_when_configured(monkeypatch: p
 
     assert 'service_tier="fast"' in command
     assert command.index('service_tier="fast"') < command.index("--color")
+    assert "--ignore-user-config" in command
+    assert 'approval_policy="never"' in command
+    assert command.index("--ignore-user-config") < command.index("-C")
+    assert command.index('approval_policy="never"') < command.index("--color")
+
+
+def test_codex_exec_command_repasses_provider_overrides_before_review_model(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr("review_suite_core.lens_runtime.shutil.which", lambda name: "codex")
+    monkeypatch.setattr("review_suite_core.lens_runtime.validate_codex_runtime", lambda **kwargs: None)
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime.isolated_runtime_user_config_overrides",
+        lambda: [
+            'model_provider="openrouter"',
+            'model_providers={openrouter = {base_url = "https://openrouter.example/v1"}}',
+            'openai_base_url="https://openai-proxy.example/v1"',
+        ],
+    )
+
+    command = codex_exec_command(
+        tool_name="review-followup",
+        model="gpt-5.5",
+        reasoning_effort="medium",
+        prompt="Review this.",
+        output_path=tmp_path / "out.txt",
+        review_root=tmp_path,
+        allow_unsafe_windows_wsl_fallback=False,
+    )
+
+    assert 'model_provider="openrouter"' in command
+    assert 'model_providers={openrouter = {base_url = "https://openrouter.example/v1"}}' in command
+    assert 'openai_base_url="https://openai-proxy.example/v1"' in command
+    assert command.index('model_provider="openrouter"') < command.index('model="gpt-5.5"')
+    assert "plugins.github.enabled=true" not in command
+    assert "mcp_servers.node_repl.command=\"node_repl\"" not in command
+
+
+def test_codex_exec_command_isolates_unsafe_wsl_fallback(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("review_suite_core.lens_runtime.shutil.which", lambda name: "codex")
+    monkeypatch.setattr("review_suite_core.lens_runtime.validate_codex_runtime", lambda **kwargs: None)
+    monkeypatch.setattr("review_suite_core.lens_runtime.use_unsafe_windows_wsl_fallback", lambda *args: True)
+    monkeypatch.setattr("review_suite_core.lens_runtime.isolated_runtime_user_config_overrides", lambda: [])
+
+    command = codex_exec_command(
+        tool_name="review-followup",
+        model="gpt-5.5",
+        reasoning_effort="medium",
+        prompt="Review this.",
+        output_path=tmp_path / "out.txt",
+        review_root=tmp_path,
+        allow_unsafe_windows_wsl_fallback=True,
+    )
+
+    assert command[0:3] == ["codex", "exec", "--ignore-user-config"]
+    assert "--dangerously-bypass-approvals-and-sandbox" in command
+    assert 'approval_policy="never"' in command
+    assert "-s" not in command
+
+
+def test_codex_exec_review_command_isolates_unsafe_wsl_fallback(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("review_suite_core.lens_runtime.shutil.which", lambda name: "codex")
+    monkeypatch.setattr("review_suite_core.lens_runtime.validate_codex_runtime", lambda **kwargs: None)
+    monkeypatch.setattr("review_suite_core.lens_runtime.use_unsafe_windows_wsl_fallback", lambda *args: True)
+    monkeypatch.setattr("review_suite_core.lens_runtime.isolated_runtime_user_config_overrides", lambda: [])
+
+    command = codex_exec_review_command(
+        tool_name="review-suite",
+        model="gpt-5.5",
+        reasoning_effort="medium",
+        title="review-suite::round::alpha::gpt-5.5-medium",
+        review_root=tmp_path,
+        base="origin/main",
+        allow_unsafe_windows_wsl_fallback=True,
+    )
+
+    assert command[0:3] == ["codex", "exec", "--ignore-user-config"]
+    assert "--dangerously-bypass-approvals-and-sandbox" in command
+    assert 'approval_policy="never"' in command
+    assert "-s" not in command
+    assert command[-2:] == ["--base", "origin/main"]
 
 
 def test_prepare_codex_review_launch_creates_prompted_exec_without_native_target(
@@ -52,6 +216,7 @@ def test_prepare_codex_review_launch_creates_prompted_exec_without_native_target
     monkeypatch.setattr("review_suite_core.lens_runtime.shutil.which", lambda name: "codex")
     monkeypatch.setattr("review_suite_core.lens_runtime.validate_codex_runtime", lambda **kwargs: None)
     monkeypatch.setattr("review_suite_core.lens_runtime.default_review_suite_state_dir", lambda: state_dir)
+    monkeypatch.setattr("review_suite_core.lens_runtime.isolated_runtime_user_config_overrides", lambda: [])
 
     launch = prepare_codex_review_launch(
         tool_name="review-suite",
@@ -68,12 +233,16 @@ def test_prepare_codex_review_launch_creates_prompted_exec_without_native_target
 
     try:
         assert launch.command[0:2] == ["codex", "exec"]
+        assert "--ignore-user-config" in launch.command
         assert "review" in launch.command
         assert launch.command[launch.command.index("--title") + 1] == "review-suite::round::alpha::gpt-5.5-medium"
         assert "--base" not in launch.command
         assert "--commit" not in launch.command
         assert launch.command[-1] == "-"
         assert 'service_tier="fast"' in launch.command
+        assert 'approval_policy="never"' in launch.command
+        assert launch.command.index("--ignore-user-config") < launch.command.index("-C")
+        assert launch.command.index('approval_policy="never"') < launch.command.index("--title")
         assert launch.command.index('service_tier="fast"') < launch.command.index("--title")
         assert launch.stdin_text is not None
         assert "base ref `origin/main`" in launch.stdin_text
@@ -95,6 +264,7 @@ def test_prepare_codex_review_launch_uses_native_exec_review_without_prompt(
     monkeypatch.setattr("review_suite_core.lens_runtime.shutil.which", lambda name: "codex")
     monkeypatch.setattr("review_suite_core.lens_runtime.validate_codex_runtime", lambda **kwargs: None)
     monkeypatch.setattr("review_suite_core.lens_runtime.default_review_suite_state_dir", lambda: state_dir)
+    monkeypatch.setattr("review_suite_core.lens_runtime.isolated_runtime_user_config_overrides", lambda: [])
 
     launch = prepare_codex_review_launch(
         tool_name="review-suite",
@@ -110,8 +280,10 @@ def test_prepare_codex_review_launch_uses_native_exec_review_without_prompt(
 
     try:
         assert launch.command[0:2] == ["codex", "exec"]
+        assert "--ignore-user-config" in launch.command
         assert "review" in launch.command
         assert launch.command[launch.command.index("--title") + 1] == "review-suite::round::alpha::gpt-5.5-medium"
+        assert 'approval_policy="never"' in launch.command
         assert launch.command[-2:] == ["--base", "origin/main"]
         assert launch.command[-1] != "-"
         assert launch.stdin_text is None
@@ -128,6 +300,7 @@ def test_codex_exec_review_command_rejects_prompted_native_target(
 ) -> None:
     monkeypatch.setattr("review_suite_core.lens_runtime.shutil.which", lambda name: "codex")
     monkeypatch.setattr("review_suite_core.lens_runtime.validate_codex_runtime", lambda **kwargs: None)
+    monkeypatch.setattr("review_suite_core.lens_runtime.isolated_runtime_user_config_overrides", lambda: [])
 
     with pytest.raises(ValueError, match="cannot combine"):
         codex_exec_review_command(
@@ -151,6 +324,7 @@ def test_prepare_codex_review_launch_validates_base_commit_end_range(
     monkeypatch.setattr("review_suite_core.lens_runtime.shutil.which", lambda name: "codex")
     monkeypatch.setattr("review_suite_core.lens_runtime.validate_codex_runtime", lambda **kwargs: None)
     monkeypatch.setattr("review_suite_core.lens_runtime.default_review_suite_state_dir", lambda: state_dir)
+    monkeypatch.setattr("review_suite_core.lens_runtime.isolated_runtime_user_config_overrides", lambda: [])
     monkeypatch.setattr(
         "review_suite_core.lens_runtime.validated_linear_review_range",
         lambda cwd, start_ref, end_ref, label: calls.append((cwd, start_ref, end_ref, label)),
@@ -190,6 +364,7 @@ def test_prepare_codex_review_launch_uses_prompt_for_promptless_commit_end(
     monkeypatch.setattr("review_suite_core.lens_runtime.shutil.which", lambda name: "codex")
     monkeypatch.setattr("review_suite_core.lens_runtime.validate_codex_runtime", lambda **kwargs: None)
     monkeypatch.setattr("review_suite_core.lens_runtime.default_review_suite_state_dir", lambda: state_dir)
+    monkeypatch.setattr("review_suite_core.lens_runtime.isolated_runtime_user_config_overrides", lambda: [])
     monkeypatch.setattr(
         "review_suite_core.lens_runtime.validated_linear_review_range",
         lambda cwd, start_ref, end_ref, label: calls.append((cwd, start_ref, end_ref, label)),
