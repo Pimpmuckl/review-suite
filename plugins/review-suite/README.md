@@ -78,6 +78,7 @@ To explicitly replace an existing local review ladder with a stricter one, use t
 
 - Start with `--mode brief|normal|deep|emergency`.
 - Follow emitted `Action.cmd`.
+- After an id exists, the normal advance command is bare `review.py --id <id>`; Review Suite auto-records structured `clean` / `findings` reviewer verdicts when available.
 - After an id exists, do not repeat creation flags.
 - If you accidentally repeat `--mode` after amending fixes on the same branch/base/merge-base, Review Suite reconnects to the active review id instead of starting a fresh ladder. Use `--fresh-token` only when you intentionally want a separate ladder.
 - Classify reviewer output before coding valid findings.
@@ -91,7 +92,8 @@ To explicitly replace an existing local review ladder with a stricter one, use t
 
 ```powershell
 <python> <review-suite-plugin-root>/scripts/review.py --mode brief|normal|deep|emergency --cd <repo-root> --base main
-<python> <review-suite-plugin-root>/scripts/review.py --id <id> --decision clean|findings
+<python> <review-suite-plugin-root>/scripts/review.py --id <id>
+<python> <review-suite-plugin-root>/scripts/review.py --id <id> --decision clean|findings  # manual override
 <python> <review-suite-plugin-root>/scripts/review.py --id <id> --show-findings
 <python> <review-suite-plugin-root>/scripts/review.py --id <id> --github-review
 <python> <review-suite-plugin-root>/scripts/review.py --id <id> --github-result clean|findings

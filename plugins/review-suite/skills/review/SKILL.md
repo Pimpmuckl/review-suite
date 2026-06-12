@@ -29,6 +29,7 @@ Rules:
 - Review orchestration expects committed review changes. If `git diff` is non-empty but `base..HEAD` is empty, commit intended changes or stash unrelated worktree changes before rerunning.
 - Review commands do not support a dirty-worktree override. Do not append `--allow-dirty`; commit intended review changes first.
 - Read `Output:`, then follow the emitted `Action.cmd`.
+- The normal advance command after a review id exists is bare `review.py --id <id>`; explicit `--decision clean|findings` is an override when Review Suite cannot auto-advance from a structured reviewer verdict or a human intentionally disagrees.
 - If the caller session was restarted after reviewer output was produced, run `review.py --id <id> --show-findings` to recover stored reviewer text without launching another review.
 - Classify reviewer output before coding valid findings.
 - Fix valid findings, then run emitted `review.py --id <id>`.

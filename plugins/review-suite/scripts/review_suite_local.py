@@ -30,7 +30,6 @@ from rollout_capture import (
 from review_suite_core import (
     EFFECTIVE_BASE_METADATA_KEYS,
     current_head,
-    dirty_worktree_scope,
     effective_base_ref,
     format_command,
     has_committed_diff,
@@ -77,6 +76,8 @@ GRADE_BASIS_VALUES = (
     "tie_clean",
     "tie_both_useful",
 )
+TERMINAL_REVIEW_COMMANDS = {"clean", "findings"}
+TERMINAL_REVIEW_RESULT_PREFIX = "Review result:"
 GARBAGE_FINDING_LOSS_BASES = {"false_positive_loss", "hallucinated_finding_loss", "fringe_finding_loss"}
 LOW_QUALITY_LOSS_BASES = GARBAGE_FINDING_LOSS_BASES | {"better_finding_validity"}
 MISSED_BUG_LOSS_BASES = {"valid_findings_vs_none", "more_valid_findings", "better_bug_coverage"}
@@ -177,6 +178,13 @@ def build_pr_instructions(target_label: str) -> str:
     )
 
 
+def terminal_review_result_instruction() -> str:
+    return (
+        f"End with exactly one final machine-readable line: `{TERMINAL_REVIEW_RESULT_PREFIX} clean` "
+        f"if there are no valid findings, or `{TERMINAL_REVIEW_RESULT_PREFIX} findings` if you reported one or more valid findings."
+    )
+
+
 def build_correctness_review_contract() -> str:
     return (
         "Reviewer output is advisory risk input, not authoritative product direction.\n"
@@ -191,7 +199,8 @@ def build_correctness_review_contract() -> str:
         "Record full-suite/CI validation status when relevant as pending, passed, failed, or intentionally waived/classified; do not call a PR final or merge-ready while that status is unknown, and investigate/fix relevant failures first.\n"
         "When applicable, flag correctness-relevant risks from oversized or hard-to-stage diffs, external integration surface breaks, missing regression or integration coverage, and unbounded agent-context injection.\n"
         "Skip style-only comments. If there are no issues, say 'No findings.'\n"
-        "Do not suggest localized guards when the evidence points to broader ownership, fallback, retry, lifecycle, concurrency, or persistence issues."
+        "Do not suggest localized guards when the evidence points to broader ownership, fallback, retry, lifecycle, concurrency, or persistence issues.\n"
+        f"{terminal_review_result_instruction()}"
     )
 
 
@@ -234,6 +243,10 @@ def _combined_review_instructions(*, standard_instructions: str, custom_instruct
     custom_instruction_text = "" if custom_instructions is None else custom_instructions.strip()
     if not custom_instruction_text:
         return instruction_text
+    terminal_instruction = terminal_review_result_instruction()
+    if instruction_text.endswith(terminal_instruction):
+        base_instruction_text = instruction_text[: -len(terminal_instruction)].rstrip()
+        return f"{base_instruction_text}\n\nAdditional review instructions:\n{custom_instruction_text}\n\n{terminal_instruction}"
     return f"{instruction_text}\n\nAdditional review instructions:\n{custom_instruction_text}"
 
 
@@ -287,21 +300,10 @@ def build_local_review_request(
         base=str(review_scope["base"]),
         merge_base=str(review_scope["merge_base"]),
     )
-    if custom_instructions is None:
-        base_dirty_scope = dirty_worktree_scope(review_cwd, str(review_scope["base"]))
-        if bool(base_dirty_scope.get("all_dirty_paths_outside_branch_diff")):
-            unrelated_paths = list(base_dirty_scope.get("unrelated_dirty_paths") or [])
-            review_scope["ignored_dirty_path_count"] = len(unrelated_paths)
-            review_scope["ignored_dirty_paths"] = unrelated_paths[:3]
-    else:
-        ensure_clean_git_worktree(review_cwd)
-    prompt = (
-        _combined_review_instructions(
-            standard_instructions=instruction_builder(target_label),
-            custom_instructions=custom_instructions,
-        )
-        if custom_instructions is not None
-        else ""
+    ensure_clean_git_worktree(review_cwd)
+    prompt = _combined_review_instructions(
+        standard_instructions=instruction_builder(target_label),
+        custom_instructions=custom_instructions,
     )
     return LocalReviewRequest(
         review_scope=review_scope,
@@ -2503,6 +2505,21 @@ def _review_output_summary(reviewer_output: str) -> str | None:
     return f"{first_line[:217]}..."
 
 
+def terminal_review_command(reviewer_output: str) -> str | None:
+    lines = [line.strip() for line in str(reviewer_output or "").splitlines() if line.strip()]
+    if not lines:
+        return None
+    final_line = lines[-1]
+    result_lines = [line for line in lines if line.lower().startswith(TERMINAL_REVIEW_RESULT_PREFIX.lower())]
+    if result_lines != [final_line]:
+        return None
+    match = re.fullmatch(rf"{re.escape(TERMINAL_REVIEW_RESULT_PREFIX)}\s*(clean|findings)", final_line, flags=re.IGNORECASE)
+    if match is None:
+        return None
+    command = match.group(1).lower()
+    return command if command in TERMINAL_REVIEW_COMMANDS else None
+
+
 def _classify_review_result(
     *,
     reviewer_output: str,
@@ -2535,11 +2552,13 @@ def _classify_review_result(
             "grade_block_reason": "review_interrupted",
         }
     if output:
+        terminal_command = terminal_review_command(output)
         return {
             "review_status": "completed",
             "status_summary": _review_output_summary(output) or "Review completed.",
             "grade_blocked": False,
             "grade_block_reason": None,
+            "terminal_command": terminal_command,
         }
     if session_id or thread_id:
         return {
@@ -2610,6 +2629,7 @@ def _classification_for_run(run: dict[str, Any]) -> dict[str, Any]:
                 "status_summary": run.get("status_summary") or _review_output_summary(str(run.get("reviewer_output") or "")) or "Review completed.",
                 "grade_blocked": False,
                 "grade_block_reason": None,
+                "terminal_command": run.get("terminal_command") or terminal_review_command(str(run.get("reviewer_output") or "")),
             }
         return {
             "review_status": existing_status,
@@ -2765,6 +2785,7 @@ def collect_completed_review_capture(
         "status_summary": classification["status_summary"],
         "grade_blocked": classification["grade_blocked"],
         "grade_block_reason": classification["grade_block_reason"],
+        "terminal_command": classification.get("terminal_command"),
         "reviewer_output_ref": (
             f"rollout://{enriched['id']}/{variant_id}" if enriched.get("id") else None
         ),

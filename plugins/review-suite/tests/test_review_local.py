@@ -94,9 +94,11 @@ def test_standard_review_contract_includes_current_codex_review_dimensions() -> 
     assert "pending, passed, failed, or intentionally waived/classified" in prompt
     assert "do not call a PR final or merge-ready while that status is unknown" in prompt
     assert "No findings." in prompt
+    assert "Review result: clean" in prompt
+    assert "Review result: findings" in prompt
 
 
-def test_build_local_review_request_appends_custom_block_after_standard_contract(
+def test_build_local_review_request_keeps_terminal_contract_after_custom_block(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -116,12 +118,15 @@ def test_build_local_review_request_appends_custom_block_after_standard_contract
         custom_instructions="Do not spend time on backwards compatibility concerns.",
     )
 
-    standard = build_phase_instructions("commit `abc123`")
     assert calls == []
     assert request.review_scope["commit"] == "abc123"
     assert "base" not in request.review_scope
-    assert request.prompt.index(standard) < request.prompt.index("Additional review instructions:")
+    assert request.prompt.index("The review target is commit `abc123`.") < request.prompt.index("Additional review instructions:")
     assert "Do not spend time on backwards compatibility concerns." in request.prompt
+    assert request.prompt.index("Additional review instructions:") < request.prompt.rindex("Review result:")
+    assert request.prompt.rstrip().endswith(
+        "`Review result: findings` if you reported one or more valid findings."
+    )
     assert "=== BEGIN DIFF ===" not in request.prompt
 
 
@@ -176,7 +181,7 @@ def test_build_local_review_request_rejects_non_linear_commit_range(
         )
 
 
-def test_build_local_review_request_pr_base_without_custom_instructions_stays_native(
+def test_build_local_review_request_pr_base_without_custom_instructions_includes_standard_prompt(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -191,11 +196,6 @@ def test_build_local_review_request_pr_base_without_custom_instructions_stays_na
         raise AssertionError(args)
 
     monkeypatch.setattr(review_suite_local.subprocess, "run", fake_run)
-    monkeypatch.setattr(
-        review_suite_local,
-        "dirty_worktree_scope",
-        lambda review_cwd, base: {"all_dirty_paths_outside_branch_diff": False},
-    )
 
     request = build_local_review_request(
         review_cwd=tmp_path,
@@ -209,7 +209,9 @@ def test_build_local_review_request_pr_base_without_custom_instructions_stays_na
     assert request.review_scope["base"] == "main"
     assert request.review_scope["merge_base"] == "merge-base-sha"
     assert request.review_scope["reviewed_head"] == "head-sha"
-    assert request.prompt == ""
+    assert "Review this PR-ready branch diff for correctness and regression risk." in request.prompt
+    assert "Review result: clean" in request.prompt
+    assert "Additional review instructions:" not in request.prompt
 
 
 def test_build_local_review_request_uses_effective_upstream_base(
@@ -239,11 +241,6 @@ def test_build_local_review_request_uses_effective_upstream_base(
 
     monkeypatch.setattr(review_suite_local.subprocess, "run", fake_run)
     monkeypatch.setattr(review_suite_local, "merge_base", lambda review_cwd, base, right_ref="HEAD": "upstream-merge-base")
-    monkeypatch.setattr(
-        review_suite_local,
-        "dirty_worktree_scope",
-        lambda review_cwd, base: {"all_dirty_paths_outside_branch_diff": False},
-    )
 
     request = build_local_review_request(
         review_cwd=tmp_path,
@@ -292,6 +289,10 @@ def test_build_local_review_request_pr_base_with_custom_instructions_stays_nativ
     assert "Review this PR-ready branch diff for correctness and regression risk." in request.prompt
     assert "Additional review instructions:" in request.prompt
     assert "base `main`" in request.prompt
+    assert request.prompt.index("Additional review instructions:") < request.prompt.rindex("Review result:")
+    assert request.prompt.rstrip().endswith(
+        "`Review result: findings` if you reported one or more valid findings."
+    )
     assert "=== BEGIN DIFF ===" not in request.prompt
 
 
@@ -377,7 +378,7 @@ def test_build_local_review_request_native_pr_base_with_empty_committed_diff_rep
         )
 
 
-def test_build_local_review_request_pr_base_without_custom_instructions_stays_native_for_unrelated_dirty(
+def test_build_local_review_request_pr_base_without_custom_instructions_requires_clean_worktree(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -398,25 +399,18 @@ def test_build_local_review_request_pr_base_without_custom_instructions_stays_na
     monkeypatch.setattr(review_suite_local.subprocess, "run", fake_run)
     monkeypatch.setattr(
         review_suite_local,
-        "dirty_worktree_scope",
-        lambda review_cwd, base: {
-            "all_dirty_paths_outside_branch_diff": True,
-            "unrelated_dirty_paths": ["docs/notes.md"],
-        },
+        "ensure_clean_git_worktree",
+        lambda review_cwd: (_ for _ in ()).throw(ValueError("review-suite requires a clean worktree.")),
     )
 
-    request = build_local_review_request(
-        review_cwd=tmp_path,
-        base="main",
-        commit_values=None,
-        instruction_builder=build_pr_instructions,
-        custom_instructions=None,
-    )
-
-    assert request.review_scope["base"] == "main"
-    assert request.review_scope["ignored_dirty_path_count"] == 1
-    assert request.review_scope["ignored_dirty_paths"] == ["docs/notes.md"]
-    assert request.prompt == ""
+    with pytest.raises(ValueError, match="clean worktree"):
+        build_local_review_request(
+            review_cwd=tmp_path,
+            base="main",
+            commit_values=None,
+            instruction_builder=build_pr_instructions,
+            custom_instructions=None,
+        )
 
 
 def test_build_local_review_request_with_custom_instructions_does_not_build_patch_diff(
