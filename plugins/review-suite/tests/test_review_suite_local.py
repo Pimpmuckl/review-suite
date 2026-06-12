@@ -44,6 +44,7 @@ from review_suite_local import (
     public_round_result,
     reviewer_completion_status,
     select_pair,
+    terminal_review_command,
     variant_service_tier,
     ungraded_round_exposure_records,
     write_reports,
@@ -243,6 +244,26 @@ def test_classify_review_result_prefers_valid_output_over_stale_interruption_mar
     assert classification["grade_block_reason"] is None
 
 
+def test_terminal_review_command_requires_final_machine_line() -> None:
+    assert terminal_review_command("No findings.\n\nReview result: clean") == "clean"
+    assert terminal_review_command("P1 bug\n\nReview result: findings") == "findings"
+    assert terminal_review_command("Review result: clean\n\nAdditional prose") is None
+    assert terminal_review_command("Review result: clean\n\nReview result: findings") is None
+    assert terminal_review_command("No findings.") is None
+
+
+def test_classify_review_result_preserves_terminal_command() -> None:
+    classification = _classify_review_result(
+        reviewer_output="No findings.\n\nReview result: clean",
+        stderr_text="",
+        session_id="session-1",
+        thread_id=None,
+    )
+
+    assert classification["review_status"] == "completed"
+    assert classification["terminal_command"] == "clean"
+
+
 def test_classify_review_result_blocks_direct_interruption_output() -> None:
     classification = _classify_review_result(
         reviewer_output="Review was interrupted before a usable result was captured.",
@@ -398,13 +419,6 @@ def test_ensure_clean_git_worktree_still_blocks_related_dirty_files_for_base_rev
         "review_suite_local.meaningful_worktree_status_entries",
         lambda review_cwd: [{"code": " M", "path": "src/app.py"}],
     )
-    monkeypatch.setattr(
-        "review_suite_local.dirty_worktree_scope",
-        lambda review_cwd, base, merge_base_ref=None: {
-            "all_dirty_paths_outside_branch_diff": False,
-            "related_dirty_paths": ["src/app.py"],
-        },
-    )
 
     with pytest.raises(ValueError, match="clean worktree"):
         ensure_clean_git_worktree(tmp_path, review_scope={"base": "main", "merge_base": "base123"})
@@ -437,13 +451,6 @@ def test_ensure_clean_git_worktree_blocks_unrelated_dirty_files_for_unflagged_co
     monkeypatch.setattr(
         "review_suite_local.meaningful_worktree_status_entries",
         lambda review_cwd: [{"code": " M", "path": "docs/notes.md"}],
-    )
-    monkeypatch.setattr(
-        "review_suite_local.dirty_worktree_scope",
-        lambda review_cwd, base, merge_base_ref=None: {
-            "all_dirty_paths_outside_branch_diff": True,
-            "unrelated_dirty_paths": ["docs/notes.md"],
-        },
     )
 
     with pytest.raises(ValueError, match="clean worktree"):
@@ -1015,7 +1022,7 @@ def test_maybe_retry_capacity_run_emits_retry_notice(monkeypatch: pytest.MonkeyP
     assert launches
 
 
-def test_launch_reviewer_process_writes_prompt_for_native_base_mode(
+def test_launch_reviewer_process_writes_prompt_for_prompted_base_mode(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -1058,7 +1065,7 @@ def test_launch_reviewer_process_writes_prompt_for_native_base_mode(
         variant={"model": "gpt-5.4-mini", "reasoning_effort": "xhigh"},
         review_cwd=tmp_path,
         prompt="manual prompt",
-        review_scope={"base": "main", "commit": "old-head", "commit_end": "new-head"},
+        review_scope={"base": "main"},
         allow_unsafe_windows_wsl_fallback=False,
     )
 
@@ -1073,7 +1080,7 @@ def test_launch_reviewer_process_writes_prompt_for_native_base_mode(
     assert 'approval_policy="never"' in command
     assert len(proc.stdin.writes) == 1
     assert "manual prompt" in proc.stdin.writes[0]
-    assert "commit range `main..new-head`" in proc.stdin.writes[0]
+    assert "base ref `main`" in proc.stdin.writes[0]
     assert "BEGIN DIFF" not in proc.stdin.writes[0]
     assert proc.stdin.closed is True
     assert launched["pid"] == 4242

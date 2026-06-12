@@ -375,6 +375,117 @@ def test_review_state_status_surfaces_orchestrator_progress(monkeypatch, tmp_pat
     assert "review_t1.py" not in str(emitted[0]["Action"])
 
 
+def test_review_state_status_uses_bare_id_for_structured_verdict(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    round_state_dir = state_dir / "orchestrator" / "review-rounds"
+    rounds_dir = round_state_dir / "rounds"
+    rounds_dir.mkdir(parents=True)
+    (rounds_dir / "round-1.json").write_text(
+        json.dumps(
+            {
+                "round_id": "round-1",
+                "status": "completed",
+                "runs": [
+                    {
+                        "slot": "alpha",
+                        "review_status": "completed",
+                        "reviewer_output": "No findings.\n\nReview result: clean",
+                        "grade_blocked": False,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    action = review_state._orchestrator_action(
+        {
+            "stage": "decision-pending",
+            "pending_action": {"kind": "decision", "round_id": "round-1", "lane": "review_t1"},
+            "rounds": [
+                {
+                    "round_id": "round-1",
+                    "lane": "review_t1",
+                    "review_status": "completed",
+                    "round_state_dir": str(round_state_dir),
+                    "runs": [
+                        {
+                            "slot": "alpha",
+                            "review_status": "completed",
+                            "summary": "No findings.",
+                            "ref": "round-1/alpha.txt",
+                            "grade_blocked": False,
+                        }
+                    ],
+                }
+            ],
+        },
+        "rvw_progress",
+        state_dir=state_dir,
+    )
+
+    assert "--id rvw_progress" in str(action["cmd"])
+    assert "--decision" not in str(action["cmd"])
+    assert "--id rvw_progress --decision clean" in str(action["override"]["clean"])
+    assert "--id rvw_progress --decision findings" in str(action["override"]["findings"])
+
+
+def test_review_state_status_surfaces_grade_before_structured_verdict(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    round_state_dir = state_dir / "orchestrator" / "review-rounds"
+    rounds_dir = round_state_dir / "rounds"
+    rounds_dir.mkdir(parents=True)
+    (rounds_dir / "arena-round-1.json").write_text(
+        json.dumps(
+            {
+                "round_id": "arena-round-1",
+                "arena_round": True,
+                "status": "completed",
+                "task_id_hint": "feature/arena",
+                "runs": [
+                    {
+                        "slot": "alpha",
+                        "review_status": "completed",
+                        "reviewer_output": "No findings.\n\nReview result: clean",
+                        "grade_blocked": False,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    action = review_state._orchestrator_action(
+        {
+            "public_id": "rvw_progress",
+            "stage": "decision-pending",
+            "pending_action": {"kind": "decision", "round_id": "arena-round-1", "lane": "review_t1"},
+            "identity": {"branch": "feature/arena"},
+            "rounds": [
+                {
+                    "round_id": "arena-round-1",
+                    "lane": "review_t1",
+                    "review_status": "completed",
+                    "status": "completed",
+                    "grading_required": True,
+                    "arena_round": True,
+                    "round_state_dir": str(round_state_dir),
+                }
+            ],
+        },
+        "rvw_progress",
+        state_dir=state_dir,
+    )
+
+    assert "review_suite_arena.py grade" in str(action["cmd"])
+    assert "--round-id arena-round-1" in str(action["cmd"])
+    assert "--task-id feature/arena" in str(action["cmd"])
+    assert str(round_state_dir) in str(action["cmd"])
+    assert "--id rvw_progress" in str(action["next"])
+    assert "--decision" not in str(action["cmd"])
+    assert "override" not in action
+
+
 def test_orchestrator_action_routes_superseded_reviews(tmp_path: Path) -> None:
     action = review_state._orchestrator_action(
         {"stage": "aborted", "superseded_by": {"review": "rvw_new"}},

@@ -83,6 +83,7 @@ from review_suite_local import (
     print_reviewer_output_section,
     public_task_name,
     round_needs_caller_grade,
+    terminal_review_command,
     unique_round_state_dirs,
 )
 
@@ -92,6 +93,7 @@ GATE_LANES = {"review_t2", "review_t4"}
 CLI_VALIDATION_STATUSES = ("passed", "failed", "pending", "waived", "classified")
 VALIDATION_READY_STATUSES = {"passed", "waived", "classified"}
 ARENA_REROLL_SLOTS = {"alpha", "bravo"}
+DECISION_COMMANDS = {DECISION_CLEAN, DECISION_FINDINGS}
 CONTINUATION_REDIRECT_STAGES = {
     STAGE_CREATED,
     STAGE_RUNNING,
@@ -189,6 +191,7 @@ def _arena_grade_command(state: dict[str, Any], *, state_dir: Path) -> str | Non
     round_id = str(pending_payload.get("round_id") or "").strip()
     branch = str(dict(state.get("identity") or {}).get("branch") or "").strip()
     task_id = str(pending_payload.get("task_id_hint") or "").strip() or branch or str(state.get("public_id") or "").strip()
+    grade_state_dir = Path(str(pending_payload.get("_round_state_dir") or state_dir))
     return format_command(
         [
             sys.executable,
@@ -203,7 +206,7 @@ def _arena_grade_command(state: dict[str, Any], *, state_dir: Path) -> str | Non
             "--basis",
             "BASIS",
             "--state-dir",
-            str(state_dir),
+            str(grade_state_dir),
         ]
     )
 
@@ -582,6 +585,54 @@ def _pending_decision(state: dict[str, Any]) -> tuple[str, str]:
     raise ValueError("no decision is pending for this review cycle")
 
 
+def _round_terminal_command(payload: dict[str, Any]) -> str | None:
+    command = str(payload.get("terminal_command") or "").strip().lower()
+    if command in DECISION_COMMANDS:
+        return command
+    commands: list[str] = []
+    for run in list(payload.get("runs") or []):
+        if not isinstance(run, dict):
+            continue
+        if bool(run.get("blocked")) or bool(run.get("grade_blocked")):
+            return None
+        status = str(run.get("review_status") or run.get("status") or "").strip()
+        if status and status != "completed":
+            return None
+        command = str(run.get("terminal_command") or "").strip().lower()
+        if not command:
+            command = terminal_review_command(str(run.get("reviewer_output") or ""))
+        if command not in DECISION_COMMANDS:
+            return None
+        commands.append(command)
+    if not commands:
+        return None
+    return DECISION_FINDINGS if DECISION_FINDINGS in commands else DECISION_CLEAN
+
+
+def _auto_decision_command(state: dict[str, Any], *, state_dir: Path) -> str | None:
+    pending = dict(state.get("pending_action") or {})
+    if str(pending.get("kind") or "") != "decision":
+        return None
+    round_id = str(pending.get("round_id") or "").strip()
+    if not round_id or _pending_grade_payload(state, state_dir=state_dir) is not None:
+        return None
+    round_record = _round_by_id(state, round_id)
+    payload = _load_output_round_payload(state_dir, round_record)
+    if bool(round_record.get("review_blocked")) or bool(payload.get("review_blocked")):
+        return None
+    if _round_blocked_slots(round_record) or _round_blocked_slots(payload):
+        return None
+    status_values = {
+        str(round_record.get("review_status") or "").strip(),
+        str(round_record.get("status") or "").strip(),
+        str(payload.get("review_status") or "").strip(),
+        str(payload.get("status") or "").strip(),
+    }
+    if not (status_values & {"completed", "decision-pending", "signoff_pending"}):
+        return None
+    return _round_terminal_command(payload)
+
+
 def _with_fix_action(state: dict[str, Any]) -> dict[str, Any]:
     next_state = dict(state)
     active = dict(next_state.get("active_findings") or {})
@@ -678,7 +729,9 @@ def _load_output_round_payload(
         return _fallback_round_payload(round_record)
     for candidate in _round_state_dir_candidates(state_dir, round_record, extra_state_dirs=extra_state_dirs):
         try:
-            return load_round(candidate, round_id)
+            payload = load_round(candidate, round_id)
+            payload.setdefault("_round_state_dir", str(candidate))
+            return payload
         except ValueError:
             continue
     gate_record = load_gate_record(state_dir, round_id)
@@ -837,6 +890,45 @@ def _current_cycle_head_if_compatible(state: dict[str, Any]) -> str | None:
         return None
 
 
+def _apply_decision_to_ready_state(
+    state: dict[str, Any],
+    decision: str,
+    *,
+    state_dir: Path,
+    require_grade: bool = True,
+) -> dict[str, Any]:
+    if state.get("stage") != STAGE_DECISION_PENDING:
+        raise ValueError("no decision is pending for this review cycle")
+    round_id, lane = _pending_decision(state)
+    if require_grade and _pending_grade_payload(state, state_dir=state_dir) is not None:
+        raise ValueError("grade the arena round before recording a clean/findings decision")
+    round_payload = _round_by_id(state, round_id)
+    blocked_slots = _round_blocked_slots(round_payload)
+    if bool(round_payload.get("review_blocked")) or blocked_slots:
+        slot_text = f" Blocked slots: {', '.join(blocked_slots)}." if blocked_slots else ""
+        raise ValueError(
+            f"cannot record a {decision} decision for blocked review round {round_id}.{slot_text} "
+            "Rerun or recover the review round before recording a decision."
+        )
+    reviewed_head = str(round_payload.get("reviewed_head") or "").strip() or None
+    gate = _round_gate(round_payload, lane)
+    if decision == DECISION_CLEAN:
+        if lane == FOLLOWUP_LANE:
+            return record_followup_clean(state, round_id=round_id, reviewed_head=reviewed_head)
+        next_state = record_clean_decision(state, round_id=round_id, lane=lane, reviewed_head=reviewed_head, gate=gate)
+        if gate:
+            _record_gate_decision(state_dir=state_dir, round_id=round_id, lane=lane, verdict=decision)
+        return next_state
+    if decision == DECISION_FINDINGS:
+        if lane == FOLLOWUP_LANE:
+            return _with_fix_action(record_followup_findings(state, round_id=round_id, reviewed_head=reviewed_head))
+        next_state = _with_fix_action(record_findings_decision(state, round_id=round_id, lane=lane, reviewed_head=reviewed_head, gate=gate))
+        if gate:
+            _record_gate_decision(state_dir=state_dir, round_id=round_id, lane=lane, verdict=decision)
+        return next_state
+    raise ValueError(f"unsupported decision: {decision}")
+
+
 def _auto_record_pending_decision_fix(
     state: dict[str, Any],
     *,
@@ -850,20 +942,15 @@ def _auto_record_pending_decision_fix(
     reviewed_head = str(round_payload.get("reviewed_head") or "").strip()
     if not reviewed_head or reviewed_head == current_head_value:
         return state
-    gate = _round_gate(round_payload, lane)
-    if lane == FOLLOWUP_LANE:
-        findings = record_followup_findings(state, round_id=round_id, reviewed_head=reviewed_head)
-    else:
-        findings = record_findings_decision(
-            state,
-            round_id=round_id,
-            lane=lane,
-            reviewed_head=reviewed_head,
-            gate=gate,
-        )
-    if gate and lane != FOLLOWUP_LANE:
-        _record_gate_decision(state_dir=state_dir, round_id=round_id, lane=lane, verdict=DECISION_FINDINGS)
+    findings = _apply_decision_to_ready_state(state, DECISION_FINDINGS, state_dir=state_dir, require_grade=False)
     return mark_fix_detected(findings, head=current_head_value)
+
+
+def _auto_record_structured_decision(state: dict[str, Any], *, state_dir: Path) -> dict[str, Any]:
+    command = _auto_decision_command(state, state_dir=state_dir)
+    if command is None:
+        return state
+    return _apply_decision_to_ready_state(state, command, state_dir=state_dir)
 
 
 def _resume_progress(state: dict[str, Any], *, state_dir: Path | None = None) -> dict[str, Any]:
@@ -1190,53 +1277,37 @@ def _restart_cycle(state: dict[str, Any], *, state_dir: Path, target_mode: str, 
 
 
 def _advance_without_decision(state: dict[str, Any], *, state_dir: Path) -> dict[str, Any]:
-    ready_state = _resume_progress(state, state_dir=state_dir)
-    ready_state = _blocked_decision_recovery_state(ready_state, state_dir=state_dir)
+    ready_state = state
+    ran_expensive_step = False
 
     def persist_running(next_state: dict[str, Any]) -> dict[str, Any]:
         saved = save_cycle(state_dir, next_state)
         return saved
 
-    result = run_one_expensive_step(ready_state, state_dir=state_dir, persist_state=persist_running)
-    if result.ran_step:
-        return result.state
-    if _run_arena_recovery_backend_once(ready_state, state_dir=state_dir):
-        return _resume_progress(ready_state, state_dir=state_dir)
-    return _resume_progress(ready_state, state_dir=state_dir)
+    for _ in range(6):
+        resumed = _resume_progress(ready_state, state_dir=state_dir)
+        resumed = _blocked_decision_recovery_state(resumed, state_dir=state_dir)
+        decided = _auto_record_structured_decision(resumed, state_dir=state_dir)
+        if decided != resumed:
+            ready_state = decided
+            continue
+        if ran_expensive_step:
+            return resumed
+        result = run_one_expensive_step(resumed, state_dir=state_dir, persist_state=persist_running)
+        if result.ran_step:
+            ran_expensive_step = True
+            ready_state = result.state
+            continue
+        if _run_arena_recovery_backend_once(resumed, state_dir=state_dir):
+            ready_state = resumed
+            continue
+        return _resume_progress(resumed, state_dir=state_dir)
+    return ready_state
 
 
 def _apply_decision(state: dict[str, Any], decision: str, *, state_dir: Path) -> dict[str, Any]:
     ready_state = _resume_progress(state, state_dir=state_dir)
-    if ready_state.get("stage") != STAGE_DECISION_PENDING:
-        raise ValueError("no decision is pending for this review cycle")
-    round_id, lane = _pending_decision(ready_state)
-    if _pending_grade_payload(ready_state, state_dir=state_dir) is not None:
-        raise ValueError("grade the arena round before recording a clean/findings decision")
-    round_payload = _round_by_id(ready_state, round_id)
-    blocked_slots = _round_blocked_slots(round_payload)
-    if bool(round_payload.get("review_blocked")) or blocked_slots:
-        slot_text = f" Blocked slots: {', '.join(blocked_slots)}." if blocked_slots else ""
-        raise ValueError(
-            f"cannot record a {decision} decision for blocked review round {round_id}.{slot_text} "
-            "Rerun or recover the review round before recording a decision."
-        )
-    reviewed_head = str(round_payload.get("reviewed_head") or "").strip() or None
-    gate = _round_gate(round_payload, lane)
-    if decision == DECISION_CLEAN:
-        if lane == FOLLOWUP_LANE:
-            return record_followup_clean(ready_state, round_id=round_id, reviewed_head=reviewed_head)
-        next_state = record_clean_decision(ready_state, round_id=round_id, lane=lane, reviewed_head=reviewed_head, gate=gate)
-        if gate:
-            _record_gate_decision(state_dir=state_dir, round_id=round_id, lane=lane, verdict=decision)
-        return next_state
-    if decision == DECISION_FINDINGS:
-        if lane == FOLLOWUP_LANE:
-            return _with_fix_action(record_followup_findings(ready_state, round_id=round_id, reviewed_head=reviewed_head))
-        next_state = _with_fix_action(record_findings_decision(ready_state, round_id=round_id, lane=lane, reviewed_head=reviewed_head, gate=gate))
-        if gate:
-            _record_gate_decision(state_dir=state_dir, round_id=round_id, lane=lane, verdict=decision)
-        return next_state
-    raise ValueError(f"unsupported decision: {decision}")
+    return _apply_decision_to_ready_state(ready_state, decision, state_dir=state_dir)
 
 
 def _has_validation_status(args: argparse.Namespace) -> bool:
@@ -1440,8 +1511,19 @@ def _action_payload(state: dict[str, Any], *, state_dir: Path) -> dict[str, Any]
         if grade:
             action = {
                 "cmd": grade,
-                "note": "Grade the arena round, then rerun this review id to choose clean or findings.",
+                "note": "Grade the arena round, then rerun this review id to continue.",
                 "next": _review_command(public_id, state_dir=state_dir),
+            }
+            return _with_deslop_done_action(state, action, public_id, state_dir=state_dir)
+        auto_decision = _auto_decision_command(state, state_dir=state_dir)
+        if auto_decision:
+            action = {
+                "cmd": _review_command(public_id, state_dir=state_dir),
+                "note": f"Structured {auto_decision} verdict is ready; rerun this review id to record it and continue.",
+                "override": {
+                    DECISION_CLEAN: _review_command(public_id, "--decision", DECISION_CLEAN, state_dir=state_dir),
+                    DECISION_FINDINGS: _review_command(public_id, "--decision", DECISION_FINDINGS, state_dir=state_dir),
+                },
             }
             return _with_deslop_done_action(state, action, public_id, state_dir=state_dir)
         action = {

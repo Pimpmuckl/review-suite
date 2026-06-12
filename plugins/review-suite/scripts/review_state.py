@@ -12,13 +12,17 @@ bootstrap_from_installed_cache(__file__)
 
 from review_suite_core import AxiArgumentParser, emit_error, emit_toon, format_command, inspect_workflow_status, resolve_repo_root
 from review_suite_core.orchestrator_profiles import RESTART_MODE_ORDER
-from review_gate import gate_signoff_action_payload, gate_signoff_decisions_by_round, pending_gate_signoff_records
+from review_gate import gate_signoff_action_payload, gate_signoff_decisions_by_round, load_gate_record, pending_gate_signoff_records
 from review_suite_local import (
     default_state_dir,
+    load_round,
     normalize_record_review_cwd_value,
     normalize_review_cwd_value,
     public_task_name,
     read_jsonl,
+    round_needs_caller_grade,
+    terminal_review_command,
+    unique_round_state_dirs,
 )
 
 GATE_TASK_TO_REVIEW_LANE = {
@@ -32,6 +36,7 @@ GATE_FINDINGS_RERUN_REASON = {
 ORCHESTRATOR_HIDDEN_STAGES = {"aborted", "dismissed"}
 ORCHESTRATOR_HEAD_CURRENT_STAGES = {"review-green", "local-green-handoff"}
 VALIDATION_READY_STATUSES = {"passed", "waived", "classified"}
+DECISION_COMMANDS = {"clean", "findings"}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -329,6 +334,155 @@ def _orchestrator_progress_label(state: dict[str, object]) -> str | None:
     return None
 
 
+def _round_by_id(state: dict[str, object], round_id: str) -> dict[str, object]:
+    for item in list(state.get("rounds") or []):
+        if isinstance(item, dict) and str(item.get("round_id") or "") == round_id:
+            return dict(item)
+    return {}
+
+
+def _orchestrator_review_state_dir(state_dir: Path) -> Path:
+    return state_dir / "orchestrator" / "review-rounds"
+
+
+def _round_state_dir_candidates(state_dir: Path, round_record: dict[str, object]) -> list[Path]:
+    candidates: list[Path] = []
+    round_state_dir = str(round_record.get("round_state_dir") or "").strip()
+    if round_state_dir:
+        candidates.append(Path(round_state_dir))
+    candidates.extend([_orchestrator_review_state_dir(state_dir), state_dir])
+    return unique_round_state_dirs(candidates)
+
+
+def _fallback_round_payload(round_record: dict[str, object]) -> dict[str, object]:
+    payload = dict(round_record)
+    runs: list[dict[str, object]] = []
+    for raw_run in list(payload.get("runs") or []):
+        if not isinstance(raw_run, dict):
+            continue
+        run = dict(raw_run)
+        if not str(run.get("review_status") or "").strip() and str(run.get("status") or "").strip():
+            run["review_status"] = run.get("status")
+        if not str(run.get("reviewer_output") or "").strip() and str(run.get("summary") or "").strip():
+            run["reviewer_output"] = run.get("summary")
+        if not str(run.get("reviewer_output_ref") or "").strip() and str(run.get("ref") or "").strip():
+            run["reviewer_output_ref"] = run.get("ref")
+        runs.append(run)
+    payload["runs"] = runs
+    return payload
+
+
+def _load_output_round_payload(state_dir: Path, round_record: dict[str, object]) -> dict[str, object]:
+    round_id = str(round_record.get("round_id") or "").strip()
+    if not round_id:
+        return _fallback_round_payload(round_record)
+    for candidate in _round_state_dir_candidates(state_dir, round_record):
+        try:
+            payload = load_round(candidate, round_id)
+            payload.setdefault("_round_state_dir", str(candidate))
+            return payload
+        except ValueError:
+            continue
+    gate_record = load_gate_record(state_dir, round_id)
+    if gate_record is not None:
+        return gate_record
+    return _fallback_round_payload(round_record)
+
+
+def _pending_grade_payload(state: dict[str, object], *, state_dir: Path) -> dict[str, object] | None:
+    pending = dict(state.get("pending_action") or {})
+    round_id = str(pending.get("round_id") or "").strip()
+    if str(pending.get("kind") or "") != "decision" or not round_id:
+        return None
+    round_record = _round_by_id(state, round_id)
+    if not bool(round_record.get("grading_required")):
+        return None
+    payload = _load_output_round_payload(state_dir, round_record)
+    if not bool(round_record.get("arena_round") or payload.get("arena_round")):
+        return None
+    if not round_needs_caller_grade(payload):
+        return None
+    return payload
+
+
+def _arena_grade_command(state: dict[str, object], *, state_dir: Path) -> str | None:
+    pending_payload = _pending_grade_payload(state, state_dir=state_dir)
+    if pending_payload is None:
+        return None
+    round_id = str(pending_payload.get("round_id") or "").strip()
+    task_id = str(pending_payload.get("task_id_hint") or "").strip()
+    if not task_id:
+        task_id = str(dict(state.get("identity") or {}).get("branch") or state.get("public_id") or "").strip()
+    grade_state_dir = Path(str(pending_payload.get("_round_state_dir") or state_dir))
+    return format_command(
+        [
+            sys.executable,
+            Path(__file__).resolve().with_name("review_suite_arena.py").as_posix(),
+            "grade",
+            "--round-id",
+            round_id,
+            "--task-id",
+            task_id,
+            "--winner",
+            "WINNER",
+            "--basis",
+            "BASIS",
+            "--state-dir",
+            str(grade_state_dir),
+        ]
+    )
+
+
+def _round_blocked(round_record: dict[str, object]) -> bool:
+    if bool(round_record.get("review_blocked")):
+        return True
+    for run in list(round_record.get("runs") or []):
+        if not isinstance(run, dict):
+            continue
+        if bool(run.get("blocked")) or bool(run.get("grade_blocked")):
+            return True
+    return False
+
+
+def _round_terminal_command(round_record: dict[str, object]) -> str | None:
+    if bool(round_record.get("grading_required")) and bool(round_record.get("needs_grade")) and not bool(round_record.get("graded")):
+        return None
+    commands: list[str] = []
+    for run in list(round_record.get("runs") or []):
+        if not isinstance(run, dict):
+            continue
+        status = str(run.get("review_status") or run.get("status") or "").strip()
+        if status and status != "completed":
+            return None
+        command = str(run.get("terminal_command") or "").strip().lower()
+        if not command:
+            command = terminal_review_command(str(run.get("reviewer_output") or ""))
+        if command not in DECISION_COMMANDS:
+            return None
+        commands.append(command)
+    if not commands:
+        return None
+    return "findings" if "findings" in commands else "clean"
+
+
+def _auto_decision_command(state: dict[str, object], *, state_dir: Path) -> str | None:
+    pending = dict(state.get("pending_action") or {})
+    if str(pending.get("kind") or "") != "decision":
+        return None
+    round_id = str(pending.get("round_id") or "").strip()
+    if not round_id:
+        return None
+    if _pending_grade_payload(state, state_dir=state_dir) is not None:
+        return None
+    round_record = _round_by_id(state, round_id)
+    if not round_record:
+        return None
+    round_payload = _load_output_round_payload(state_dir, round_record)
+    if _round_blocked(round_record) or _round_blocked(round_payload):
+        return None
+    return _round_terminal_command(round_payload)
+
+
 def _orchestrator_action(state: dict[str, object], public_id: str, *, state_dir: Path) -> dict[str, object]:
     stage = str(state.get("stage") or "").strip()
     superseded_by = state.get("superseded_by")
@@ -340,10 +494,29 @@ def _orchestrator_action(state: dict[str, object], public_id: str, *, state_dir:
                 "note": f"Review {public_id} was superseded by {replacement}.",
             }
     if stage == "decision-pending":
-        action: dict[str, object] = {
-            "cmd": _review_command(public_id, state_dir=state_dir, extra=("--decision", "clean")),
-            "alt": _review_command(public_id, state_dir=state_dir, extra=("--decision", "findings")),
-        }
+        grade = _arena_grade_command(state, state_dir=state_dir)
+        if grade:
+            action = {
+                "cmd": grade,
+                "note": "Grade the arena round, then rerun this review id to continue.",
+                "next": _review_command(public_id, state_dir=state_dir),
+            }
+        else:
+            auto_decision = _auto_decision_command(state, state_dir=state_dir)
+            if auto_decision:
+                action: dict[str, object] = {
+                    "cmd": _review_command(public_id, state_dir=state_dir),
+                    "note": f"Structured {auto_decision} verdict is ready; rerun this review id to record it and continue.",
+                    "override": {
+                        "clean": _review_command(public_id, state_dir=state_dir, extra=("--decision", "clean")),
+                        "findings": _review_command(public_id, state_dir=state_dir, extra=("--decision", "findings")),
+                    },
+                }
+            else:
+                action = {
+                    "cmd": _review_command(public_id, state_dir=state_dir, extra=("--decision", "clean")),
+                    "alt": _review_command(public_id, state_dir=state_dir, extra=("--decision", "findings")),
+                }
     elif stage == "fix-pending":
         action = {
             "cmd": _review_command(public_id, state_dir=state_dir),

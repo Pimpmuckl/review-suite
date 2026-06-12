@@ -133,6 +133,62 @@ def _stub_review(monkeypatch: pytest.MonkeyPatch, *round_ids: str) -> list[dict[
     return calls
 
 
+def _stub_review_with_terminal(
+    monkeypatch: pytest.MonkeyPatch,
+    *commands: str,
+    round_ids: tuple[str, ...] = ("phase_review-round-1", "phase_review-round-2"),
+) -> list[dict[str, object]]:
+    calls: list[dict[str, object]] = []
+    terminal_commands = list(commands) or ["clean"]
+
+    def fake_run(**kwargs: object) -> dict[str, object]:
+        calls.append(dict(kwargs))
+        index = len(calls) - 1
+        round_id = round_ids[min(index, len(round_ids) - 1)]
+        command = terminal_commands[min(index, len(terminal_commands) - 1)]
+        scope = kwargs.get("review_scope")
+        reviewed_head = str(scope.get("reviewed_head") if isinstance(scope, dict) else "head-1")
+        output = (
+            "No findings.\n\nReview result: clean"
+            if command == "clean"
+            else "P1: concrete regression.\n\nReview result: findings"
+        )
+        on_round_started = kwargs.get("on_round_started")
+        if callable(on_round_started):
+            on_round_started(
+                {
+                    "round_id": round_id,
+                    "round_state_dir": "state/orchestrator/review-rounds",
+                    "reviewed_head": reviewed_head,
+                }
+            )
+        return {
+            "round_id": round_id,
+            "lane": "review_t1",
+            "kind": "review",
+            "status": "completed",
+            "blocked": False,
+            "reviewed_head": reviewed_head,
+            "output_refs": [f"rollout://{round_id}/alpha"],
+            "runs": [
+                {
+                    "slot": "alpha",
+                    "status": "completed",
+                    "summary": output,
+                    "reviewer_output": output,
+                    "terminal_command": command,
+                    "ref": f"rollout://{round_id}/alpha",
+                    "blocked": False,
+                    "block": None,
+                }
+            ],
+            "round_state_dir": "state/orchestrator/review-rounds",
+        }
+
+    monkeypatch.setattr(orchestrator_runner, "run_review_step", fake_run)
+    return calls
+
+
 def _stub_followup(monkeypatch: pytest.MonkeyPatch, *round_ids: str) -> list[dict[str, object]]:
     calls: list[dict[str, object]] = []
     ids = list(round_ids) or ["followup-round-1"]
@@ -205,6 +261,73 @@ def _stub_gate(monkeypatch: pytest.MonkeyPatch, *round_ids: str) -> list[dict[st
                         "slot": "Alpha",
                         "status": "completed",
                         "summary": "No findings.",
+                        "blocked": False,
+                        "block": None,
+                        "ref": ref,
+                    }
+                ],
+            },
+            0,
+        )
+
+    monkeypatch.setattr(orchestrator_runner, "run_gate_step", fake_run)
+    return calls
+
+
+def _stub_gate_with_terminal(monkeypatch: pytest.MonkeyPatch, command: str, *round_ids: str) -> list[dict[str, object]]:
+    calls: list[dict[str, object]] = []
+    ids = list(round_ids) or ["phase_gate-round-1"]
+
+    def fake_run(**kwargs: object) -> tuple[dict[str, object], int]:
+        calls.append(dict(kwargs))
+        round_id = ids[min(len(calls) - 1, len(ids) - 1)]
+        state_dir = Path(kwargs["state_dir"])
+        review_cwd = Path(kwargs["review_cwd"])
+        review_scope = dict(kwargs.get("review_scope") or {})
+        ref = f"rollout://{round_id}/alpha"
+        output = (
+            "No findings.\n\nReview result: clean"
+            if command == "clean"
+            else "P1: concrete regression.\n\nReview result: findings"
+        )
+        record = {
+            "round_id": round_id,
+            "task_class": kwargs["gate_task_class"],
+            "task_id": kwargs.get("task_id") or round_id,
+            "review_cwd": str(review_cwd),
+            "review_cwd_normalized": str(review_cwd),
+            "review_scope": review_scope,
+            "signoff_status": "pending",
+            "signoff_required": True,
+            "runs": [
+                {
+                    "slot": "alpha",
+                    "review_status": "completed",
+                    "reviewer_output": output,
+                    "reviewer_output_ref": ref,
+                    "terminal_command": command,
+                    "grade_blocked": False,
+                }
+            ],
+        }
+        path = state_dir / "gate_runs.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record) + "\n")
+        return (
+            {
+                "round_id": round_id,
+                "task": "review_t2",
+                "status": "signoff_pending",
+                "blocked": False,
+                "signoff_required": True,
+                "runs": [
+                    {
+                        "slot": "Alpha",
+                        "status": "completed",
+                        "summary": output,
+                        "reviewer_output": output,
+                        "terminal_command": command,
                         "blocked": False,
                         "block": None,
                         "ref": ref,
@@ -473,6 +596,8 @@ def test_orchestrator_arena_helper_uses_pr_prompt_for_pr_review(
 
 
 def test_decision_action_surfaces_arena_grade_command(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    round_state_dir = state_dir / "orchestrator" / "review-rounds"
     state = {
         "public_id": "rvw_example",
         "stage": "decision-pending",
@@ -487,17 +612,29 @@ def test_decision_action_surfaces_arena_grade_command(tmp_path: Path) -> None:
                 "arena_round": True,
                 "status": "completed",
                 "task_id_hint": "feature/arena",
+                "round_state_dir": str(round_state_dir),
             }
         ],
     }
+    write_round(
+        round_state_dir,
+        {
+            "round_id": "arena-round-1",
+            "arena_round": True,
+            "status": "completed",
+            "task_id_hint": "feature/arena",
+            "runs": [{"slot": "alpha", "review_status": "completed", "grade_blocked": False}],
+        },
+    )
 
-    action = review._action_payload(state, state_dir=tmp_path / "state")
+    action = review._action_payload(state, state_dir=state_dir)
 
     assert action is not None
     assert "review_suite_arena.py grade" in str(action["cmd"])
     assert "--round-id arena-round-1" in str(action["cmd"])
     assert "--task-id feature/arena" in str(action["cmd"])
     assert "--state-dir" in str(action["cmd"])
+    assert str(round_state_dir) in str(action["cmd"])
     assert "--id rvw_example" in str(action["next"])
     assert "alt" not in action
 
@@ -1182,6 +1319,257 @@ def test_create_resume_and_id_reprint_use_one_pending_action(monkeypatch: pytest
     assert state["validation"]["ci"] == "classified"
     assert len(deslop_calls) == 1
     assert len(review_calls) == 2
+
+
+def test_id_auto_records_structured_clean_and_runs_next_step(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _stub_deslop(monkeypatch)
+    review_calls = _stub_review_with_terminal(monkeypatch, "clean", "clean")
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _use_compact_normal_profile(monkeypatch, state_dir)
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/auto-clean")
+    _commit_file(repo, "app.txt", "feature\n", "feature")
+
+    _, created = _run_review(
+        monkeypatch,
+        ["--mode", "normal", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)],
+    )
+    public_id = str(created["review"])
+
+    exit_code, first_step = _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+
+    assert exit_code == 0
+    assert "--decision" not in str(first_step["Action"]["cmd"])
+    assert len(review_calls) == 1
+    state = _cycle_payload(state_dir, public_id)
+    assert state["decisions"] == [
+        {
+            "round_id": "phase_review-round-1",
+            "lane": "review_t1",
+            "command": "clean",
+            "reviewed_head": state["rounds"][0]["reviewed_head"],
+        }
+    ]
+    assert state["pending_action"] == {"kind": "run-review-step", "step_index": 1, "step": "precision-signoff"}
+
+    exit_code, final = _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+
+    assert exit_code == 0
+    assert len(review_calls) == 2
+    _assert_github_handoff(
+        final["Action"],
+        public_id=public_id,
+        state_dir=state_dir,
+        blocked_by=["full_suite:unknown", "ci:unknown"],
+    )
+    state = _cycle_payload(state_dir, public_id)
+    assert [item["command"] for item in state["decisions"]] == ["clean", "clean"]
+    assert state["validation"]["review_green"] == "passed"
+
+
+def test_id_auto_records_structured_findings_before_fix_loop(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _stub_deslop(monkeypatch)
+    review_calls = _stub_review_with_terminal(monkeypatch, "findings", "clean")
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _use_compact_normal_profile(monkeypatch, state_dir)
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/auto-findings")
+    _commit_file(repo, "app.txt", "feature\n", "feature")
+
+    _, created = _run_review(
+        monkeypatch,
+        ["--mode", "normal", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)],
+    )
+    public_id = str(created["review"])
+
+    exit_code, findings = _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+
+    assert exit_code == 0
+    assert findings["Action"]["note"] == "Commit/amend valid fixes, then rerun this command."
+    state = _cycle_payload(state_dir, public_id)
+    assert state["decisions"][0]["command"] == "findings"
+    assert state["active_findings"]["status"] == "fix-pending"
+    assert len(review_calls) == 1
+
+    _commit_file(repo, "app.txt", "fixed\n", "fix findings")
+    exit_code, clean = _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+
+    assert exit_code == 0
+    assert "--decision" not in str(clean["Action"]["cmd"])
+    assert len(review_calls) == 2
+    state = _cycle_payload(state_dir, public_id)
+    assert [item["command"] for item in state["decisions"]] == ["findings", "clean"]
+    assert state["pending_action"] is None
+    assert state["validation"]["review_green"] == "passed"
+
+
+def test_auto_decision_requires_terminal_command(tmp_path: Path) -> None:
+    state = {
+        "stage": "decision-pending",
+        "pending_action": {"kind": "decision", "round_id": "round-1", "lane": "review_t1"},
+        "rounds": [
+            {
+                "round_id": "round-1",
+                "lane": "review_t1",
+                "status": "decision-pending",
+                "review_status": "completed",
+                "runs": [{"slot": "alpha", "status": "completed", "summary": "No findings."}],
+            }
+        ],
+    }
+
+    assert review._auto_decision_command(state, state_dir=tmp_path / "state") is None
+
+
+def test_auto_decision_rejects_blocked_terminal_round(tmp_path: Path) -> None:
+    state = {
+        "stage": "decision-pending",
+        "pending_action": {"kind": "decision", "round_id": "round-1", "lane": "review_t1"},
+        "rounds": [
+            {
+                "round_id": "round-1",
+                "lane": "review_t1",
+                "status": "decision-pending",
+                "review_status": "completed",
+                "runs": [
+                    {
+                        "slot": "alpha",
+                        "status": "completed",
+                        "terminal_command": "clean",
+                        "blocked": True,
+                    }
+                ],
+            }
+        ],
+    }
+
+    assert review._auto_decision_command(state, state_dir=tmp_path / "state") is None
+
+
+def test_auto_decision_waits_for_arena_grade(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    round_state_dir = state_dir / "orchestrator" / "review-rounds"
+    write_round(
+        round_state_dir,
+        {
+            "round_id": "arena-round-1",
+            "status": "completed",
+            "arena_round": True,
+            "runs": [
+                {
+                    "slot": "alpha",
+                    "review_status": "completed",
+                    "terminal_command": "clean",
+                    "grade_blocked": False,
+                }
+            ],
+        },
+    )
+    state = {
+        "stage": "decision-pending",
+        "pending_action": {"kind": "decision", "round_id": "arena-round-1", "lane": "review_t3"},
+        "rounds": [
+            {
+                "round_id": "arena-round-1",
+                "lane": "review_t3",
+                "status": "decision-pending",
+                "review_status": "completed",
+                "grading_required": True,
+                "arena_round": True,
+                "round_state_dir": str(round_state_dir),
+            }
+        ],
+    }
+
+    assert review._auto_decision_command(state, state_dir=state_dir) is None
+
+
+def test_pending_ungraded_arena_amend_still_records_findings(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    round_state_dir = state_dir / "orchestrator" / "review-rounds"
+    write_round(
+        round_state_dir,
+        {
+            "round_id": "arena-round-1",
+            "status": "completed",
+            "arena_round": True,
+            "runs": [
+                {
+                    "slot": "alpha",
+                    "review_status": "completed",
+                    "reviewer_output": "P1 finding.",
+                    "grade_blocked": False,
+                }
+            ],
+        },
+    )
+    state = {
+        "stage": "decision-pending",
+        "pending_action": {"kind": "decision", "round_id": "arena-round-1", "lane": "review_t3"},
+        "review_heads": {},
+        "rounds": [
+            {
+                "round_id": "arena-round-1",
+                "lane": "review_t3",
+                "status": "decision-pending",
+                "reviewed_head": "head-1",
+                "review_status": "completed",
+                "grading_required": True,
+                "arena_round": True,
+                "round_state_dir": str(round_state_dir),
+            }
+        ],
+        "decisions": [],
+        "active_findings": None,
+    }
+
+    fixed = review._auto_record_pending_decision_fix(state, current_head_value="head-2", state_dir=state_dir)
+
+    assert fixed["decisions"][0]["command"] == "findings"
+    assert fixed["decisions"][0]["reviewed_head"] == "head-1"
+    assert fixed["review_heads"]["last_fix_head"] == "head-2"
+
+
+def test_auto_gate_findings_records_same_signoff_shape_as_manual(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    def run_case(state_dir: Path, *, automatic: bool) -> list[dict[str, object]]:
+        _stub_deslop(monkeypatch)
+        _stub_review_with_terminal(monkeypatch, "clean")
+        if automatic:
+            _stub_gate_with_terminal(monkeypatch, "findings")
+        else:
+            _stub_gate(monkeypatch)
+        repo = state_dir.parent / ("repo-auto" if automatic else "repo-manual")
+        config = _use_compact_normal_profile(monkeypatch, state_dir)
+        config["orchestrator"]["profiles"]["stable"]["normal"]["steps"].append(
+            {"name": "local-signoff", "kind": "gate", "gate": "phase_gate"}
+        )
+        _init_repo(repo)
+        _commit_file(repo, "app.txt", "base\n", "base")
+        _git(repo, "checkout", "-b", f"feature/gate-{'auto' if automatic else 'manual'}")
+        _commit_file(repo, "app.txt", "feature\n", "feature")
+
+        _, created = _run_review(
+            monkeypatch,
+            ["--mode", "normal", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)],
+        )
+        public_id = str(created["review"])
+        _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+        _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+        _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+        if not automatic:
+            _run_review(monkeypatch, ["--id", public_id, "--decision", "findings", "--state-dir", str(state_dir)])
+        return _gate_signoff_decisions(state_dir)
+
+    auto = run_case(tmp_path / "auto-state", automatic=True)
+    manual = run_case(tmp_path / "manual-state", automatic=False)
+
+    assert [(item["round_id"], item["verdict"], item["workflow_anchor_recorded"]) for item in auto] == [
+        (item["round_id"], item["verdict"], item["workflow_anchor_recorded"]) for item in manual
+    ]
 
 
 def test_wsl_flag_persists_to_orchestrated_steps(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
