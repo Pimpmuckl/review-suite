@@ -2,10 +2,17 @@ from __future__ import annotations
 
 import json
 import os
+import time
+from contextlib import contextmanager
 import uuid
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
+
+if os.name == "nt":
+    import msvcrt
+else:
+    import fcntl
 
 
 ORCHESTRATOR_INDEX_SCHEMA_VERSION = 1
@@ -71,6 +78,54 @@ def _write_index(state_dir: Path, index: dict[str, Any]) -> None:
     _atomic_write_json(index_path(state_dir), index)
 
 
+def _try_lock_file(handle) -> bool:
+    try:
+        if os.name == "nt":
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return False
+    return True
+
+
+def _unlock_file(handle) -> None:
+    if os.name == "nt":
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+    else:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+@contextmanager
+def orchestrator_store_lock(
+    *,
+    state_dir: Path,
+    name: str,
+    timeout_seconds: int = 30,
+    poll_seconds: float = 0.1,
+):
+    locks_dir = state_dir / ".locks"
+    locks_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = locks_dir / f"{name}.lock"
+    with lock_path.open("a+b") as handle:
+        if handle.tell() == 0:
+            handle.write(b"\0")
+            handle.flush()
+        deadline = time.monotonic() + timeout_seconds
+        while True:
+            if _try_lock_file(handle):
+                break
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"timed out waiting for lock: {lock_path}")
+            time.sleep(poll_seconds)
+        try:
+            yield
+        finally:
+            _unlock_file(handle)
+
+
 def _public_id_candidates(cycle_key: str) -> list[str]:
     digest = cycle_key.removeprefix("orc-")
     lengths = (8, 10, 12, 16, len(digest))
@@ -78,19 +133,20 @@ def _public_id_candidates(cycle_key: str) -> list[str]:
 
 
 def public_id_for_cycle_key(state_dir: Path, cycle_key: str) -> str:
-    index = load_index(state_dir)
-    existing = str(index["cycle_keys"].get(cycle_key) or "")
-    if existing:
-        if index["ids"].get(existing) != cycle_key:
-            index["ids"][existing] = cycle_key
-            _write_index(state_dir, index)
-        return existing
-    for candidate in _public_id_candidates(cycle_key):
-        if candidate not in index["ids"]:
-            index["ids"][candidate] = cycle_key
-            index["cycle_keys"][cycle_key] = candidate
-            _write_index(state_dir, index)
-            return candidate
+    with orchestrator_store_lock(state_dir=state_dir, name="orchestrator-index"):
+        index = load_index(state_dir)
+        existing = str(index["cycle_keys"].get(cycle_key) or "")
+        if existing:
+            if index["ids"].get(existing) != cycle_key:
+                index["ids"][existing] = cycle_key
+                _write_index(state_dir, index)
+            return existing
+        for candidate in _public_id_candidates(cycle_key):
+            if candidate not in index["ids"]:
+                index["ids"][candidate] = cycle_key
+                index["cycle_keys"][cycle_key] = candidate
+                _write_index(state_dir, index)
+                return candidate
     raise ValueError(f"could not allocate public id for cycle key: {cycle_key}")
 
 

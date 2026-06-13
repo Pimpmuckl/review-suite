@@ -150,7 +150,11 @@ python -m pytest plugins/review-suite/tests -q
 Compile scripts:
 
 ```powershell
-python -m py_compile plugins/review-suite/scripts/*.py plugins/review-suite/scripts/review_suite_core/*.py
+$files = @(
+  Get-ChildItem -LiteralPath plugins/review-suite/scripts -Filter *.py -File
+  Get-ChildItem -LiteralPath plugins/review-suite/scripts/review_suite_core -Filter *.py -File
+)
+python -m py_compile @($files.FullName)
 ```
 
 Sync the local installed plugin cache after source edits. When the git marketplace source clone exists, the default command syncs that clone too so local plugin add/refresh paths see the same files:
