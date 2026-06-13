@@ -14,6 +14,7 @@ Use for PR-scoped GitHub review.
 `<review-suite-plugin-root>` is the installed Codex plugin cache root, not `%USERPROFILE%\.codex\.tmp\marketplaces\review-suite`.
 
 Rules:
+- Run after local Review Suite review reaches the GitHub handoff action for the same id.
 - Wait for wrapper output; do not post another request.
 - Code only valid findings.
 - Record the GitHub result on the owning local review id: `review.py --id <id> --github-result clean|findings`, or `--github-result waived --github-note "why"` when GitHub cannot run or no-GitHub is approved.
