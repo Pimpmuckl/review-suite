@@ -3869,7 +3869,9 @@ def test_stale_decision_renders_current_action_without_mutating_cycle(
     assert exit_code == 0
     assert stale["status"] == "decision_not_pending"
     assert stale["decision"] == "findings"
-    assert "follow Action.cmd" in str(stale["note"])
+    assert "already advanced past that decision" in str(stale["note"])
+    assert "Continue with Action.cmd" in str(stale["note"])
+    assert "Action.override" in str(stale["note"])
     _assert_github_handoff(
         stale["Action"],
         public_id=public_id,
@@ -3933,6 +3935,8 @@ def test_stale_decision_persists_auto_resume_transition(
     assert exit_code == 0
     assert stale["status"] == "decision_not_pending"
     assert stale["decision"] == "clean"
+    assert "Continue with Action.cmd" in str(stale["note"])
+    assert "Action.override" in str(stale["note"])
     assert "--decision" not in str(stale["Action"]["cmd"])
     state = _cycle_payload(state_dir, public_id)
     assert state["stage"] == "created"

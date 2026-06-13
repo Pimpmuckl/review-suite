@@ -1896,7 +1896,10 @@ def _render_stale_decision_recovery(state: dict[str, Any], *, state_dir: Path, d
         "review": state.get("public_id"),
         "status": "decision_not_pending",
         "decision": decision,
-        "note": "No decision is pending; follow Action.cmd for the current review state.",
+        "note": (
+            "The review already advanced past that decision. Continue with Action.cmd; "
+            "do not add --decision unless Action.override asks for it."
+        ),
     }
     action = _action_payload(state, state_dir=state_dir)
     if action:
