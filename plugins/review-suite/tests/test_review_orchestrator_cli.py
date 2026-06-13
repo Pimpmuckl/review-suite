@@ -2912,6 +2912,67 @@ def test_mode_rerun_with_multiple_matching_cycles_requires_id(
     assert str(second["review"]) in messages[-1]
 
 
+def test_mode_rerun_fresh_token_does_not_fallback_to_changed_cycle_after_exact_match(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _stub_deslop(monkeypatch)
+    _stub_review(monkeypatch, "phase_review-round-1", "phase_review-round-2", "phase_review-round-3")
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _use_compact_normal_profile(monkeypatch, state_dir)
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/fresh-token-exact-guard")
+    _commit_file(repo, "app.txt", "feature\n", "feature")
+
+    _, changed_cycle = _run_review(
+        monkeypatch,
+        ["--mode", "normal", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)],
+    )
+    _, exact_cycle = _run_review(
+        monkeypatch,
+        [
+            "--mode",
+            "normal",
+            "--cd",
+            str(repo),
+            "--base",
+            "main",
+            "--fresh-token",
+            "exact-ladder",
+            "--state-dir",
+            str(state_dir),
+        ],
+    )
+    assert changed_cycle["review"] != exact_cycle["review"]
+
+    amended_head = _amend_file(repo, "app.txt", "feature\ncurrent exact cycle\n")
+    exact_state = _cycle_payload(state_dir, str(exact_cycle["review"]))
+    exact_state["identity"]["head"] = amended_head
+    exact_state["review_heads"]["last_reviewed_head"] = amended_head
+    _write_cycle_payload(state_dir, str(exact_cycle["review"]), exact_state)
+
+    _, fresh = _run_review(
+        monkeypatch,
+        [
+            "--mode",
+            "normal",
+            "--cd",
+            str(repo),
+            "--base",
+            "main",
+            "--fresh-token",
+            "third-ladder",
+            "--state-dir",
+            str(state_dir),
+        ],
+    )
+
+    assert fresh["review"] not in {changed_cycle["review"], exact_cycle["review"]}
+    assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 3
+
+
 def test_id_rerun_after_pending_decision_amend_auto_verifies_same_cycle(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -2952,6 +3013,68 @@ def test_id_rerun_after_pending_decision_amend_auto_verifies_same_cycle(
     assert state["review_heads"]["last_fix_head"] == amended_head
     assert state["rounds"][1]["reviewed_head"] == amended_head
     assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 1
+
+
+def test_mode_rerun_after_pending_decision_amend_ignores_unclaimed_fresh_token(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    deslop_calls = _stub_deslop(monkeypatch)
+    review_calls = _stub_review(monkeypatch, "phase_review-round-1", "phase_review-round-2")
+    followup_calls = _stub_followup(monkeypatch)
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _use_compact_normal_profile(monkeypatch, state_dir, include_deep=True)
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/deep-fresh-amend")
+    original_head = _commit_file(repo, "app.txt", "feature\n", "feature")
+
+    _, created = _run_review(
+        monkeypatch,
+        ["--mode", "deep", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)],
+    )
+    public_id = str(created["review"])
+    _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+    _run_review(monkeypatch, ["--id", public_id, "--decision", "findings", "--state-dir", str(state_dir)])
+    assert len(deslop_calls) == 1
+    assert len(review_calls) == 1
+
+    amended_head = _amend_file(repo, "app.txt", "feature\nfix pending finding\n")
+    assert amended_head != original_head
+
+    exit_code, resumed = _run_review(
+        monkeypatch,
+        [
+            "--mode",
+            "deep",
+            "--cd",
+            str(repo),
+            "--base",
+            "main",
+            "--fresh-token",
+            "codex-final-20260613-deadbee",
+            "--state-dir",
+            str(state_dir),
+        ],
+    )
+
+    assert exit_code == 0
+    assert resumed["review"] == public_id
+    assert "--decision clean" in str(resumed["Action"]["cmd"])
+    assert len(deslop_calls) == 1
+    assert len(review_calls) == 1
+    assert len(followup_calls) == 1
+    followup_scope = followup_calls[0]["review_scope"]
+    assert followup_scope["findings_reviewed_head"] == original_head
+    assert "commit" not in followup_scope
+    assert "commit_end" not in followup_scope
+    assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 1
+    state = _cycle_payload(state_dir, public_id)
+    assert state["review_heads"]["last_fix_head"] == amended_head
+    assert state["review_heads"]["last_followup_head"] == amended_head
+    assert state["rounds"][1]["lane"] == "review-followup"
+    assert state["rounds"][1]["reviewed_head"] == amended_head
 
 
 def test_id_rerun_after_pending_decision_equivalent_base_drift_updates_reviewed_head(
@@ -3460,7 +3583,7 @@ def test_id_rerun_after_followup_pending_amend_preserves_followup_findings(
     tmp_path: Path,
 ) -> None:
     _stub_deslop(monkeypatch)
-    _stub_review(monkeypatch, "phase_review-round-1")
+    review_calls = _stub_review(monkeypatch, "phase_review-round-1", "phase_review-round-2")
     followup_calls = _stub_followup(monkeypatch, "followup-round-1", "followup-round-2")
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
@@ -3492,10 +3615,19 @@ def test_id_rerun_after_followup_pending_amend_preserves_followup_findings(
     assert verification["review"] == public_id
     assert "--decision clean" in str(verification["Action"]["cmd"])
     assert len(followup_calls) == 2
+    assert len(review_calls) == 1
+    followup_scope = followup_calls[1]["review_scope"]
+    assert followup_scope["findings_reviewed_head"] == followup_head
+    assert "commit" not in followup_scope
+    assert "commit_end" not in followup_scope
     state = _cycle_payload(state_dir, public_id)
     assert state["decisions"][1]["command"] == "findings"
     assert state["decisions"][1]["round_id"] == "followup-round-1"
+    assert state["review_heads"]["last_fix_head"] == amended_head
     assert state["review_heads"]["last_followup_head"] == amended_head
+    assert state["rounds"][2]["round_id"] == "followup-round-2"
+    assert state["rounds"][2]["lane"] == "review-followup"
+    assert state["rounds"][2]["reviewed_head"] == amended_head
     assert state["active_findings"]["round_id"] == "followup-round-1"
     assert state["active_findings"]["previous_round_id"] == "phase_review-round-1"
     assert state["active_findings"]["followup_round_id"] == "followup-round-2"

@@ -1225,6 +1225,16 @@ def _with_equivalent_base_drift_review_head(
     return next_state
 
 
+def _fresh_token_claims_budget_exhausted_continuation(state: dict[str, Any], fresh_token: str | None) -> bool:
+    token = str(fresh_token or "").strip()
+    if not token:
+        return False
+    pending = dict(state.get("pending_action") or {})
+    if str(pending.get("kind") or "").strip() != "review-round-budget-exhausted":
+        return False
+    return _fresh_review_token(state) == token
+
+
 def _continuation_head_match_kind(state: dict[str, Any], *, review_root: Path, head: str) -> str | None:
     identity = dict(state.get("identity") or {})
     recorded_head = str(identity.get("head") or "").strip()
@@ -1262,10 +1272,12 @@ def _compatible_continuation_cycle(
     head: str,
     merge_base_head: str,
     effective_mode: str,
+    fresh_token: str | None = None,
 ) -> dict[str, Any] | None:
     normalized_cwd = normalize_cwd(str(review_root))
     normalized_branch = _normalized_branch(branch)
     candidates: list[tuple[float, str, dict[str, Any], dict[str, Any] | None]] = []
+    fresh_token_forces_new_cycle = False
     directory = cycles_dir(state_dir)
     if not directory.exists():
         return None
@@ -1320,7 +1332,15 @@ def _compatible_continuation_cycle(
         match_kind = _continuation_head_match_kind(state, review_root=review_root, head=head)
         if match_kind is None:
             continue
+        if _fresh_token_claims_budget_exhausted_continuation(state, fresh_token):
+            fresh_token_forces_new_cycle = True
+            continue
+        if str(fresh_token or "").strip() and match_kind == "exact":
+            fresh_token_forces_new_cycle = True
+            continue
         candidates.append((path.stat().st_mtime, match_kind, state, base_drift))
+    if fresh_token_forces_new_cycle:
+        return None
     if not candidates:
         return None
     exact_candidates = [candidate for candidate in candidates if candidate[1] == "exact"]
@@ -1354,18 +1374,18 @@ def _create_or_resume_cycle(*, args: argparse.Namespace, state_dir: Path) -> dic
     merge_base_head = merge_base(review_root, base, "HEAD")
     config = load_config(state_dir)
     resolution = resolve_orchestrator_profile(config, mode=str(args.mode), selection=_configured_selection(config))
-    if not args.fresh_token:
-        continuation = _compatible_continuation_cycle(
-            state_dir=state_dir,
-            review_root=review_root,
-            base=base,
-            branch=branch,
-            head=head,
-            merge_base_head=merge_base_head,
-            effective_mode=resolution.effective_mode,
-        )
-        if continuation is not None:
-            return continuation
+    continuation = _compatible_continuation_cycle(
+        state_dir=state_dir,
+        review_root=review_root,
+        base=base,
+        branch=branch,
+        head=head,
+        merge_base_head=merge_base_head,
+        effective_mode=resolution.effective_mode,
+        fresh_token=args.fresh_token,
+    )
+    if continuation is not None:
+        return continuation
     state = create_cycle(
         cwd=review_root,
         base=base,

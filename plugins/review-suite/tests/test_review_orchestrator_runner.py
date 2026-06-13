@@ -998,6 +998,7 @@ def test_runner_runs_real_followup_once_from_followup_pending(monkeypatch, tmp_p
     monkeypatch.setattr(orchestrator_runner, "current_head", lambda cwd: "head-2")
     monkeypatch.setattr(orchestrator_runner, "merge_base", lambda cwd, left, right="HEAD": "base-1")
     monkeypatch.setattr(orchestrator_runner, "has_committed_diff", lambda cwd, start_ref, end_ref="HEAD": True)
+    monkeypatch.setattr(orchestrator_runner, "is_ancestor", lambda cwd, ancestor_ref, descendant_ref: True)
     monkeypatch.setattr(orchestrator_runner, "dirty_worktree_scope", lambda cwd, base, merge_base_ref=None: {"dirty_paths": []})
     state = _cycle(tmp_path, mode="deep", deslop_enabled=False, step_names=("broad-discovery", "precision-signoff"))
     pending = mark_review_step_pending(
@@ -1040,7 +1041,49 @@ def test_runner_runs_real_followup_once_from_followup_pending(monkeypatch, tmp_p
     assert followup_calls[0]["review_scope"]["base_upstream"] == "origin/main"
     assert followup_calls[0]["review_scope"]["base_ref_stale"] is True
     assert "Review this follow-up diff" in str(followup_calls[0]["prompt"])
+    assert "The review target is interdiff `head-1..head-2`." in str(followup_calls[0]["prompt"])
     assert "Source review round phase_review-round-1" in str(followup_calls[0]["prompt"])
+
+
+def test_runner_runs_rewritten_followup_against_branch_scope(monkeypatch, tmp_path: Path) -> None:
+    followup_calls = _stub_followup(monkeypatch)
+    monkeypatch.setattr(orchestrator_runner, "current_head", lambda cwd: "head-2")
+    monkeypatch.setattr(orchestrator_runner, "merge_base", lambda cwd, left, right="HEAD": "base-1")
+    monkeypatch.setattr(orchestrator_runner, "has_committed_diff", lambda cwd, start_ref, end_ref="HEAD": True)
+    monkeypatch.setattr(orchestrator_runner, "is_ancestor", lambda cwd, ancestor_ref, descendant_ref: False)
+    monkeypatch.setattr(orchestrator_runner, "dirty_worktree_scope", lambda cwd, base, merge_base_ref=None: {"dirty_paths": []})
+    state = _cycle(tmp_path, mode="deep", deslop_enabled=False, step_names=("broad-discovery", "precision-signoff"))
+    pending = mark_review_step_pending(
+        state,
+        round_id="phase_review-round-1",
+        lane="review_t1",
+        step_index=0,
+        step_name="broad-discovery",
+        reviewed_head="head-1",
+    )
+    findings = record_findings_decision(pending, round_id="phase_review-round-1", lane="review_t1", reviewed_head="head-1")
+    fixed = mark_fix_detected(findings, head="head-2")
+    fixed["identity"]["base"] = "origin/main"
+    fixed["identity"]["requested_base"] = "main"
+
+    result = orchestrator_runner.run_one_expensive_step(fixed, state_dir=tmp_path / "state")
+
+    assert result.ran_step is True
+    assert result.step == "review-followup"
+    assert result.state["stage"] == STAGE_DECISION_PENDING
+    assert len(followup_calls) == 1
+    scope = followup_calls[0]["review_scope"]
+    assert scope["base"] == "origin/main"
+    assert scope["branch_base"] == "origin/main"
+    assert scope["reviewed_head"] == "head-2"
+    assert scope["findings_reviewed_head"] == "head-1"
+    assert "commit" not in scope
+    assert "commit_end" not in scope
+    assert "The review target is branch diff `origin/main..head-2` after fixes for findings from `head-1`." in str(
+        followup_calls[0]["prompt"]
+    )
+    assert "interdiff `head-1..head-2`" not in str(followup_calls[0]["prompt"])
+    assert "no longer an ancestor" in str(followup_calls[0]["prompt"])
 
 
 def test_runner_discovery_findings_fix_advances_with_findings_context(monkeypatch, tmp_path: Path) -> None:
