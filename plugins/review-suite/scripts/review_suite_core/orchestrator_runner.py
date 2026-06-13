@@ -530,9 +530,16 @@ def _output_refs_from_payload(payload: dict[str, object]) -> list[str]:
     return refs
 
 
-def _arena_recovery_review_result(payload: dict[str, object], *, lane: str, state_dir: Path) -> dict[str, object]:
+def _arena_recovery_review_result(
+    payload: dict[str, object],
+    *,
+    lane: str,
+    state_dir: Path,
+    grading_required: bool,
+    arena_round: bool,
+) -> dict[str, object]:
     review_scope = dict(payload.get("review_scope") or {})
-    return {
+    result: dict[str, object] = {
         "round_id": str(payload.get("round_id") or ""),
         "lane": lane,
         "kind": "review",
@@ -542,11 +549,15 @@ def _arena_recovery_review_result(payload: dict[str, object], *, lane: str, stat
         "output_refs": _output_refs_from_payload(payload),
         "runs": [dict(run) for run in list(payload.get("runs") or []) if isinstance(run, dict)],
         "round_state_dir": str(state_dir),
-        "grading_required": True,
-        "arena_round": True,
-        "needs_grade": bool(round_needs_caller_grade(dict(payload))),
-        "graded": bool(str(payload.get("graded_at") or "").strip()),
     }
+    if grading_required:
+        result["grading_required"] = True
+    if arena_round:
+        result["arena_round"] = True
+    if grading_required or arena_round:
+        result["needs_grade"] = bool(round_needs_caller_grade(dict(payload)))
+        result["graded"] = bool(str(payload.get("graded_at") or "").strip())
+    return result
 
 
 def run_review_step(**kwargs: Any) -> dict[str, object]:
@@ -826,7 +837,30 @@ def _recover_blocked_arena_once(state: dict[str, Any], *, state_dir: Path) -> Or
     fix_context = fix_verification if isinstance(fix_verification, dict) else None
     post_findings_rerun = bool(pending.get("post_findings_rerun"))
     target_round_id, payload, target_state_dir = _latest_arena_recovery_payload(state, state_dir=state_dir, round_id=round_id)
+    original_round = _round_by_id(state, round_id)
+    original_profile = dict(original_round.get("profile_step") or {})
+    arena_round = bool(
+        pending.get("arena_round")
+        or original_round.get("arena_round")
+        or original_profile.get("arena_round")
+        or payload.get("arena_round")
+    )
+    grading_required = arena_round and bool(
+        pending.get("grading_required") or original_round.get("grading_required") or payload.get("grading_required")
+    )
     status = str(payload.get("status") or "").strip()
+    if not arena_round and (payload_has_blocked_runs(dict(payload)) or status not in {"", "completed", "dismissed"}):
+        return OrchestratorRunnerResult(
+            mark_review_step_retry(
+                state,
+                step_index=step_index,
+                step_name=step_name,
+                post_findings_rerun=post_findings_rerun,
+                fix_verification=fix_context,
+            ),
+            ran_step=True,
+            step="review-recovery",
+        )
     if status == "dismissed" or bool(payload.get("dismissed")):
         return OrchestratorRunnerResult(
             mark_review_step_retry(
@@ -851,14 +885,20 @@ def _recover_blocked_arena_once(state: dict[str, Any], *, state_dir: Path) -> Or
                 step_index=step_index,
                 step_name=step_name,
                 reviewed_head=reviewed_head,
-                grading_required=True,
-                arena_round=True,
+                grading_required=grading_required,
+                arena_round=arena_round,
                 post_findings_rerun=post_findings_rerun,
                 fix_verification=fix_context,
             )
             next_state = _attach_review_result(
                 next_state,
-                _arena_recovery_review_result(payload, lane=lane, state_dir=target_state_dir),
+                _arena_recovery_review_result(
+                    payload,
+                    lane=lane,
+                    state_dir=target_state_dir,
+                    grading_required=grading_required,
+                    arena_round=arena_round,
+                ),
             )
             return OrchestratorRunnerResult(
                 _mark_arena_recovery(
@@ -880,14 +920,20 @@ def _recover_blocked_arena_once(state: dict[str, Any], *, state_dir: Path) -> Or
         step_index=step_index,
         step_name=step_name,
         reviewed_head=reviewed_head,
-        grading_required=True,
-        arena_round=True,
+        grading_required=grading_required,
+        arena_round=arena_round,
         post_findings_rerun=post_findings_rerun,
         fix_verification=fix_context,
     )
     next_state = _attach_review_result(
         next_state,
-        _arena_recovery_review_result(payload, lane=lane, state_dir=target_state_dir),
+        _arena_recovery_review_result(
+            payload,
+            lane=lane,
+            state_dir=target_state_dir,
+            grading_required=grading_required,
+            arena_round=arena_round,
+        ),
     )
     return OrchestratorRunnerResult(next_state, ran_step=True, step="arena-recovery")
 

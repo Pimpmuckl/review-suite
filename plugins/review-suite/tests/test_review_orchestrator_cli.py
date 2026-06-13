@@ -650,6 +650,8 @@ def test_decision_action_surfaces_arena_grade_command(tmp_path: Path) -> None:
     assert "review_suite_arena.py grade" in str(action["cmd"])
     assert "--round-id arena-round-1" in str(action["cmd"])
     assert "--task-id feature/arena" in str(action["cmd"])
+    assert "review_suite_arena.py grade" in str(action["tie_clean"])
+    assert "--winner tie --basis tie_clean" in str(action["tie_clean"])
     assert "--state-dir" in str(action["cmd"])
     assert str(round_state_dir) in str(action["cmd"])
     assert "--id rvw_example" in str(action["next"])
@@ -1067,12 +1069,75 @@ def test_action_payload_surfaces_recovery_for_blocked_decision_round(tmp_path: P
     assert "review.py" in str(action["cmd"])
     assert "--id rvw_example" in str(action["cmd"])
     assert "review_suite_arena.py" not in str(action)
+    assert str(action["note"]) == "Review round blocked; rerun this review id to retry review-recovery."
+    assert "Arena" not in str(action["note"])
     assert "dismiss" not in action
     assert "--decision" not in str(action["cmd"])
     assert str(tmp_path / "state") not in str(action["cmd"])
 
 
-def test_advance_moves_blocked_decision_round_into_arena_recovery(
+def test_recovered_normal_review_action_auto_continues_without_grade(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    round_state_dir = state_dir / "orchestrator" / "review-rounds"
+    state = {
+        "public_id": "rvw_example",
+        "stage": "retry-requested",
+        "pending_action": {
+            "kind": "arena-blocked",
+            "round_id": "blocked-round-1",
+            "lane": "review_t1",
+            "step_index": 1,
+            "step": "precision-signoff",
+            "round_state_dir": str(round_state_dir),
+        },
+        "identity": {"branch": "feature/blocked", "base": "main", "cwd": str(tmp_path)},
+        "deslop": {"tracked": False, "status": "closed"},
+        "rounds": [
+            {
+                "round_id": "blocked-round-1",
+                "lane": "review_t1",
+                "review_blocked": True,
+                "status": "completed",
+                "round_state_dir": str(round_state_dir),
+                "runs": [{"slot": "bravo", "grade_blocked": True}],
+                "profile_step": {"name": "precision-signoff", "index": 1, "rerun_on_findings": True},
+            }
+        ],
+        "review_plan": {
+            "steps": [
+                {"name": "broad-discovery", "count": 4, "model": "gpt-5.4", "reasoning_effort": "medium"},
+                {"name": "precision-signoff", "count": 2, "model": "gpt-5.5", "reasoning_effort": "medium", "rerun_on_findings": True},
+            ]
+        },
+    }
+    write_round(
+        round_state_dir,
+        {
+            "round_id": "blocked-round-2",
+            "rerolled_from_round_id": "blocked-round-1",
+            "status": "completed",
+            "review_scope": {"reviewed_head": "head-1"},
+            "runs": [
+                {"slot": "alpha", "review_status": "completed", "terminal_command": "clean", "grade_blocked": False},
+                {"slot": "bravo", "review_status": "completed", "terminal_command": "clean", "grade_blocked": False},
+            ],
+        },
+    )
+
+    result = orchestrator_runner.run_one_expensive_step(state, state_dir=state_dir)
+    action = review._action_payload(result.state, state_dir=state_dir)
+
+    assert result.state["pending_action"]["round_id"] == "blocked-round-2"
+    assert "arena_round" not in result.state["pending_action"]
+    assert "grading_required" not in result.state["pending_action"]
+    assert action is not None
+    assert "review_suite_arena.py grade" not in str(action)
+    assert "--id rvw_example" in str(action["cmd"])
+    assert "--decision" not in str(action["cmd"])
+    assert "Structured clean verdict" in str(action["note"])
+
+
+def test_advance_moves_blocked_decision_round_into_step_retry(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -1101,7 +1166,7 @@ def test_advance_moves_blocked_decision_round_into_arena_recovery(
                 "status": "completed",
                 "round_state_dir": str(round_state_dir),
                 "runs": [{"slot": "alpha", "grade_blocked": True}],
-                "profile_step": {"name": "arena-pr-review", "index": 3},
+                "profile_step": {"name": "precision-signoff", "index": 1, "rerun_on_findings": True},
             }
         ],
     }
@@ -1119,11 +1184,12 @@ def test_advance_moves_blocked_decision_round_into_arena_recovery(
 
     advanced = review._advance_without_decision(state, state_dir=tmp_path / "state")
 
-    assert advanced["stage"] == "retry-requested"
-    assert advanced["pending_action"]["kind"] == "arena-blocked"
-    assert advanced["pending_action"]["round_id"] == "blocked-round-1"
-    assert advanced["pending_action"]["step"] == "arena-pr-review"
-    assert advanced["pending_action"]["step_index"] == 3
+    assert advanced["stage"] == "created"
+    assert advanced["pending_action"]["kind"] == "run-review-step"
+    assert advanced["pending_action"]["step"] == "precision-signoff"
+    assert advanced["pending_action"]["step_index"] == 1
+    assert "arena_round" not in advanced["pending_action"]
+    assert "grading_required" not in advanced["pending_action"]
     assert advanced["pending_action"]["post_findings_rerun"] is True
     assert advanced["pending_action"]["fix_verification"] == {
         "source_round_id": "findings-round-1",
@@ -1131,8 +1197,7 @@ def test_advance_moves_blocked_decision_round_into_arena_recovery(
         "findings_reviewed_head": "head-before-fix",
         "fix_head": "head-after-fix",
     }
-    assert backend_calls
-    assert "reroll-slot" in backend_calls[0]
+    assert backend_calls == []
 
 
 def test_legacy_non_arena_grading_required_round_does_not_use_arena_grade_gate(tmp_path: Path) -> None:

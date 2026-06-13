@@ -3422,9 +3422,9 @@ def build_record_from_grade(
     else:
         winner_variant_id = winner
     if winner_variant_id == "tie" and not basis.startswith("tie_"):
-        raise ValueError("tie winner requires tie_clean or tie_both_useful basis")
+        raise ValueError("winner tie requires --basis tie_clean or tie_both_useful")
     if winner_variant_id != "tie" and basis.startswith("tie_"):
-        raise ValueError("non-tie winner requires a non-tie basis")
+        raise ValueError(f"{basis} requires --winner tie; use alpha or bravo only with non-tie basis values")
     recorded_at = utc_now_iso()
     return compact_benchmark_record(
         {

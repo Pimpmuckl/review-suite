@@ -828,6 +828,121 @@ def test_runner_recovers_blocked_arena_round_after_successful_reroll(tmp_path: P
     assert result.state["recovery"]["status"] == "none"
 
 
+def test_runner_recovers_blocked_normal_review_without_arena_grade(tmp_path: Path) -> None:
+    round_state_dir = tmp_path / "state" / "rounds"
+    state = _cycle(tmp_path, deslop_enabled=False, step_names=("precision-signoff",))
+    pending = mark_review_step_pending(
+        state,
+        round_id="phase_review-round-1",
+        lane="review_t1",
+        step_index=0,
+        step_name="precision-signoff",
+        reviewed_head="head-1",
+    )
+    blocked = mark_arena_recovery_requested(
+        pending,
+        reason="blocked",
+        round_id="phase_review-round-1",
+        lane="review_t1",
+        step_index=0,
+        step_name="precision-signoff",
+        round_state_dir=str(round_state_dir),
+    )
+    write_round(
+        round_state_dir,
+        {
+            "round_id": "phase_review-round-1",
+            "status": "completed",
+            "review_scope": {"reviewed_head": "head-1"},
+            "runs": [{"slot": "bravo", "review_status": "process_died", "grade_blocked": True}],
+        },
+    )
+    write_round(
+        round_state_dir,
+        {
+            "round_id": "phase_review-round-2",
+            "rerolled_from_round_id": "phase_review-round-1",
+            "status": "completed",
+            "review_scope": {"reviewed_head": "head-1"},
+            "runs": [
+                {
+                    "slot": "alpha",
+                    "review_status": "completed",
+                    "terminal_command": "clean",
+                    "grade_blocked": False,
+                    "reviewer_output": "Review result: clean",
+                    "reviewer_output_ref": "rollout://phase_review-round-2/alpha",
+                },
+                {
+                    "slot": "bravo",
+                    "review_status": "completed",
+                    "terminal_command": "clean",
+                    "grade_blocked": False,
+                    "reviewer_output": "Review result: clean",
+                    "reviewer_output_ref": "rollout://phase_review-round-2/bravo",
+                },
+            ],
+        },
+    )
+
+    result = orchestrator_runner.run_one_expensive_step(blocked, state_dir=tmp_path / "state")
+
+    assert result.ran_step is True
+    assert result.state["stage"] == STAGE_DECISION_PENDING
+    assert result.state["pending_action"]["kind"] == "decision"
+    assert result.state["pending_action"]["round_id"] == "phase_review-round-2"
+    assert "grading_required" not in result.state["pending_action"]
+    assert "arena_round" not in result.state["pending_action"]
+    assert result.state["rounds"][1]["round_id"] == "phase_review-round-2"
+    assert "grading_required" not in result.state["rounds"][1]
+    assert "arena_round" not in result.state["rounds"][1]
+    assert result.state["rounds"][1]["output_refs"] == ["rollout://phase_review-round-2/alpha", "rollout://phase_review-round-2/bravo"]
+    assert result.state["recovery"]["status"] == "none"
+
+
+def test_runner_retries_legacy_non_arena_blocked_recovery(tmp_path: Path) -> None:
+    round_state_dir = tmp_path / "state" / "rounds"
+    state = _cycle(tmp_path, deslop_enabled=False, step_names=("broad-discovery", "precision-signoff"))
+    pending = mark_review_step_pending(
+        state,
+        round_id="phase_review-round-1",
+        lane="review_t1",
+        step_index=0,
+        step_name="broad-discovery",
+        reviewed_head="head-1",
+    )
+    blocked = mark_arena_recovery_requested(
+        pending,
+        reason="blocked",
+        round_id="phase_review-round-1",
+        lane="review_t1",
+        step_index=0,
+        step_name="broad-discovery",
+        round_state_dir=str(round_state_dir),
+    )
+    write_round(
+        round_state_dir,
+        {
+            "round_id": "phase_review-round-1",
+            "status": "completed",
+            "review_scope": {"reviewed_head": "head-1"},
+            "runs": [
+                {"slot": "alpha", "review_status": "completed", "grade_blocked": False},
+                {"slot": "bravo", "review_status": "process_died", "grade_blocked": True},
+                {"slot": "charlie", "review_status": "completed", "grade_blocked": False},
+                {"slot": "delta", "review_status": "completed", "grade_blocked": False},
+            ],
+        },
+    )
+
+    result = orchestrator_runner.run_one_expensive_step(blocked, state_dir=tmp_path / "state")
+
+    assert result.ran_step is True
+    assert result.step == "review-recovery"
+    assert result.state["stage"] == STAGE_CREATED
+    assert result.state["pending_action"] == {"kind": "run-review-step", "step_index": 0, "step": "broad-discovery"}
+
+
 def test_runner_retargets_recovery_to_blocked_reroll_replacement(tmp_path: Path) -> None:
     round_state_dir = tmp_path / "state" / "rounds"
     state = _cycle(tmp_path, deslop_enabled=False, step_names=("arena-discovery", "broad-discovery", "precision-signoff"))

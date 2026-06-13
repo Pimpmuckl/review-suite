@@ -71,6 +71,7 @@ from review_suite_core.orchestrator_state import (
     record_followup_findings,
     record_github_result,
     record_validation_statuses,
+    mark_review_step_retry,
     abort_cycle,
 )
 from review_suite_core.orchestrator_store import (
@@ -189,7 +190,13 @@ def _deslop_done_command(public_id: str, *, state_dir: Path) -> str:
     return _review_command(public_id, "--deslop-done", state_dir=state_dir)
 
 
-def _arena_grade_command(state: dict[str, Any], *, state_dir: Path) -> str | None:
+def _arena_grade_command(
+    state: dict[str, Any],
+    *,
+    state_dir: Path,
+    winner: str = "WINNER",
+    basis: str = "BASIS",
+) -> str | None:
     pending_payload = _pending_grade_payload(state, state_dir=state_dir)
     if pending_payload is None:
         return None
@@ -207,9 +214,9 @@ def _arena_grade_command(state: dict[str, Any], *, state_dir: Path) -> str | Non
             "--task-id",
             task_id,
             "--winner",
-            "WINNER",
+            winner,
             "--basis",
-            "BASIS",
+            basis,
             "--state-dir",
             str(grade_state_dir),
         ]
@@ -307,6 +314,26 @@ def _round_blocked_slots(payload: dict[str, Any]) -> list[str]:
     return slots
 
 
+def _round_is_arena_recovery(pending: dict[str, Any], round_record: dict[str, Any], payload: dict[str, Any]) -> bool:
+    profile_step = dict(round_record.get("profile_step") or {})
+    return bool(
+        pending.get("arena_round")
+        or round_record.get("arena_round")
+        or profile_step.get("arena_round")
+        or payload.get("arena_round")
+    )
+
+
+def _round_requires_arena_grade(pending: dict[str, Any], round_record: dict[str, Any], payload: dict[str, Any]) -> bool:
+    return _round_is_arena_recovery(pending, round_record, payload) and bool(
+        pending.get("grading_required") or round_record.get("grading_required") or payload.get("grading_required")
+    )
+
+
+def _recovery_note_subject(pending: dict[str, Any], round_record: dict[str, Any], payload: dict[str, Any]) -> str:
+    return "Arena" if _round_is_arena_recovery(pending, round_record, payload) else "Review"
+
+
 def _arena_recovery_plan(state: dict[str, Any], *, state_dir: Path) -> dict[str, Any] | None:
     pending = dict(state.get("pending_action") or {})
     if state.get("stage") != STAGE_RETRY_REQUESTED or str(pending.get("kind") or "") != "arena-blocked":
@@ -323,11 +350,12 @@ def _arena_recovery_plan(state: dict[str, Any], *, state_dir: Path) -> dict[str,
         payload=payload,
         search_dirs=_round_state_dir_candidates(state_dir, round_record, extra_state_dirs=extra_state_dirs),
     )
+    subject = _recovery_note_subject(pending, round_record, payload)
     status = str(payload.get("status") or "").strip()
     if status == "dismissed":
         return {
             "operation": "none",
-            "note": "Arena round dismissed; rerun this review id.",
+            "note": f"{subject} round dismissed; rerun this review id.",
         }
     if status == "sampled":
         return {
@@ -335,42 +363,47 @@ def _arena_recovery_plan(state: dict[str, Any], *, state_dir: Path) -> dict[str,
             "round_id": round_id,
             "payload": payload,
             "round_state_dir": round_state_dir,
-            "note": "Arena replacement round is sampled; rerun this review id to continue backend recovery.",
+            "note": f"{subject} replacement round is sampled; rerun this review id to continue backend recovery.",
         }
     if status == "running":
         return {
             "operation": "resume",
             "round_id": round_id,
             "round_state_dir": round_state_dir,
-            "note": "Arena replacement round is running; rerun this review id to continue backend recovery.",
+            "note": f"{subject} replacement round is running; rerun this review id to continue backend recovery.",
         }
     if status and status not in {"completed", "dismissed"}:
         return {
             "operation": "dismiss",
             "round_id": round_id,
             "round_state_dir": round_state_dir,
-            "note": f"Arena replacement round is {status}; rerun this review id to continue backend recovery.",
+            "note": f"{subject} replacement round is {status}; rerun this review id to continue backend recovery.",
         }
     slots = _round_blocked_slots(payload)
     if slots:
+        if not _round_is_arena_recovery(pending, round_record, payload):
+            return {
+                "operation": "none",
+                "note": f"{subject} round blocked; rerun this review id to retry the review step.",
+            }
         rerollable_slots = [slot for slot in slots if slot in ARENA_REROLL_SLOTS]
         if len(rerollable_slots) != len(slots):
             return {
                 "operation": "dismiss",
                 "round_id": round_id,
                 "round_state_dir": round_state_dir,
-                "note": "Blocked arena slot(s) cannot be rerolled safely; rerun this review id to continue backend recovery.",
+                "note": f"Blocked {subject.lower()} slot(s) cannot be rerolled safely; rerun this review id to continue backend recovery.",
             }
         return {
             "operation": "reroll",
             "round_id": round_id,
             "round_state_dir": round_state_dir,
             "slot": rerollable_slots[0],
-            "note": f"Blocked arena slot {rerollable_slots[0]} can be rerolled; rerun this review id to continue backend recovery.",
+            "note": f"Blocked {subject.lower()} slot {rerollable_slots[0]} can be rerolled; rerun this review id to continue backend recovery.",
         }
     return {
         "operation": "none",
-        "note": "Arena recovery is ready; rerun this review id.",
+        "note": f"{subject} recovery is ready; rerun this review id.",
     }
 
 
@@ -442,6 +475,17 @@ def _blocked_decision_recovery_state(state: dict[str, Any], *, state_dir: Path) 
     step_index = profile_step.get("index")
     if step_index is None:
         step_index = pending.get("step_index")
+    step_name = str(profile_step.get("name") or pending.get("step") or "review-recovery")
+    fix_verification = pending.get("fix_verification")
+    fix_context = fix_verification if isinstance(fix_verification, dict) and fix_verification else None
+    if not _round_is_arena_recovery(pending, round_record, payload):
+        return mark_review_step_retry(
+            state,
+            step_index=int(step_index if step_index is not None else 0),
+            step_name=step_name,
+            post_findings_rerun=bool(pending.get("post_findings_rerun")),
+            fix_verification=fix_context,
+        )
     recovery_state = dict(state)
     recovery_state["stage"] = STAGE_RETRY_REQUESTED
     action = {
@@ -449,13 +493,16 @@ def _blocked_decision_recovery_state(state: dict[str, Any], *, state_dir: Path) 
         "round_id": round_id,
         "lane": str(pending.get("lane") or round_record.get("lane") or "review_t1"),
         "step_index": int(step_index if step_index is not None else 0),
-        "step": str(profile_step.get("name") or pending.get("step") or "arena-recovery"),
+        "step": step_name,
     }
+    if _round_is_arena_recovery(pending, round_record, payload):
+        action["arena_round"] = True
+    if _round_requires_arena_grade(pending, round_record, payload):
+        action["grading_required"] = True
     if bool(pending.get("post_findings_rerun")):
         action["post_findings_rerun"] = True
-    fix_verification = pending.get("fix_verification")
-    if isinstance(fix_verification, dict) and fix_verification:
-        action["fix_verification"] = deepcopy(fix_verification)
+    if fix_context:
+        action["fix_verification"] = deepcopy(fix_context)
     recovery_state["pending_action"] = action
     return recovery_state
 
@@ -464,6 +511,13 @@ def _blocked_decision_action(state: dict[str, Any], *, state_dir: Path, public_i
     recovery_state = _blocked_decision_recovery_state(state, state_dir=state_dir)
     if recovery_state is state:
         return None
+    pending = dict(recovery_state.get("pending_action") or {})
+    if str(pending.get("kind") or "") == "run-review-step":
+        step = str(pending.get("step") or "review").strip() or "review"
+        return {
+            "cmd": _review_command(public_id, state_dir=state_dir),
+            "note": f"Review round blocked; rerun this review id to retry {step}.",
+        }
     return _arena_recovery_action(recovery_state, state_dir=state_dir, public_id=public_id)
 
 
@@ -1759,8 +1813,10 @@ def _action_payload(state: dict[str, Any], *, state_dir: Path) -> dict[str, Any]
             return _with_deslop_done_action(state, blocked_action, public_id, state_dir=state_dir)
         grade = _arena_grade_command(state, state_dir=state_dir)
         if grade:
+            tie_clean = _arena_grade_command(state, state_dir=state_dir, winner="tie", basis="tie_clean")
             action = {
                 "cmd": grade,
+                "tie_clean": tie_clean,
                 "note": "Grade the arena round, then rerun this review id to continue.",
                 "next": _review_command(public_id, state_dir=state_dir),
             }

@@ -97,7 +97,7 @@ def test_public_round_result_does_not_repeat_streamed_output() -> None:
     assert "output" not in result["runs"][0]
 
 
-def test_blocking_round_error_uses_compact_action_for_completed_round() -> None:
+def test_blocking_round_error_uses_compact_action_for_completed_round(tmp_path: Path) -> None:
     error = _blocking_round_error(
         payload={
             "round_id": "round-123",
@@ -105,13 +105,19 @@ def test_blocking_round_error_uses_compact_action_for_completed_round() -> None:
             "runs": [{"review_status": "completed", "grade_blocked": False}],
         },
         action="review_t1",
+        state_dir=tmp_path / "state",
     )
 
     assert str(error) == "pending round blocks review_t1: round-123"
     assert "grade_command" not in str(error)
     assert "dismiss_command" not in str(error)
-    assert set(error.action_payload) == {"cmd", "dismiss_cmd"}
-    assert "grade --winner WINNER" in str(error.action_payload["cmd"])
+    assert set(error.action_payload) == {"cmd", "tie_clean", "dismiss_cmd"}
+    assert "--winner WINNER" in str(error.action_payload["cmd"])
+    assert "--round-id round-123" in str(error.action_payload["cmd"])
+    assert f"--state-dir {tmp_path / 'state'}" in str(error.action_payload["cmd"])
+    assert "--winner tie --basis tie_clean" in str(error.action_payload["tie_clean"])
+    assert "--round-id round-123" in str(error.action_payload["tie_clean"])
+    assert f"--state-dir {tmp_path / 'state'}" in str(error.action_payload["tie_clean"])
     assert "dismiss-round" in str(error.action_payload["dismiss_cmd"])
 
 
@@ -618,7 +624,8 @@ def test_completed_round_payload_success_only_emits_grade_command() -> None:
     )
 
     assert payload["Action"]["cmd"] == "grade-cmd"
-    assert set(payload["Action"]) == {"cmd"}
+    assert payload["Action"]["tie_clean"].endswith("review_suite_arena.py grade --winner tie --basis tie_clean")
+    assert set(payload["Action"]) == {"cmd", "tie_clean"}
     assert "runs" not in payload
 
 
@@ -633,6 +640,7 @@ def test_completed_round_payload_omits_inspect_when_round_id_is_known() -> None:
     )
 
     assert payload["Action"]["cmd"] == "grade-cmd"
+    assert payload["Action"]["tie_clean"].endswith("review_suite_arena.py grade --winner tie --basis tie_clean")
     assert "inspect" not in payload["Action"]
 
 
@@ -809,12 +817,16 @@ def test_run_benchmarked_round_noninteractive_uses_toon_actions_without_stderr_n
 
     assert result == 0
     assert set(emitted[-1]) == {"Action"}
-    assert "grade --winner WINNER" in emitted[-1]["Action"]["cmd"]
-    assert "--round-id" not in emitted[-1]["Action"]["cmd"]
-    assert "--task-id" not in emitted[-1]["Action"]["cmd"]
+    assert "--winner WINNER" in emitted[-1]["Action"]["cmd"]
+    assert "--round-id" in emitted[-1]["Action"]["cmd"]
+    assert "--task-id" in emitted[-1]["Action"]["cmd"]
+    assert "--state-dir" in emitted[-1]["Action"]["cmd"]
     assert "--basis BASIS" in emitted[-1]["Action"]["cmd"]
+    assert "--winner tie --basis tie_clean" in emitted[-1]["Action"]["tie_clean"]
+    assert "--round-id" in emitted[-1]["Action"]["tie_clean"]
+    assert "--state-dir" in emitted[-1]["Action"]["tie_clean"]
     assert "--refresh-report" not in emitted[-1]["Action"]["cmd"]
-    assert set(emitted[-1]["Action"]) == {"cmd"}
+    assert set(emitted[-1]["Action"]) == {"cmd", "tie_clean"}
 
 
 def test_run_benchmarked_round_warns_for_deep_review_without_model_names(monkeypatch, tmp_path, capsys) -> None:

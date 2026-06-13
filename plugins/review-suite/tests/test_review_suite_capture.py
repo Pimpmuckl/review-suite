@@ -514,7 +514,7 @@ def test_collect_round_results_rebinds_launcher_sessions_to_review_children(tmp_
     assert record_runs["gpt-5.4-xhigh"]["cost_usd"] == pytest.approx(0.003375)
     assert record_runs["gpt-5.3-codex-medium"]["cost_usd"] == pytest.approx(0.00182)
 
-    with pytest.raises(ValueError, match="non-tie winner"):
+    with pytest.raises(ValueError, match="tie_clean requires --winner tie"):
         review_suite_local.build_record_from_grade(
             round_payload=completed,
             roster=_minimal_roster(),
@@ -526,7 +526,7 @@ def test_collect_round_results_rebinds_launcher_sessions_to_review_children(tmp_
             bravo_note=None,
             shared_note="ok",
         )
-    with pytest.raises(ValueError, match="tie winner"):
+    with pytest.raises(ValueError, match="winner tie requires --basis tie_clean or tie_both_useful"):
         review_suite_local.build_record_from_grade(
             round_payload=completed,
             roster=_minimal_roster(),

@@ -123,13 +123,15 @@ def _blocking_round_error(
     *,
     payload: dict[str, object],
     action: str,
+    state_dir: Path | None = None,
 ) -> BlockingRoundError:
     round_id = str(payload.get("round_id") or "")
     status = str(payload.get("status") or "unknown")
     if round_needs_caller_grade(payload):
         message = f"pending round blocks {action}: {round_id}"
         action_payload: dict[str, object] = {
-            "cmd": _grade_command(),
+            "cmd": _grade_command(round_id=round_id, state_dir=state_dir),
+            "tie_clean": _tie_clean_grade_command(round_id=round_id, state_dir=state_dir),
             "dismiss_cmd": _dismiss_round_command(round_id=round_id),
         }
     else:
@@ -159,6 +161,7 @@ def _raise_if_blocking_round_exists(
     raise _blocking_round_error(
         payload=latest,
         action=action,
+        state_dir=state_dir,
     )
 
 
@@ -436,6 +439,9 @@ def _grade_command(
     *,
     round_id: str | None = None,
     task_id: str | None = None,
+    winner: str = "WINNER",
+    basis: str = "BASIS",
+    state_dir: Path | None = None,
 ) -> str:
     parts = [
         sys.executable,
@@ -449,12 +455,47 @@ def _grade_command(
     parts.extend(
         [
             "--winner",
-            "WINNER",
+            winner,
             "--basis",
-            "BASIS",
+            basis,
         ]
     )
+    if state_dir is not None:
+        parts.extend(["--state-dir", str(state_dir)])
     return format_command(parts)
+
+
+def _tie_clean_grade_command(
+    *,
+    round_id: str | None = None,
+    task_id: str | None = None,
+    state_dir: Path | None = None,
+) -> str:
+    return _grade_command(
+        round_id=round_id,
+        task_id=task_id,
+        winner="tie",
+        basis="tie_clean",
+        state_dir=state_dir,
+    )
+
+
+def _grade_command_for_payload(
+    payload: dict[str, object],
+    *,
+    state_dir: Path,
+    winner: str = "WINNER",
+    basis: str = "BASIS",
+) -> str:
+    round_id = str(payload.get("round_id") or "").strip() or None
+    task_id = str(payload.get("task_id_hint") or payload.get("graded_task_id") or "").strip() or None
+    return _grade_command(
+        round_id=round_id,
+        task_id=task_id,
+        winner=winner,
+        basis=basis,
+        state_dir=state_dir,
+    )
 
 
 def _show_round_command(*, round_id: str) -> str:
@@ -617,6 +658,7 @@ def _completed_round_payload(
     reroll_rows: list[dict[str, str]] | None = None,
     status: str = "completed_ungraded",
     grade: dict[str, object] | None = None,
+    grade_tie_clean_command: str | None = None,
     manual: bool | None = None,
 ) -> dict[str, object]:
     actions: list[dict[str, object]] = []
@@ -635,6 +677,7 @@ def _completed_round_payload(
         return {
             "Action": {
                 "cmd": grade_command,
+                "tie_clean": grade_tie_clean_command or _tie_clean_grade_command(),
             }
         }
     if manual and not grade_command and not reroll_rows and grade is None:
@@ -1451,7 +1494,7 @@ def run_benchmarked_round(
         )
     if not all([task_id, winner, basis]):
         if not interactive_output:
-            grade_command = _grade_command()
+            grade_command = _grade_command_for_payload(completed, state_dir=state_dir)
             reroll_rows = _reroll_rows(
                 round_result=round_result,
                 round_id=payload["round_id"],
@@ -1469,6 +1512,12 @@ def run_benchmarked_round(
                 _completed_round_payload(
                     round_result=round_result,
                     grade_command=grade_command,
+                    grade_tie_clean_command=_grade_command_for_payload(
+                        completed,
+                        state_dir=state_dir,
+                        winner="tie",
+                        basis="tie_clean",
+                    ),
                     reroll_rows=reroll_rows,
                 )
             )
@@ -1504,7 +1553,13 @@ def run_benchmarked_round(
                 emit_toon(
                     _completed_round_payload(
                         round_result=round_result,
-                        grade_command=_grade_command(),
+                        grade_command=_grade_command_for_payload(completed, state_dir=state_dir),
+                        grade_tie_clean_command=_grade_command_for_payload(
+                            completed,
+                            state_dir=state_dir,
+                            winner="tie",
+                            basis="tie_clean",
+                        ),
                     )
                 )
             return 0
@@ -1704,7 +1759,13 @@ def cmd_run_round(args: argparse.Namespace) -> int:
         emit_toon(
             _completed_round_payload(
                 round_result=result,
-                grade_command=None if result.get("blocked") else _grade_command(),
+                grade_command=None if result.get("blocked") else _grade_command_for_payload(completed, state_dir=state_dir),
+                grade_tie_clean_command=_grade_command_for_payload(
+                    completed,
+                    state_dir=state_dir,
+                    winner="tie",
+                    basis="tie_clean",
+                ),
             )
         )
     return 0
@@ -1808,7 +1869,13 @@ def cmd_reroll_slot(args: argparse.Namespace) -> int:
         emit_toon(
             _completed_round_payload(
                 round_result=result,
-                grade_command=None if result.get("blocked") else _grade_command(),
+                grade_command=None if result.get("blocked") else _grade_command_for_payload(completed, state_dir=state_dir),
+                grade_tie_clean_command=_grade_command_for_payload(
+                    completed,
+                    state_dir=state_dir,
+                    winner="tie",
+                    basis="tie_clean",
+                ),
             )
         )
     return 0
@@ -1830,7 +1897,17 @@ def cmd_resume_round(args: argparse.Namespace) -> int:
         emit_toon(
             _completed_round_payload(
                 round_result=result,
-                grade_command=_grade_command() if round_needs_caller_grade(payload) and not result.get("blocked") else None,
+                grade_command=(
+                    _grade_command_for_payload(payload, state_dir=state_dir)
+                    if round_needs_caller_grade(payload) and not result.get("blocked")
+                    else None
+                ),
+                grade_tie_clean_command=_grade_command_for_payload(
+                    payload,
+                    state_dir=state_dir,
+                    winner="tie",
+                    basis="tie_clean",
+                ),
             )
         )
         return 0
@@ -1873,7 +1950,13 @@ def cmd_resume_round(args: argparse.Namespace) -> int:
         emit_toon(
             _completed_round_payload(
                 round_result=result,
-                grade_command=None if result.get("blocked") else _grade_command(),
+                grade_command=None if result.get("blocked") else _grade_command_for_payload(completed, state_dir=state_dir),
+                grade_tie_clean_command=_grade_command_for_payload(
+                    completed,
+                    state_dir=state_dir,
+                    winner="tie",
+                    basis="tie_clean",
+                ),
             )
         )
     return 0
