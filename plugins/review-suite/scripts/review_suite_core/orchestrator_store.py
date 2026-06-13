@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import time
+from contextlib import contextmanager
 import uuid
 from copy import deepcopy
 from pathlib import Path
@@ -71,6 +73,35 @@ def _write_index(state_dir: Path, index: dict[str, Any]) -> None:
     _atomic_write_json(index_path(state_dir), index)
 
 
+@contextmanager
+def orchestrator_store_lock(
+    *,
+    state_dir: Path,
+    name: str,
+    timeout_seconds: int = 30,
+    poll_seconds: float = 0.1,
+):
+    locks_dir = state_dir / ".locks"
+    locks_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = locks_dir / f"{name}.lock"
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        try:
+            lock_path.mkdir()
+            break
+        except FileExistsError:
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"timed out waiting for lock: {lock_path}")
+            time.sleep(poll_seconds)
+    try:
+        yield
+    finally:
+        try:
+            lock_path.rmdir()
+        except FileNotFoundError:
+            pass
+
+
 def _public_id_candidates(cycle_key: str) -> list[str]:
     digest = cycle_key.removeprefix("orc-")
     lengths = (8, 10, 12, 16, len(digest))
@@ -78,19 +109,20 @@ def _public_id_candidates(cycle_key: str) -> list[str]:
 
 
 def public_id_for_cycle_key(state_dir: Path, cycle_key: str) -> str:
-    index = load_index(state_dir)
-    existing = str(index["cycle_keys"].get(cycle_key) or "")
-    if existing:
-        if index["ids"].get(existing) != cycle_key:
-            index["ids"][existing] = cycle_key
-            _write_index(state_dir, index)
-        return existing
-    for candidate in _public_id_candidates(cycle_key):
-        if candidate not in index["ids"]:
-            index["ids"][candidate] = cycle_key
-            index["cycle_keys"][cycle_key] = candidate
-            _write_index(state_dir, index)
-            return candidate
+    with orchestrator_store_lock(state_dir=state_dir, name="orchestrator-index"):
+        index = load_index(state_dir)
+        existing = str(index["cycle_keys"].get(cycle_key) or "")
+        if existing:
+            if index["ids"].get(existing) != cycle_key:
+                index["ids"][existing] = cycle_key
+                _write_index(state_dir, index)
+            return existing
+        for candidate in _public_id_candidates(cycle_key):
+            if candidate not in index["ids"]:
+                index["ids"][candidate] = cycle_key
+                index["cycle_keys"][cycle_key] = candidate
+                _write_index(state_dir, index)
+                return candidate
     raise ValueError(f"could not allocate public id for cycle key: {cycle_key}")
 
 
