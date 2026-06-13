@@ -95,6 +95,9 @@ To explicitly replace an existing local review ladder with a stricter one, use t
 <python> <review-suite-plugin-root>/scripts/review.py --id <id>
 <python> <review-suite-plugin-root>/scripts/review.py --id <id> --decision clean|findings  # manual override
 <python> <review-suite-plugin-root>/scripts/review.py --id <id> --show-findings
+<python> <review-suite-plugin-root>/scripts/review.py --id <id> --focused-validation passed|failed|pending|waived|classified
+<python> <review-suite-plugin-root>/scripts/review.py --id <id> --full-suite passed|failed|pending|waived|classified
+<python> <review-suite-plugin-root>/scripts/review.py --id <id> --ci passed|failed|pending|waived|classified
 <python> <review-suite-plugin-root>/scripts/review.py --id <id> --github-review
 <python> <review-suite-plugin-root>/scripts/review.py --id <id> --github-result clean|findings
 <python> <review-suite-plugin-root>/scripts/review.py --id <id> --github-result waived --github-note "why"
