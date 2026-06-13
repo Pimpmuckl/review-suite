@@ -96,6 +96,7 @@ CLI_VALIDATION_STATUSES = ("passed", "failed", "pending", "waived", "classified"
 VALIDATION_READY_STATUSES = {"passed", "waived", "classified"}
 ARENA_REROLL_SLOTS = {"alpha", "bravo"}
 DECISION_COMMANDS = {DECISION_CLEAN, DECISION_FINDINGS}
+NO_DECISION_PENDING_MESSAGE = "no decision is pending for this review cycle"
 BASE_DRIFT_PATH_SAMPLE_LIMIT = 20
 CONTINUATION_REDIRECT_STAGES = {
     STAGE_CREATED,
@@ -135,6 +136,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _help_command() -> str:
     return format_command([sys.executable, str(Path(__file__).resolve()), "--help"])
+
+
+class NoDecisionPendingError(ValueError):
+    def __init__(self, state: dict[str, Any]) -> None:
+        super().__init__(NO_DECISION_PENDING_MESSAGE)
+        self.state = state
 
 
 def _runtime_uses_wsl(state: dict[str, Any]) -> bool:
@@ -990,7 +997,7 @@ def _apply_decision_to_ready_state(
     require_grade: bool = True,
 ) -> dict[str, Any]:
     if state.get("stage") != STAGE_DECISION_PENDING:
-        raise ValueError("no decision is pending for this review cycle")
+        raise ValueError(NO_DECISION_PENDING_MESSAGE)
     round_id, lane = _pending_decision(state)
     if require_grade and _pending_grade_payload(state, state_dir=state_dir) is not None:
         raise ValueError("grade the arena round before recording a clean/findings decision")
@@ -1525,7 +1532,12 @@ def _advance_without_decision(state: dict[str, Any], *, state_dir: Path) -> dict
 
 def _apply_decision(state: dict[str, Any], decision: str, *, state_dir: Path) -> dict[str, Any]:
     ready_state = _resume_progress(state, state_dir=state_dir)
-    return _apply_decision_to_ready_state(ready_state, decision, state_dir=state_dir)
+    try:
+        return _apply_decision_to_ready_state(ready_state, decision, state_dir=state_dir)
+    except ValueError as exc:
+        if str(exc) == NO_DECISION_PENDING_MESSAGE and ready_state.get("stage") != STAGE_DECISION_PENDING:
+            raise NoDecisionPendingError(ready_state) from exc
+        raise
 
 
 def _has_validation_status(args: argparse.Namespace) -> bool:
@@ -1803,6 +1815,19 @@ def _render(state: dict[str, Any], *, state_dir: Path) -> None:
     emit_toon(payload)
 
 
+def _render_stale_decision_recovery(state: dict[str, Any], *, state_dir: Path, decision: str) -> None:
+    payload: dict[str, Any] = {
+        "review": state.get("public_id"),
+        "status": "decision_not_pending",
+        "decision": decision,
+        "note": "No decision is pending; follow Action.cmd for the current review state.",
+    }
+    action = _action_payload(state, state_dir=state_dir)
+    if action:
+        payload["Action"] = action
+    emit_toon(payload)
+
+
 def _require_local_green_for_github_review(state: dict[str, Any]) -> None:
     if state.get("stage") not in {STAGE_REVIEW_GREEN, STAGE_LOCAL_GREEN_HANDOFF}:
         raise ValueError("--github-review requires local green review state")
@@ -1922,7 +1947,18 @@ def main() -> int:
                 _render(saved, state_dir=state_dir)
                 return 0
             if args.decision:
-                state = _apply_decision(state, str(args.decision), state_dir=state_dir)
+                try:
+                    state = _apply_decision(state, str(args.decision), state_dir=state_dir)
+                except NoDecisionPendingError as exc:
+                    recovery_state = exc.state
+                    should_save = recovery_state != state
+                    if has_validation_status:
+                        recovery_state = _record_validation_status(recovery_state, args)
+                        should_save = True
+                    if should_save:
+                        recovery_state = save_cycle(state_dir, recovery_state)
+                    _render_stale_decision_recovery(recovery_state, state_dir=state_dir, decision=str(args.decision))
+                    return 0
             if has_validation_status:
                 state = _record_validation_status(state, args)
             elif not args.decision:

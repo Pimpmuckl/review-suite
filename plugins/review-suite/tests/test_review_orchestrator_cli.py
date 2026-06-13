@@ -3609,6 +3609,143 @@ def test_emergency_mode_skips_deslop_and_runs_review(monkeypatch: pytest.MonkeyP
     assert _gate_signoff_decisions(state_dir) == []
 
 
+def test_stale_decision_renders_current_action_without_mutating_cycle(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    review_calls = _stub_review(monkeypatch)
+
+    def fail_run(*, command: list[str], cwd: Path) -> subprocess.CompletedProcess:
+        raise AssertionError("emergency mode must not run deslop")
+
+    monkeypatch.setattr(orchestrator_runner, "run_deslop_subprocess", fail_run)
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+
+    _, payload = _run_review(
+        monkeypatch,
+        ["--mode", "emergency", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)],
+    )
+    public_id = str(payload["review"])
+    _run_review(monkeypatch, ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)])
+    before = _cycle_payload(state_dir, public_id)
+
+    exit_code, stale = _run_review(
+        monkeypatch,
+        ["--id", public_id, "--decision", "findings", "--state-dir", str(state_dir)],
+    )
+
+    assert exit_code == 0
+    assert stale["status"] == "decision_not_pending"
+    assert stale["decision"] == "findings"
+    assert "follow Action.cmd" in str(stale["note"])
+    _assert_github_handoff(
+        stale["Action"],
+        public_id=public_id,
+        state_dir=state_dir,
+        blocked_by=["full_suite:unknown", "ci:unknown"],
+    )
+    assert _cycle_payload(state_dir, public_id) == before
+    assert len(review_calls) == 1
+
+    exit_code, validation = _run_review(
+        monkeypatch,
+        [
+            "--id",
+            public_id,
+            "--decision",
+            "clean",
+            "--full-suite",
+            "passed",
+            "--ci",
+            "passed",
+            "--state-dir",
+            str(state_dir),
+        ],
+    )
+
+    assert exit_code == 0
+    assert validation["status"] == "decision_not_pending"
+    state = _cycle_payload(state_dir, public_id)
+    assert state["validation"]["full_suite"] == "passed"
+    assert state["validation"]["ci"] == "passed"
+
+
+def test_stale_decision_persists_auto_resume_transition(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    review_calls = _stub_review(monkeypatch)
+
+    def fail_run(*, command: list[str], cwd: Path) -> subprocess.CompletedProcess:
+        raise AssertionError("emergency mode must not run deslop")
+
+    monkeypatch.setattr(orchestrator_runner, "run_deslop_subprocess", fail_run)
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/stale-decision")
+    _commit_file(repo, "app.txt", "feature\n", "feature")
+
+    _, payload = _run_review(
+        monkeypatch,
+        ["--mode", "emergency", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)],
+    )
+    public_id = str(payload["review"])
+    _commit_file(repo, "app.txt", "feature\nfix\n", "fix finding")
+
+    exit_code, stale = _run_review(
+        monkeypatch,
+        ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)],
+    )
+
+    assert exit_code == 0
+    assert stale["status"] == "decision_not_pending"
+    assert stale["decision"] == "clean"
+    assert "--decision" not in str(stale["Action"]["cmd"])
+    state = _cycle_payload(state_dir, public_id)
+    assert state["stage"] == "created"
+    assert state["pending_action"]["kind"] == "run-review-step"
+    assert state["decisions"][0]["command"] == "findings"
+    assert state["review_heads"]["last_fix_head"] == _git(repo, "rev-parse", "HEAD")
+    assert len(review_calls) == 1
+
+
+def test_decision_pending_with_missing_metadata_still_errors(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _stub_review(monkeypatch)
+
+    def fail_run(*, command: list[str], cwd: Path) -> subprocess.CompletedProcess:
+        raise AssertionError("emergency mode must not run deslop")
+
+    monkeypatch.setattr(orchestrator_runner, "run_deslop_subprocess", fail_run)
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+
+    _, payload = _run_review(
+        monkeypatch,
+        ["--mode", "emergency", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)],
+    )
+    public_id = str(payload["review"])
+    state = _cycle_payload(state_dir, public_id)
+    state["pending_action"] = {"kind": "decision"}
+    state["rounds"][0].pop("lane", None)
+    _write_cycle_payload(state_dir, public_id, state)
+
+    errors: list[str] = []
+    monkeypatch.setattr(review, "emit_error", lambda message, **kwargs: errors.append(str(message)) or 2)
+    monkeypatch.setattr(review, "default_state_dir", lambda: state_dir)
+    monkeypatch.setattr(sys, "argv", ["review.py", "--id", public_id, "--decision", "clean"])
+
+    assert review.main() == 2
+    assert errors[-1] == "no decision is pending for this review cycle"
+    assert _cycle_payload(state_dir, public_id) == state
+
+
 def test_emergency_mode_stops_after_two_local_review_rounds(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
