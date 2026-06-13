@@ -11,6 +11,7 @@ SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts"
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+import review_costs
 from review_costs import (
     ReviewCostRow,
     _cheap_cwd_key,
@@ -63,6 +64,57 @@ def test_record_lane_accepts_followup_spellings() -> None:
 
 def test_metadata_for_missing_wsl_worktree_folds_into_parent_repo() -> None:
     metadata = _metadata_for_cwd(r"\\wsl.localhost\Ubuntu\home\alice\code\sample-web-wt-budget")
+
+    assert metadata == {
+        "repo": "sample-web",
+        "folder": "sample-web-wt-budget",
+        "branch": "-",
+        "pr_number": "-",
+    }
+
+
+def test_metadata_for_inaccessible_worktree_uses_fallback(monkeypatch) -> None:
+    class InaccessiblePath:
+        name = "sample-web-wt-budget"
+
+        def exists(self) -> bool:
+            raise OSError("unreachable")
+
+    def inaccessible_path(normalized_cwd: str) -> InaccessiblePath:
+        return InaccessiblePath()
+
+    monkeypatch.setattr(review_costs, "cwd_path_from_normalized", inaccessible_path)
+
+    metadata = _metadata_for_cwd("C:/work/sample-web-wt-budget")
+
+    assert metadata == {
+        "repo": "sample-web",
+        "folder": "sample-web-wt-budget",
+        "branch": "-",
+        "pr_number": "-",
+    }
+
+
+def test_metadata_for_unusable_worktree_cwd_uses_fallback(monkeypatch) -> None:
+    class UnusableCwdPath:
+        name = "sample-web-wt-budget"
+
+        def exists(self) -> bool:
+            return True
+
+        def __str__(self) -> str:
+            return "C:/work/sample-web-wt-budget"
+
+    def unusable_cwd_path(normalized_cwd: str) -> UnusableCwdPath:
+        return UnusableCwdPath()
+
+    def raise_os_error(*args: object, **kwargs: object) -> object:
+        raise OSError("unusable cwd")
+
+    monkeypatch.setattr(review_costs, "cwd_path_from_normalized", unusable_cwd_path)
+    monkeypatch.setattr(review_costs.subprocess, "run", raise_os_error)
+
+    metadata = _metadata_for_cwd("C:/work/sample-web-wt-budget")
 
     assert metadata == {
         "repo": "sample-web",

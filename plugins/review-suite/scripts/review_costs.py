@@ -602,15 +602,18 @@ def _implementation_cost_for_cwd(normalized_cwd: str, *, codex_home: Path | None
 
 
 def _git_text(review_cwd: Path, args: list[str]) -> str:
-    proc = subprocess.run(
-        ["git", *args],
-        cwd=str(review_cwd),
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        check=False,
-    )
+    try:
+        proc = subprocess.run(
+            ["git", *args],
+            cwd=str(review_cwd),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+    except OSError:
+        return ""
     if proc.returncode != 0:
         return ""
     return proc.stdout.strip()
@@ -653,7 +656,7 @@ def _current_pr_number(review_cwd: Path) -> str:
             check=False,
             timeout=10,
         )
-    except (FileNotFoundError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired):
         return ""
     if proc.returncode != 0:
         return ""
@@ -664,7 +667,11 @@ def _metadata_for_cwd(normalized_cwd: str) -> dict[str, str]:
     review_cwd = cwd_path_from_normalized(normalized_cwd)
     folder = review_cwd.name or normalized_cwd.rstrip("\\/").rsplit("/", 1)[-1] or "-"
     fallback_repo = _repo_from_worktree_folder(folder) or folder
-    if not review_cwd.exists():
+    try:
+        exists = review_cwd.exists()
+    except OSError:
+        exists = False
+    if not exists:
         return {"repo": fallback_repo, "folder": folder, "branch": "-", "pr_number": "-"}
     branch = _git_text(review_cwd, ["branch", "--show-current"]) or "-"
     repo = _repo_from_remote(_git_text(review_cwd, ["remote", "get-url", "origin"])) or fallback_repo
