@@ -9,6 +9,11 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+if os.name == "nt":
+    import msvcrt
+else:
+    import fcntl
+
 
 ORCHESTRATOR_INDEX_SCHEMA_VERSION = 1
 
@@ -73,6 +78,26 @@ def _write_index(state_dir: Path, index: dict[str, Any]) -> None:
     _atomic_write_json(index_path(state_dir), index)
 
 
+def _try_lock_file(handle) -> bool:
+    try:
+        if os.name == "nt":
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return False
+    return True
+
+
+def _unlock_file(handle) -> None:
+    if os.name == "nt":
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+    else:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
 @contextmanager
 def orchestrator_store_lock(
     *,
@@ -84,22 +109,21 @@ def orchestrator_store_lock(
     locks_dir = state_dir / ".locks"
     locks_dir.mkdir(parents=True, exist_ok=True)
     lock_path = locks_dir / f"{name}.lock"
-    deadline = time.monotonic() + timeout_seconds
-    while True:
-        try:
-            lock_path.mkdir()
-            break
-        except FileExistsError:
+    with lock_path.open("a+b") as handle:
+        if handle.tell() == 0:
+            handle.write(b"\0")
+            handle.flush()
+        deadline = time.monotonic() + timeout_seconds
+        while True:
+            if _try_lock_file(handle):
+                break
             if time.monotonic() >= deadline:
                 raise TimeoutError(f"timed out waiting for lock: {lock_path}")
             time.sleep(poll_seconds)
-    try:
-        yield
-    finally:
         try:
-            lock_path.rmdir()
-        except FileNotFoundError:
-            pass
+            yield
+        finally:
+            _unlock_file(handle)
 
 
 def _public_id_candidates(cycle_key: str) -> list[str]:
