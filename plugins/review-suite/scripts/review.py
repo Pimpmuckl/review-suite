@@ -31,8 +31,10 @@ from review_suite_core import (
     has_worktree_changes,
     is_ancestor,
     merge_base,
+    merge_base_drift_scope,
     normalize_cwd,
     record_review_anchor,
+    resolve_ref,
     resolve_repo_root,
     write_text,
 )
@@ -94,6 +96,7 @@ CLI_VALIDATION_STATUSES = ("passed", "failed", "pending", "waived", "classified"
 VALIDATION_READY_STATUSES = {"passed", "waived", "classified"}
 ARENA_REROLL_SLOTS = {"alpha", "bravo"}
 DECISION_COMMANDS = {DECISION_CLEAN, DECISION_FINDINGS}
+BASE_DRIFT_PATH_SAMPLE_LIMIT = 20
 CONTINUATION_REDIRECT_STAGES = {
     STAGE_CREATED,
     STAGE_RUNNING,
@@ -868,7 +871,82 @@ def _identity_head(state: dict[str, Any]) -> str | None:
         return None
 
 
-def _current_cycle_head_if_compatible(state: dict[str, Any]) -> str | None:
+def _base_drift_reviewed_head(state: dict[str, Any]) -> str | None:
+    active = dict(state.get("active_findings") or {})
+    reviewed_head = str(active.get("reviewed_head") or "").strip()
+    if reviewed_head:
+        return reviewed_head
+    pending = dict(state.get("pending_action") or {})
+    pending_round = _round_by_id(state, str(pending.get("round_id") or "").strip())
+    reviewed_head = str(pending_round.get("reviewed_head") or "").strip()
+    if reviewed_head:
+        return reviewed_head
+    review_heads = dict(state.get("review_heads") or {})
+    for key in ("last_reviewed_head", "head"):
+        reviewed_head = str(review_heads.get(key) or "").strip()
+        if reviewed_head:
+            return reviewed_head
+    identity = dict(state.get("identity") or {})
+    reviewed_head = str(identity.get("head") or "").strip()
+    return reviewed_head or None
+
+
+def _allowed_base_drift(
+    *,
+    review_root: Path,
+    recorded_merge_base: str,
+    current_merge_base: str,
+    reviewed_head: str,
+    current_head_value: str,
+) -> dict[str, Any] | None:
+    if not recorded_merge_base or not current_merge_base or recorded_merge_base == current_merge_base:
+        return None
+    drift = merge_base_drift_scope(
+        review_cwd=review_root,
+        recorded_merge_base=recorded_merge_base,
+        current_merge_base=current_merge_base,
+        reviewed_head=reviewed_head,
+    )
+    if list(drift.get("overlapping_paths") or []):
+        return None
+    base_changed_paths = list(drift.get("base_changed_paths") or [])
+    payload = {
+        "status": "ignored_no_path_overlap",
+        "recorded_merge_base": recorded_merge_base,
+        "current_merge_base": current_merge_base,
+        "reviewed_head": reviewed_head,
+        "current_head": current_head_value,
+        "base_changed_path_count": len(base_changed_paths),
+        "base_changed_paths": base_changed_paths[:BASE_DRIFT_PATH_SAMPLE_LIMIT],
+        "overlap_paths": [],
+        "patch_equivalent": bool(drift.get("patch_equivalent")),
+    }
+    if payload["patch_equivalent"]:
+        payload["equivalent_reviewed_head"] = current_head_value
+        return payload
+    parent_head = _first_parent(review_root, current_head_value)
+    if not parent_head:
+        return payload
+    parent_drift = merge_base_drift_scope(
+        review_cwd=review_root,
+        recorded_merge_base=recorded_merge_base,
+        current_merge_base=current_merge_base,
+        reviewed_head=reviewed_head,
+        current_head=parent_head,
+    )
+    if not list(parent_drift.get("overlapping_paths") or []) and bool(parent_drift.get("patch_equivalent")):
+        payload["equivalent_reviewed_head"] = parent_head
+    return payload
+
+
+def _first_parent(review_root: Path, head: str) -> str | None:
+    try:
+        return resolve_ref(review_root, f"{head}^")
+    except ValueError:
+        return None
+
+
+def _current_cycle_identity_if_compatible(state: dict[str, Any]) -> dict[str, Any] | None:
     identity = dict(state.get("identity") or {})
     cwd = str(identity.get("cwd") or "").strip()
     base = str(identity.get("base") or "").strip()
@@ -882,10 +960,29 @@ def _current_cycle_head_if_compatible(state: dict[str, Any]) -> str | None:
             return None
         if has_worktree_changes(review_root):
             return None
+        head = current_head(review_root)
         expected_merge_base = str(identity.get("merge_base") or "").strip()
-        if expected_merge_base and merge_base(review_root, base, "HEAD") != expected_merge_base:
-            return None
-        return current_head(review_root)
+        current_merge_base = merge_base(review_root, base, "HEAD")
+        base_drift = None
+        if expected_merge_base and current_merge_base != expected_merge_base:
+            reviewed_head = _base_drift_reviewed_head(state)
+            if not reviewed_head:
+                return None
+            base_drift = _allowed_base_drift(
+                review_root=review_root,
+                recorded_merge_base=expected_merge_base,
+                current_merge_base=current_merge_base,
+                reviewed_head=reviewed_head,
+                current_head_value=head,
+            )
+            if base_drift is None:
+                return None
+            if (
+                state.get("stage") in {STAGE_DECISION_PENDING, STAGE_FIX_PENDING}
+                and not str(base_drift.get("equivalent_reviewed_head") or "").strip()
+            ):
+                return None
+        return {"head": head, "merge_base": current_merge_base, "base_drift": base_drift}
     except (AttributeError, OSError, ValueError):
         return None
 
@@ -961,11 +1058,22 @@ def _resume_progress(state: dict[str, Any], *, state_dir: Path | None = None) ->
         if state_dir is not None and _pending_grade_payload(state, state_dir=state_dir) is not None:
             return state
         try:
-            head = _current_cycle_head_if_compatible(state)
+            identity = _current_cycle_identity_if_compatible(state)
         except (OSError, ValueError):
             return state
-        if head:
+        if identity:
+            head = str(identity.get("head") or "").strip()
+            base_drift = identity.get("base_drift") if isinstance(identity.get("base_drift"), dict) else None
+            state = _with_current_identity(
+                state,
+                head=head,
+                merge_base_head=str(identity.get("merge_base") or "").strip(),
+                base_drift=base_drift,
+            )
+            state = _with_equivalent_base_drift_review_head(state, base_drift)
             if state_dir is None:
+                return state
+            if bool(dict(base_drift or {}).get("patch_equivalent")):
                 return state
             return _auto_record_pending_decision_fix(state, current_head_value=head, state_dir=state_dir)
         return state
@@ -975,10 +1083,24 @@ def _resume_progress(state: dict[str, Any], *, state_dir: Path | None = None) ->
     active = dict(state.get("active_findings") or {})
     reviewed_head = str(active.get("reviewed_head") or "").strip()
     try:
-        head = _current_cycle_head_if_compatible(state)
+        identity = _current_cycle_identity_if_compatible(state)
     except (OSError, ValueError):
-        head = None
-    if head and reviewed_head and head != reviewed_head:
+        identity = None
+    head = ""
+    if identity:
+        head = str(identity.get("head") or "").strip()
+        base_drift = identity.get("base_drift") if isinstance(identity.get("base_drift"), dict) else None
+        state = _with_current_identity(
+            state,
+            head=head,
+            merge_base_head=str(identity.get("merge_base") or "").strip(),
+            base_drift=base_drift,
+        )
+        state = _with_equivalent_base_drift_review_head(state, base_drift)
+    base_drift = dict(base_drift or {}) if identity else {}
+    active = dict(state.get("active_findings") or {})
+    reviewed_head = str(active.get("reviewed_head") or "").strip()
+    if head and reviewed_head and head != reviewed_head and not bool(base_drift.get("patch_equivalent")):
         return mark_fix_detected(state, head=head)
     return _with_fix_action(state)
 
@@ -1018,7 +1140,13 @@ def _apply_profile_resolution(state: dict[str, Any], resolution: Any) -> dict[st
     return state
 
 
-def _with_current_identity(state: dict[str, Any], *, head: str, merge_base_head: str) -> dict[str, Any]:
+def _with_current_identity(
+    state: dict[str, Any],
+    *,
+    head: str,
+    merge_base_head: str,
+    base_drift: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     next_state = dict(state)
     identity = dict(next_state.get("identity") or {})
     identity["head"] = head
@@ -1028,6 +1156,70 @@ def _with_current_identity(state: dict[str, Any], *, head: str, merge_base_head:
     review_heads["head"] = head
     review_heads["merge_base"] = merge_base_head
     next_state["review_heads"] = review_heads
+    if base_drift is not None:
+        next_state["base_drift"] = base_drift
+    return next_state
+
+
+def _with_equivalent_base_drift_review_head(
+    state: dict[str, Any],
+    base_drift: dict[str, Any] | None,
+) -> dict[str, Any]:
+    drift = dict(base_drift or {})
+    old_head = str(drift.get("reviewed_head") or "").strip()
+    new_head = str(drift.get("equivalent_reviewed_head") or "").strip()
+    if not old_head or not new_head or old_head == new_head:
+        return state
+    next_state = dict(state)
+    rounds = []
+    for item in list(next_state.get("rounds") or []):
+        if not isinstance(item, dict):
+            rounds.append(item)
+            continue
+        next_item = dict(item)
+        if str(next_item.get("reviewed_head") or "").strip() == old_head:
+            next_item["reviewed_head"] = new_head
+        rounds.append(next_item)
+    next_state["rounds"] = rounds
+    active = dict(next_state.get("active_findings") or {})
+    if str(active.get("reviewed_head") or "").strip() == old_head:
+        active["reviewed_head"] = new_head
+        next_state["active_findings"] = active
+    decisions = []
+    for item in list(next_state.get("decisions") or []):
+        if not isinstance(item, dict):
+            decisions.append(item)
+            continue
+        next_item = dict(item)
+        if str(next_item.get("reviewed_head") or "").strip() == old_head:
+            next_item["reviewed_head"] = new_head
+        decisions.append(next_item)
+    if decisions:
+        next_state["decisions"] = decisions
+    review_heads = dict(next_state.get("review_heads") or {})
+    for key in ("last_reviewed_head", "last_fix_head", "last_followup_head", "head"):
+        if str(review_heads.get(key) or "").strip() == old_head:
+            review_heads[key] = new_head
+    next_state["review_heads"] = review_heads
+    progress = dict(next_state.get("review_progress") or {})
+    completed = []
+    for item in list(progress.get("completed_steps") or []):
+        if not isinstance(item, dict):
+            completed.append(item)
+            continue
+        next_item = dict(item)
+        if str(next_item.get("reviewed_head") or "").strip() == old_head:
+            next_item["reviewed_head"] = new_head
+        completed.append(next_item)
+    if completed:
+        progress["completed_steps"] = completed
+        next_state["review_progress"] = progress
+    pending = dict(next_state.get("pending_action") or {})
+    fix_verification = dict(pending.get("fix_verification") or {})
+    if str(fix_verification.get("findings_reviewed_head") or "").strip() == old_head:
+        fix_verification["findings_reviewed_head"] = new_head
+        pending["fix_verification"] = fix_verification
+        next_state["pending_action"] = pending
     return next_state
 
 
@@ -1071,7 +1263,7 @@ def _compatible_continuation_cycle(
 ) -> dict[str, Any] | None:
     normalized_cwd = normalize_cwd(str(review_root))
     normalized_branch = _normalized_branch(branch)
-    candidates: list[tuple[float, str, dict[str, Any]]] = []
+    candidates: list[tuple[float, str, dict[str, Any], dict[str, Any] | None]] = []
     directory = cycles_dir(state_dir)
     if not directory.exists():
         return None
@@ -1082,7 +1274,8 @@ def _compatible_continuation_cycle(
             continue
         if not isinstance(state, dict):
             continue
-        if str(state.get("stage") or "") not in CONTINUATION_REDIRECT_STAGES:
+        state_stage = str(state.get("stage") or "")
+        if state_stage not in CONTINUATION_REDIRECT_STAGES:
             continue
         if isinstance(state.get("superseded_by"), dict):
             continue
@@ -1094,8 +1287,30 @@ def _compatible_continuation_cycle(
         if _normalized_branch(str(identity.get("branch") or "")) != normalized_branch:
             continue
         recorded_merge_base = str(identity.get("merge_base") or "").strip()
+        base_drift = None
         if recorded_merge_base != str(merge_base_head or "").strip():
-            continue
+            reviewed_head = _base_drift_reviewed_head(state)
+            if not reviewed_head:
+                continue
+            try:
+                base_drift = _allowed_base_drift(
+                    review_root=review_root,
+                    recorded_merge_base=recorded_merge_base,
+                    current_merge_base=str(merge_base_head or "").strip(),
+                    reviewed_head=reviewed_head,
+                    current_head_value=head,
+                )
+            except (OSError, ValueError):
+                continue
+            if base_drift is None:
+                continue
+            if state_stage == STAGE_CREATED and not bool(base_drift.get("patch_equivalent")):
+                continue
+            if (
+                state_stage in {STAGE_DECISION_PENDING, STAGE_FIX_PENDING}
+                and not str(base_drift.get("equivalent_reviewed_head") or "").strip()
+            ):
+                continue
         mode = dict(state.get("mode") or {})
         state_mode = str(mode.get("effective") or mode.get("requested") or "").strip()
         if state_mode != effective_mode:
@@ -1103,18 +1318,26 @@ def _compatible_continuation_cycle(
         match_kind = _continuation_head_match_kind(state, review_root=review_root, head=head)
         if match_kind is None:
             continue
-        candidates.append((path.stat().st_mtime, match_kind, state))
+        candidates.append((path.stat().st_mtime, match_kind, state, base_drift))
     if not candidates:
         return None
     exact_candidates = [candidate for candidate in candidates if candidate[1] == "exact"]
     selected_candidates = exact_candidates or candidates
     if len(selected_candidates) > 1:
-        public_ids = sorted(str(candidate[2].get("public_id") or candidate[2].get("cycle_key") or "") for candidate in selected_candidates)
+        public_ids = sorted(
+            str(candidate[2].get("public_id") or candidate[2].get("cycle_key") or "")
+            for candidate in selected_candidates
+        )
         raise ValueError(
             "multiple active review cycles match this repo/base/branch/merge-base; "
             f"rerun with --id for one of: {', '.join(public_ids)}"
         )
-    return _with_current_identity(selected_candidates[0][2], head=head, merge_base_head=merge_base_head)
+    return _with_current_identity(
+        selected_candidates[0][2],
+        head=head,
+        merge_base_head=merge_base_head,
+        base_drift=selected_candidates[0][3],
+    )
 
 
 def _create_or_resume_cycle(*, args: argparse.Namespace, state_dir: Path) -> dict[str, Any]:

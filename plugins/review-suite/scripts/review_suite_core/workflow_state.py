@@ -344,10 +344,11 @@ def merge_base_drift_scope(
     recorded_merge_base: str,
     current_merge_base: str,
     reviewed_head: str,
+    current_head: str = "HEAD",
 ) -> dict[str, Any]:
     base_changed_paths = diff_paths_between(review_cwd, recorded_merge_base, current_merge_base)
     recorded_branch_paths = diff_paths_between(review_cwd, recorded_merge_base, reviewed_head)
-    current_branch_paths = diff_paths_between(review_cwd, current_merge_base, "HEAD")
+    current_branch_paths = diff_paths_between(review_cwd, current_merge_base, current_head)
     branch_paths = recorded_branch_paths | current_branch_paths
     overlapping_paths = sorted(base_changed_paths & branch_paths)
     return {
@@ -356,7 +357,7 @@ def merge_base_drift_scope(
         "current_branch_paths": sorted(current_branch_paths),
         "overlapping_paths": overlapping_paths,
         "patch_equivalent": diff_patch_between(review_cwd, recorded_merge_base, reviewed_head)
-        == diff_patch_between(review_cwd, current_merge_base, "HEAD"),
+        == diff_patch_between(review_cwd, current_merge_base, current_head),
     }
 
 
