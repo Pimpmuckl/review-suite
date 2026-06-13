@@ -51,7 +51,14 @@ from .orchestrator_state import (
 )
 from .paths import cwd_path_from_normalized
 from .process_runtime import CapturedChildProcess, launch_captured_child_process, wait_for_captured_child_process
-from .workflow_state import EFFECTIVE_BASE_METADATA_KEYS, current_head, dirty_worktree_scope, has_committed_diff, merge_base
+from .workflow_state import (
+    EFFECTIVE_BASE_METADATA_KEYS,
+    current_head,
+    dirty_worktree_scope,
+    has_committed_diff,
+    is_ancestor,
+    merge_base,
+)
 
 
 INITIAL_REVIEW_LANE = "review_t1"
@@ -1026,6 +1033,55 @@ def _followup_note(state: dict[str, Any], active: dict[str, Any], source_round_i
     return " ".join(parts)
 
 
+def _is_linear_followup_range(cwd: Path, since_head: str, head: str) -> bool:
+    try:
+        return is_ancestor(cwd, since_head, head)
+    except ValueError:
+        return False
+
+
+def _followup_review_scope(
+    *,
+    state: dict[str, Any],
+    cwd: Path,
+    base: str,
+    since_head: str,
+    head: str,
+    merge_base_head: str,
+    source_round_id: str,
+) -> tuple[dict[str, Any], bool]:
+    identity = dict(state.get("identity") or {})
+    linear_range = _is_linear_followup_range(cwd, since_head, head)
+    if linear_range:
+        review_scope: dict[str, Any] = {
+            "base": since_head,
+            "branch_base": base,
+            "commit": since_head,
+            "commit_end": head,
+            "reviewed_head": head,
+            "merge_base": merge_base_head,
+            "target_label": f"interdiff `{since_head}..{head}`",
+            "source_round_id": source_round_id,
+        }
+    else:
+        review_scope = {
+            "base": base,
+            "branch_base": base,
+            "reviewed_head": head,
+            "merge_base": merge_base_head,
+            "target_label": f"branch diff `{base}..{head}` after fixes for findings from `{since_head}`",
+            "source_round_id": source_round_id,
+            "findings_reviewed_head": since_head,
+        }
+    requested_base = str(identity.get("requested_base") or "").strip()
+    if requested_base and requested_base != base:
+        review_scope["requested_base"] = requested_base
+    for key in EFFECTIVE_BASE_METADATA_KEYS:
+        if key in identity:
+            review_scope[key] = identity[key]
+    return review_scope, linear_range
+
+
 def _run_followup_review_once(state: dict[str, Any], *, state_dir: Path) -> OrchestratorRunnerResult:
     active = _active_findings(state)
     source_round_id = str(active.get("round_id") or "").strip()
@@ -1037,7 +1093,6 @@ def _run_followup_review_once(state: dict[str, Any], *, state_dir: Path) -> Orch
     cwd = _identity_cwd(state)
     head = current_head(cwd)
     base = _identity_text(state, "base")
-    identity = dict(state.get("identity") or {})
     try:
         merge_base_head = merge_base(cwd, base, "HEAD")
     except ValueError:
@@ -1049,26 +1104,26 @@ def _run_followup_review_once(state: dict[str, Any], *, state_dir: Path) -> Orch
         merge_base_head=merge_base_head,
         review_label="follow-up review",
     )
-    review_scope = {
-        "base": since_head,
-        "branch_base": base,
-        "commit": since_head,
-        "commit_end": head,
-        "reviewed_head": head,
-        "merge_base": merge_base_head,
-        "target_label": f"interdiff `{since_head}..{head}`",
-        "source_round_id": source_round_id,
-    }
-    requested_base = str(identity.get("requested_base") or "").strip()
-    if requested_base and requested_base != base:
-        review_scope["requested_base"] = requested_base
-    for key in EFFECTIVE_BASE_METADATA_KEYS:
-        if key in identity:
-            review_scope[key] = identity[key]
+    review_scope, linear_range = _followup_review_scope(
+        state=state,
+        cwd=cwd,
+        base=base,
+        since_head=since_head,
+        head=head,
+        merge_base_head=merge_base_head,
+        source_round_id=source_round_id,
+    )
+    note = _followup_note(state, active, source_round_id)
+    if not linear_range:
+        note = (
+            f"{note} The reviewed head is no longer an ancestor of HEAD; review the current branch diff "
+            f"against {base} and focus on whether the fixes address that source round's findings."
+        )
     prompt = build_followup_prompt(
         since_head=since_head,
         head=head,
-        note=_followup_note(state, active, source_round_id),
+        note=note,
+        target_label=str(review_scope.get("target_label") or ""),
     )
     if not prompt.strip():
         raise ValueError("follow-up review prompt must not be empty")

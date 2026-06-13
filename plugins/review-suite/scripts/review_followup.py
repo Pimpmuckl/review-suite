@@ -166,12 +166,12 @@ def gate_findings_source_context(*, state_dir: Path, review_cwd: Path, base: str
     }
 
 
-def build_followup_prompt(*, since_head: str, head: str, note: str) -> str:
-    target_label = f"interdiff `{since_head}..{head}`"
+def build_followup_prompt(*, since_head: str, head: str, note: str, target_label: str | None = None) -> str:
+    resolved_target_label = target_label or f"interdiff `{since_head}..{head}`"
     return (
         "Review this follow-up diff for correctness and regression risk.\n"
-        f"The review target is {target_label}.\n"
-        "This is a fix pass after earlier review feedback. Focus on whether the interdiff resolves the underlying problem and whether adjacent invariants still hold.\n\n"
+        f"The review target is {resolved_target_label}.\n"
+        "This is a fix pass after earlier review feedback. Focus on whether the review target resolves the underlying problem and whether adjacent invariants still hold.\n\n"
         "Fixer root-cause note:\n"
         f"{note}\n\n"
         f"{build_correctness_review_contract()}"
