@@ -69,12 +69,29 @@ def _amend_file(repo: Path, relative_path: str, content: str) -> str:
 def _run_review(monkeypatch: pytest.MonkeyPatch, args: list[str]) -> tuple[int, dict[str, object]]:
     emitted: list[dict[str, object]] = []
     monkeypatch.setattr(review, "emit_toon", lambda payload: emitted.append(payload))
-    monkeypatch.setattr(sys, "argv", ["review.py", *args])
+    monkeypatch.setattr(sys, "argv", ["review.py", *_without_state_dir_args(monkeypatch, args)])
 
     exit_code = review.main()
 
     assert len(emitted) == 1
     return exit_code, emitted[0]
+
+
+def _without_state_dir_args(monkeypatch: pytest.MonkeyPatch, args: list[str]) -> list[str]:
+    cleaned: list[str] = []
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        if arg == "--state-dir":
+            if index + 1 >= len(args):
+                raise AssertionError("--state-dir test fixture is missing a value")
+            state_dir = Path(args[index + 1]).resolve(strict=False)
+            monkeypatch.setattr(review, "default_state_dir", lambda state_dir=state_dir: state_dir)
+            index += 2
+            continue
+        cleaned.append(arg)
+        index += 1
+    return cleaned
 
 
 def _stub_deslop(monkeypatch: pytest.MonkeyPatch, *returncodes: int) -> list[list[str]]:
@@ -381,14 +398,14 @@ def _assert_github_handoff(action: object, *, public_id: str, state_dir: Path, b
     cmd = str(payload["cmd"])
     assert f"--id {public_id}" in cmd
     assert "--github-review" in cmd
-    assert "--state-dir" in cmd
-    assert str(state_dir) in cmd
+    assert "--state-dir" not in cmd
+    assert str(state_dir) not in cmd
     assert "--github-force" not in cmd
     for result_cmd in dict(payload["result"]).values():
         result_command = str(result_cmd)
         assert f"--id {public_id}" in result_command
-        assert "--state-dir" in result_command
-        assert str(state_dir) in result_command
+        assert "--state-dir" not in result_command
+        assert str(state_dir) not in result_command
     if blocked_by:
         assert payload["blocked_by"] == blocked_by
     else:
@@ -1052,7 +1069,7 @@ def test_action_payload_surfaces_recovery_for_blocked_decision_round(tmp_path: P
     assert "review_suite_arena.py" not in str(action)
     assert "dismiss" not in action
     assert "--decision" not in str(action["cmd"])
-    assert str(tmp_path / "state") in str(action["cmd"])
+    assert str(tmp_path / "state") not in str(action["cmd"])
 
 
 def test_advance_moves_blocked_decision_round_into_arena_recovery(
@@ -1169,10 +1186,12 @@ def test_create_resume_and_id_reprint_use_one_pending_action(monkeypatch: pytest
     assert "grading" not in payload
     assert set(dict(payload["Action"])) == {"cmd", "deslop_done"}
     assert f"--id {public_id}" in str(payload["Action"]["cmd"])
-    assert str(state_dir) in str(payload["Action"]["cmd"])
+    assert "--state-dir" not in str(payload["Action"]["cmd"])
+    assert str(state_dir) not in str(payload["Action"]["cmd"])
     assert "--decision" not in str(payload["Action"]["cmd"])
     assert "--deslop-done" in str(payload["Action"]["deslop_done"])
-    assert str(state_dir) in str(payload["Action"]["deslop_done"])
+    assert "--state-dir" not in str(payload["Action"]["deslop_done"])
+    assert str(state_dir) not in str(payload["Action"]["deslop_done"])
     assert len(deslop_calls) == 1
     assert not (state_dir / "orchestrator" / "state_dirs.json").exists()
     state = _cycle_payload(state_dir, public_id)
@@ -1192,8 +1211,10 @@ def test_create_resume_and_id_reprint_use_one_pending_action(monkeypatch: pytest
     assert set(dict(resumed["Action"])) == {"cmd", "alt", "deslop_done"}
     assert "--decision clean" in str(resumed["Action"]["cmd"])
     assert "--decision findings" in str(resumed["Action"]["alt"])
-    assert str(state_dir) in str(resumed["Action"]["cmd"])
-    assert str(state_dir) in str(resumed["Action"]["alt"])
+    assert "--state-dir" not in str(resumed["Action"]["cmd"])
+    assert "--state-dir" not in str(resumed["Action"]["alt"])
+    assert str(state_dir) not in str(resumed["Action"]["cmd"])
+    assert str(state_dir) not in str(resumed["Action"]["alt"])
     assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 1
     state = _cycle_payload(state_dir, public_id)
     assert len(state["rounds"]) == 1
@@ -1220,7 +1241,8 @@ def test_create_resume_and_id_reprint_use_one_pending_action(monkeypatch: pytest
     assert "stage" not in first_clean
     assert set(dict(first_clean["Action"])) == {"cmd", "deslop_done"}
     assert f"--id {public_id}" in str(first_clean["Action"]["cmd"])
-    assert str(state_dir) in str(first_clean["Action"]["cmd"])
+    assert "--state-dir" not in str(first_clean["Action"]["cmd"])
+    assert str(state_dir) not in str(first_clean["Action"]["cmd"])
     assert "--decision" not in str(first_clean["Action"]["cmd"])
     state = _cycle_payload(state_dir, public_id)
     assert state["pending_action"] == {"kind": "run-review-step", "step_index": 1, "step": "precision-signoff"}
@@ -1591,7 +1613,9 @@ def test_wsl_flag_persists_to_orchestrated_steps(monkeypatch: pytest.MonkeyPatch
     assert "--wsl" in deslop_calls[0]
     state = _cycle_payload(state_dir, public_id)
     assert state["runtime"] == {"allow_unsafe_windows_wsl_fallback": True}
-    assert "--wsl" in review._new_review_command(state, state_dir=state_dir, fresh_token="next")
+    fresh_command = review._new_review_command(state, state_dir=state_dir, fresh_token="next")
+    assert "--wsl" in fresh_command
+    assert "--state-dir" not in fresh_command
 
     exit_code, _resumed = _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
 
@@ -1599,26 +1623,13 @@ def test_wsl_flag_persists_to_orchestrated_steps(monkeypatch: pytest.MonkeyPatch
     assert review_calls[0]["allow_unsafe_windows_wsl_fallback"] is True
 
 
-def test_relative_state_dir_is_resolved_in_followup_actions(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    _stub_review(monkeypatch)
-    repo = tmp_path / "repo"
-    _init_repo(repo)
-    _commit_file(repo, "app.txt", "base\n", "base")
-    monkeypatch.chdir(tmp_path)
+def test_state_dir_flag_is_rejected(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    errors: list[str] = []
+    monkeypatch.setattr(review, "emit_error", lambda message, **kwargs: errors.append(str(message)) or 2)
+    monkeypatch.setattr(sys, "argv", ["review.py", "--id", "rvw_example", "--state-dir", str(tmp_path / "state")])
 
-    exit_code, payload = _run_review(
-        monkeypatch,
-        ["--mode", "emergency", "--cd", str(repo), "--base", "main", "--state-dir", "relative-state"],
-    )
-
-    expected_state_dir = tmp_path / "relative-state"
-    assert exit_code == 0
-    action = dict(payload["Action"])
-    assert str(expected_state_dir) in str(action["cmd"])
-    assert str(expected_state_dir) in str(action["alt"])
+    assert review.main() == 2
+    assert "unrecognized arguments: --state-dir" in errors[-1]
 
 
 def test_id_lookup_ignores_legacy_review_suite_state_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -1693,11 +1704,8 @@ def test_id_show_findings_reads_orchestrator_round_payload_without_running(
     )
     before_calls = len(review_calls)
     monkeypatch.setattr(review, "emit_toon", lambda payload: (_ for _ in ()).throw(AssertionError("should not emit status")))
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        ["review.py", "--id", public_id, "--show-findings", "--state-dir", str(state_dir)],
-    )
+    monkeypatch.setattr(review, "default_state_dir", lambda: state_dir)
+    monkeypatch.setattr(sys, "argv", ["review.py", "--id", public_id, "--show-findings"])
 
     exit_code = review.main()
 
@@ -1902,14 +1910,14 @@ def test_restart_mode_requires_escalation_reason_and_stricter_mode(
     messages: list[str] = []
     monkeypatch.setattr(review, "emit_error", lambda message, **kwargs: messages.append(str(message)) or 2)
 
-    monkeypatch.setattr(sys, "argv", ["review.py", "--id", public_id, "--restart-mode", "deep", "--state-dir", str(state_dir)])
+    monkeypatch.setattr(sys, "argv", ["review.py", "--id", public_id, "--restart-mode", "deep"])
     assert review.main() == 2
     assert messages[-1] == "--reason is required for --restart-mode"
 
     monkeypatch.setattr(
         sys,
         "argv",
-        ["review.py", "--id", public_id, "--restart-mode", "brief", "--reason", "try downgrade", "--state-dir", str(state_dir)],
+        ["review.py", "--id", public_id, "--restart-mode", "brief", "--reason", "try downgrade"],
     )
     assert review.main() == 2
     assert "--restart-mode must increase strictness" in messages[-1]
@@ -1938,7 +1946,7 @@ def test_restart_mode_rejects_dirty_worktree(
     monkeypatch.setattr(
         sys,
         "argv",
-        ["review.py", "--id", public_id, "--restart-mode", "deep", "--reason", "rerun deeper", "--state-dir", str(state_dir)],
+        ["review.py", "--id", public_id, "--restart-mode", "deep", "--reason", "rerun deeper"],
     )
 
     assert review.main() == 2
@@ -1970,7 +1978,7 @@ def test_restart_mode_rejects_changed_head(
     monkeypatch.setattr(
         sys,
         "argv",
-        ["review.py", "--id", public_id, "--restart-mode", "deep", "--reason", "rerun deeper", "--state-dir", str(state_dir)],
+        ["review.py", "--id", public_id, "--restart-mode", "deep", "--reason", "rerun deeper"],
     )
 
     assert review.main() == 2
@@ -2041,7 +2049,8 @@ def test_deslop_done_is_primary_action_when_no_other_action_remains() -> None:
 def test_deslop_done_requires_id_and_rejects_other_actions(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     errors: list[str] = []
     monkeypatch.setattr(review, "emit_error", lambda message, **kwargs: errors.append(str(message)) or 2)
-    monkeypatch.setattr(sys, "argv", ["review.py", "--deslop-done", "--state-dir", str(tmp_path / "state")])
+    monkeypatch.setattr(review, "default_state_dir", lambda: tmp_path / "state")
+    monkeypatch.setattr(sys, "argv", ["review.py", "--deslop-done"])
 
     assert review.main() == 2
     assert errors[-1] == "--deslop-done requires --id"
@@ -2049,7 +2058,7 @@ def test_deslop_done_requires_id_and_rejects_other_actions(monkeypatch: pytest.M
     monkeypatch.setattr(
         sys,
         "argv",
-        ["review.py", "--id", "rvw_example", "--deslop-done", "--show-findings", "--state-dir", str(tmp_path / "state")],
+        ["review.py", "--id", "rvw_example", "--deslop-done", "--show-findings"],
     )
 
     assert review.main() == 2
@@ -2254,7 +2263,7 @@ def test_github_review_rejects_cycle_before_local_green(monkeypatch: pytest.Monk
         return 2
 
     monkeypatch.setattr(review, "emit_error", fake_error)
-    monkeypatch.setattr(sys, "argv", ["review.py", "--id", str(created["review"]), "--github-review", "--state-dir", str(state_dir)])
+    monkeypatch.setattr(sys, "argv", ["review.py", "--id", str(created["review"]), "--github-review"])
 
     exit_code = review.main()
 
@@ -2295,7 +2304,7 @@ def test_github_review_runs_existing_lane_with_canonical_state_dir_and_force(mon
     monkeypatch.setattr(
         sys,
         "argv",
-        ["review.py", "--id", public_id, "--github-review", "--github-force", "--state-dir", str(state_dir)],
+        ["review.py", "--id", public_id, "--github-review", "--github-force"],
     )
 
     exit_code = review.main()
@@ -2337,7 +2346,7 @@ def test_github_review_persists_resumed_wsl_runtime(monkeypatch: pytest.MonkeyPa
         return subprocess.CompletedProcess(command, 0)
 
     monkeypatch.setattr(review.subprocess, "run", fake_subprocess_run)
-    monkeypatch.setattr(sys, "argv", ["review.py", "--id", public_id, "--github-review", "--wsl", "--state-dir", str(state_dir)])
+    monkeypatch.setattr(sys, "argv", ["review.py", "--id", public_id, "--github-review", "--wsl"])
 
     exit_code = review.main()
 
@@ -2459,7 +2468,7 @@ def test_github_result_clean_and_waived_are_terminal_for_existing_cycle(
         return 2
 
     monkeypatch.setattr(review, "emit_error", fake_error)
-    monkeypatch.setattr(sys, "argv", ["review.py", "--id", public_id, "--github-result", "waived", "--state-dir", str(state_dir)])
+    monkeypatch.setattr(sys, "argv", ["review.py", "--id", public_id, "--github-result", "waived"])
 
     assert review.main() == 2
     assert errors[0][0] == "--github-note is required when --github-result waived"
@@ -2861,7 +2870,7 @@ def test_mode_rerun_with_multiple_matching_cycles_requires_id(
     monkeypatch.setattr(
         sys,
         "argv",
-        ["review.py", "--mode", "normal", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)],
+        ["review.py", "--mode", "normal", "--cd", str(repo), "--base", "main"],
     )
 
     assert review.main() == 2
@@ -3504,6 +3513,7 @@ def test_benchmark_selection_is_rejected(
     config = deepcopy(review.load_config(state_dir))
     config["orchestrator"]["selection"] = "benchmark"
     monkeypatch.setattr(review, "load_config", lambda state_dir: config)
+    monkeypatch.setattr(review, "default_state_dir", lambda: state_dir)
 
     monkeypatch.setattr(
         sys,
@@ -3516,8 +3526,6 @@ def test_benchmark_selection_is_rejected(
             str(repo),
             "--base",
             "main",
-            "--state-dir",
-            str(state_dir),
         ],
     )
 
@@ -3540,6 +3548,7 @@ def test_auto_selection_requires_stable_profile(
     config = deepcopy(review.load_config(state_dir))
     del config["orchestrator"]["profiles"]["stable"]["normal"]
     monkeypatch.setattr(review, "load_config", lambda state_dir: config)
+    monkeypatch.setattr(review, "default_state_dir", lambda: state_dir)
 
     monkeypatch.setattr(
         sys,
@@ -3552,8 +3561,6 @@ def test_auto_selection_requires_stable_profile(
             str(repo),
             "--base",
             "main",
-            "--state-dir",
-            str(state_dir),
         ],
     )
 

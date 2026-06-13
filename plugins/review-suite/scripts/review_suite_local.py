@@ -322,7 +322,7 @@ def _is_branch_review_scope(review_scope: dict[str, Any]) -> bool:
     return True
 
 
-def _review_state_status_command(*, review_cwd: Path, base: str, state_dir: Path) -> str:
+def _review_state_status_command(*, review_cwd: Path, base: str) -> str:
     return format_command(
         [
             sys.executable,
@@ -332,8 +332,6 @@ def _review_state_status_command(*, review_cwd: Path, base: str, state_dir: Path
             str(review_cwd),
             "--base",
             str(base),
-            "--state-dir",
-            str(state_dir),
         ]
     )
 
@@ -366,7 +364,6 @@ def guard_branch_signoff_lane(
     command = _review_state_status_command(
         review_cwd=review_cwd,
         base=str(base),
-        state_dir=state_dir,
     )
     if recommendation == "review-followup":
         raise ValueError(
@@ -412,7 +409,6 @@ def guard_no_stage_step_down(
     command = _review_state_status_command(
         review_cwd=review_cwd,
         base=str(base),
-        state_dir=state_dir,
     )
     raise ValueError(
         f"{lane} would step down from the current review stage {current_stage_lane}. "

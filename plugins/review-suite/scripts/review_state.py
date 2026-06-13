@@ -47,7 +47,6 @@ def build_parser() -> argparse.ArgumentParser:
     status.add_argument("--cd")
     status.add_argument("--base", default="main")
     status.add_argument("--wsl", action="store_true", help=argparse.SUPPRESS)
-    status.add_argument("--state-dir", default=str(default_state_dir()), help=argparse.SUPPRESS)
     status.add_argument("--verbose", action="store_true", help="Print the full routing snapshot.")
     return parser
 
@@ -249,14 +248,7 @@ def _public_status_payload(payload: dict[str, object]) -> dict[str, object]:
     return public or payload
 
 
-def _state_dir_args(state_dir: Path) -> list[str]:
-    resolved = state_dir.resolve(strict=False)
-    if resolved == Path(default_state_dir()).resolve(strict=False):
-        return []
-    return ["--state-dir", str(resolved)]
-
-
-def _review_command(public_id: str, *, state_dir: Path, extra: tuple[str, ...] = ()) -> str:
+def _review_command(public_id: str, *, extra: tuple[str, ...] = ()) -> str:
     return format_command(
         [
             sys.executable,
@@ -264,12 +256,11 @@ def _review_command(public_id: str, *, state_dir: Path, extra: tuple[str, ...] =
             "--id",
             public_id,
             *extra,
-            *_state_dir_args(state_dir),
         ]
     )
 
 
-def _restart_deep_action(state: dict[str, object], public_id: str, *, state_dir: Path) -> dict[str, object] | None:
+def _restart_deep_action(state: dict[str, object], public_id: str) -> dict[str, object] | None:
     stage = str(state.get("stage") or "").strip()
     if stage in ORCHESTRATOR_HIDDEN_STAGES or isinstance(state.get("superseded_by"), dict):
         return None
@@ -277,7 +268,7 @@ def _restart_deep_action(state: dict[str, object], public_id: str, *, state_dir:
     if mode not in RESTART_MODE_ORDER or RESTART_MODE_ORDER[mode] >= RESTART_MODE_ORDER["deep"]:
         return None
     return {
-        "cmd": _review_command(public_id, state_dir=state_dir, extra=("--restart-mode", "deep", "--reason", "REASON")),
+        "cmd": _review_command(public_id, extra=("--restart-mode", "deep", "--reason", "REASON")),
         "mode": "deep",
         "note": "Use only for explicit escalation; replace REASON.",
     }
@@ -490,7 +481,7 @@ def _orchestrator_action(state: dict[str, object], public_id: str, *, state_dir:
         replacement = str(superseded_by.get("review") or "").strip()
         if replacement:
             return {
-                "cmd": _review_command(replacement, state_dir=state_dir),
+                "cmd": _review_command(replacement),
                 "note": f"Review {public_id} was superseded by {replacement}.",
             }
     if stage == "decision-pending":
@@ -499,32 +490,32 @@ def _orchestrator_action(state: dict[str, object], public_id: str, *, state_dir:
             action = {
                 "cmd": grade,
                 "note": "Grade the arena round, then rerun this review id to continue.",
-                "next": _review_command(public_id, state_dir=state_dir),
+                "next": _review_command(public_id),
             }
         else:
             auto_decision = _auto_decision_command(state, state_dir=state_dir)
             if auto_decision:
                 action: dict[str, object] = {
-                    "cmd": _review_command(public_id, state_dir=state_dir),
+                    "cmd": _review_command(public_id),
                     "note": f"Structured {auto_decision} verdict is ready; rerun this review id to record it and continue.",
                     "override": {
-                        "clean": _review_command(public_id, state_dir=state_dir, extra=("--decision", "clean")),
-                        "findings": _review_command(public_id, state_dir=state_dir, extra=("--decision", "findings")),
+                        "clean": _review_command(public_id, extra=("--decision", "clean")),
+                        "findings": _review_command(public_id, extra=("--decision", "findings")),
                     },
                 }
             else:
                 action = {
-                    "cmd": _review_command(public_id, state_dir=state_dir, extra=("--decision", "clean")),
-                    "alt": _review_command(public_id, state_dir=state_dir, extra=("--decision", "findings")),
+                    "cmd": _review_command(public_id, extra=("--decision", "clean")),
+                    "alt": _review_command(public_id, extra=("--decision", "findings")),
                 }
     elif stage == "fix-pending":
         action = {
-            "cmd": _review_command(public_id, state_dir=state_dir),
+            "cmd": _review_command(public_id),
             "note": "Commit/amend valid fixes, then rerun this command.",
         }
     elif stage in {"review-green", "local-green-handoff"}:
         action = {
-            "cmd": _review_command(public_id, state_dir=state_dir, extra=("--github-review",)),
+            "cmd": _review_command(public_id, extra=("--github-review",)),
             "after": "PR create/update",
         }
         blockers = []
@@ -536,8 +527,8 @@ def _orchestrator_action(state: dict[str, object], public_id: str, *, state_dir:
         if blockers:
             action["blocked_by"] = blockers
     else:
-        action = {"cmd": _review_command(public_id, state_dir=state_dir)}
-    restart = _restart_deep_action(state, public_id, state_dir=state_dir)
+        action = {"cmd": _review_command(public_id)}
+    restart = _restart_deep_action(state, public_id)
     if restart:
         action["restart"] = restart
     return action
@@ -699,7 +690,7 @@ def _status_action(payload: dict[str, object], *, review_cwd: Path, base: str, s
 def cmd_status(args: argparse.Namespace) -> int:
     _reject_review_state_unc_wsl(getattr(args, "cd", None))
     review_cwd = resolve_repo_root(args.cd)
-    state_dir = Path(args.state_dir)
+    state_dir = Path(default_state_dir()).resolve(strict=False)
     payload = inspect_workflow_status(
         state_dir=state_dir,
         review_cwd=review_cwd,

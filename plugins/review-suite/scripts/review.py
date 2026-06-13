@@ -129,7 +129,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--deslop-done", action="store_true")
     parser.add_argument("--show-findings", action="store_true", help="Print stored reviewer output for --id without running review.")
     parser.add_argument("--fresh-token", help=argparse.SUPPRESS)
-    parser.add_argument("--state-dir", default=str(default_state_dir()), help=argparse.SUPPRESS)
     parser.add_argument("--wsl", action="store_true")
     return parser
 
@@ -144,8 +143,6 @@ def _runtime_uses_wsl(state: dict[str, Any]) -> bool:
 
 def _review_command(public_id: str, *extra: str, state_dir: Path | None = None) -> str:
     command = [sys.executable, str(Path(__file__).resolve()), "--id", public_id, *extra]
-    if state_dir is not None:
-        command.extend(["--state-dir", str(state_dir)])
     return format_command(command)
 
 
@@ -165,8 +162,6 @@ def _new_review_command(state: dict[str, Any], *, state_dir: Path, fresh_token: 
         str(cwd_path_from_normalized(cwd)),
         "--base",
         base,
-        "--state-dir",
-        str(state_dir),
     ]
     if fresh_token:
         command.extend(["--fresh-token", fresh_token])
@@ -1842,7 +1837,7 @@ def main() -> int:
     parser = build_parser()
     try:
         args = parser.parse_args()
-        state_dir = Path(args.state_dir).resolve(strict=False)
+        state_dir = Path(default_state_dir()).resolve(strict=False)
         has_validation_status = _has_validation_status(args)
         if args.restart_mode and not args.id:
             raise ValueError("--restart-mode requires --id")
