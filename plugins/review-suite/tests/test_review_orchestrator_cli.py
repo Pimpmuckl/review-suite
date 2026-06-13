@@ -16,7 +16,7 @@ if str(SCRIPT_DIR) not in sys.path:
 
 import review
 import review_suite_arena
-from review_suite_core import orchestrator_runner
+from review_suite_core import orchestrator_runner, orchestrator_store
 from review_suite_local import write_round
 
 
@@ -1640,6 +1640,39 @@ def test_id_lookup_ignores_legacy_review_suite_state_root(monkeypatch: pytest.Mo
 
     with pytest.raises(ValueError, match=f"unknown review cycle id: {public_id}"):
         review._load_cycle_and_state_dir(tmp_path / "requested-state", public_id)
+
+
+def test_public_id_allocation_preserves_index_updates_written_before_lock(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    existing_key = "orc-aaaaaaaaaaaaaaaa"
+    new_key = "orc-bbbbbbbbbbbbbbbb"
+
+    class Lock:
+        def __enter__(self) -> None:
+            orchestrator_store._write_index(
+                state_dir,
+                {
+                    "schema_version": orchestrator_store.ORCHESTRATOR_INDEX_SCHEMA_VERSION,
+                    "ids": {"rvw_aaaaaaaa": existing_key},
+                    "cycle_keys": {existing_key: "rvw_aaaaaaaa"},
+                },
+            )
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+    monkeypatch.setattr(orchestrator_store, "orchestrator_store_lock", lambda **kwargs: Lock())
+
+    assert orchestrator_store.public_id_for_cycle_key(state_dir, new_key) == "rvw_bbbbbbbb"
+    index = orchestrator_store.load_index(state_dir)
+    assert index["ids"] == {
+        "rvw_aaaaaaaa": existing_key,
+        "rvw_bbbbbbbb": new_key,
+    }
+    assert index["cycle_keys"] == {
+        existing_key: "rvw_aaaaaaaa",
+        new_key: "rvw_bbbbbbbb",
+    }
 
 
 def test_id_show_findings_reads_orchestrator_round_payload_without_running(
