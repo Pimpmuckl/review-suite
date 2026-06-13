@@ -124,6 +124,26 @@ def test_metadata_for_unusable_worktree_cwd_uses_fallback(monkeypatch) -> None:
     }
 
 
+def test_metadata_preserves_posix_folder_backslashes(monkeypatch) -> None:
+    class BackslashFolderPath:
+        name = r"sample\api-wt-budget"
+
+        def exists(self) -> bool:
+            return False
+
+        def __str__(self) -> str:
+            return r"/tmp/sample\api-wt-budget"
+
+    def backslash_folder_path(normalized_cwd: str) -> BackslashFolderPath:
+        return BackslashFolderPath()
+
+    monkeypatch.setattr(review_costs, "cwd_path_from_normalized", backslash_folder_path)
+
+    metadata = _metadata_for_cwd(r"/tmp/sample\api-wt-budget")
+
+    assert metadata["folder"] == r"sample\api-wt-budget"
+
+
 def test_cached_row_with_folder_repo_folds_wt_suffix() -> None:
     row = _cost_row_from_payload(
         {

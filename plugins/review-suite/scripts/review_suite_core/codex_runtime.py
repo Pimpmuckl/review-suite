@@ -25,8 +25,15 @@ def effective_execution_cwd(review_root: Path, allow_unsafe_windows_wsl_fallback
 def is_windows_wsl_unc_path(path: Path) -> bool:
     if sys.platform != "win32":
         return False
-    normalized = str(path.resolve()).replace("/", "\\").lower()
-    return normalized.startswith("\\\\wsl.localhost\\") or normalized.startswith("\\\\wsl$\\")
+    prefixes = ("\\\\wsl.localhost\\", "\\\\wsl$\\")
+    normalized = str(path).replace("/", "\\").lower()
+    if normalized.startswith(prefixes):
+        return True
+    try:
+        resolved = str(path.resolve()).replace("/", "\\").lower()
+    except OSError:
+        return False
+    return resolved.startswith(prefixes)
 
 
 def running_in_wsl() -> bool:

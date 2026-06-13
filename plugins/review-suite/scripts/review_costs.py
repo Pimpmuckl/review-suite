@@ -665,7 +665,12 @@ def _current_pr_number(review_cwd: Path) -> str:
 
 def _metadata_for_cwd(normalized_cwd: str) -> dict[str, str]:
     review_cwd = cwd_path_from_normalized(normalized_cwd)
-    folder = review_cwd.name or normalized_cwd.rstrip("\\/").rsplit("/", 1)[-1] or "-"
+    review_cwd_text = str(review_cwd)
+    folder = review_cwd.name
+    if "/" in folder or (folder == review_cwd_text and review_cwd_text.startswith("\\\\")):
+        folder = ""
+    if not folder:
+        folder = (review_cwd_text or normalized_cwd).rstrip("\\/").replace("\\", "/").rsplit("/", 1)[-1] or "-"
     fallback_repo = _repo_from_worktree_folder(folder) or folder
     try:
         exists = review_cwd.exists()
