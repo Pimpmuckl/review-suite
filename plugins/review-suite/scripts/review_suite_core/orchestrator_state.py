@@ -39,6 +39,7 @@ DESLOP_STATUS_TRACKED = "tracked"
 DESLOP_STATUS_DONE = "done"
 DESLOP_STATUS_FAILED = "failed"
 DESLOP_STATUS_CLOSED = "closed"
+DESLOP_STATUS_SKIPPED = "skipped"
 DESLOP_STATUS_SKIPPED_EMERGENCY = "skipped-emergency"
 
 GATE_LANES = {"review_t2", "review_t4"}
@@ -130,6 +131,7 @@ def create_cycle(
     selection: str = "auto",
     effective_selection: str | None = None,
     deslop_enabled: bool | None = None,
+    deslop_skip_source: str | None = None,
     cycle_token: str | None = None,
     restart_token: str | None = None,
 ) -> dict[str, Any]:
@@ -139,6 +141,15 @@ def create_cycle(
     requested_selection = _normalize_selection(selection, field="selection")
     resolved_selection = _normalize_selection(effective_selection or requested_selection, field="effective_selection")
     deslop_tracked = bool(deslop_enabled) if deslop_enabled is not None else effective != "emergency"
+    if deslop_tracked:
+        deslop_status = DESLOP_STATUS_TRACKED
+        deslop_skip = None
+    elif effective == "emergency":
+        deslop_status = DESLOP_STATUS_SKIPPED_EMERGENCY
+        deslop_skip = None
+    else:
+        deslop_status = DESLOP_STATUS_SKIPPED
+        deslop_skip = _optional_text(deslop_skip_source) or "profile"
     fresh_token = _optional_text(cycle_token)
     restart = _optional_text(restart_token)
     if fresh_token is not None and restart is not None:
@@ -160,7 +171,7 @@ def create_cycle(
         "pending_action": None,
         "deslop": {
             "tracked": deslop_tracked,
-            "status": DESLOP_STATUS_TRACKED if deslop_tracked else DESLOP_STATUS_SKIPPED_EMERGENCY,
+            "status": deslop_status,
         },
         "review_heads": {
             "head": identity["head"],
@@ -197,6 +208,8 @@ def create_cycle(
         state["restart"] = {"token": restart}
     if fresh_token is not None:
         state["fresh"] = {"token": fresh_token}
+    if deslop_skip is not None:
+        state["deslop"]["source"] = deslop_skip
     return state
 
 

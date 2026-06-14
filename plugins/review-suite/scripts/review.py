@@ -62,6 +62,7 @@ from review_suite_core.orchestrator_state import (
     STAGE_ABORTED,
     DESLOP_STATUS_CLOSED,
     DESLOP_STATUS_DONE,
+    DESLOP_STATUS_SKIPPED,
     create_cycle,
     mark_deslop_closed,
     mark_fix_detected,
@@ -129,6 +130,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--full-suite", choices=CLI_VALIDATION_STATUSES)
     parser.add_argument("--ci", choices=CLI_VALIDATION_STATUSES)
     parser.add_argument("--deslop-done", action="store_true")
+    parser.add_argument(
+        "--skip-deslop",
+        "--no-deslop",
+        dest="skip_deslop",
+        action="store_true",
+        help="Skip the deslop sidecar when creating a review cycle.",
+    )
     parser.add_argument("--show-findings", action="store_true", help="Print stored reviewer output for --id without running review.")
     parser.add_argument("--fresh-token", help=argparse.SUPPRESS)
     parser.add_argument("--wsl", action="store_true")
@@ -173,6 +181,8 @@ def _new_review_command(state: dict[str, Any], *, state_dir: Path, fresh_token: 
     ]
     if fresh_token:
         command.extend(["--fresh-token", fresh_token])
+    if _cycle_cli_skips_deslop(state):
+        command.append("--skip-deslop")
     if _runtime_uses_wsl(state):
         command.append("--wsl")
     return format_command(command)
@@ -1289,6 +1299,27 @@ def _fresh_token_claims_budget_exhausted_continuation(state: dict[str, Any], fre
     return _fresh_review_token(state) == token
 
 
+def _creation_cycle_token(args: argparse.Namespace, *, skip_deslop: bool) -> str | None:
+    token = str(args.fresh_token or "").strip()
+    if not skip_deslop:
+        return token or None
+    return f"skip-deslop:{token}" if token else "skip-deslop"
+
+
+def _cycle_cli_skips_deslop(state: dict[str, Any]) -> bool:
+    deslop = dict(state.get("deslop") or {})
+    if str(deslop.get("status") or "").strip() != DESLOP_STATUS_SKIPPED:
+        return False
+    source = str(deslop.get("source") or "cli").strip()
+    return source == "cli"
+
+
+def _deslop_is_done_or_skipped(state: dict[str, Any]) -> bool:
+    deslop = dict(state.get("deslop") or {})
+    status = str(deslop.get("status") or "").strip()
+    return status == DESLOP_STATUS_DONE or (not bool(deslop.get("tracked")) and status == DESLOP_STATUS_SKIPPED)
+
+
 def _continuation_head_match_kind(state: dict[str, Any], *, review_root: Path, head: str) -> str | None:
     identity = dict(state.get("identity") or {})
     recorded_head = str(identity.get("head") or "").strip()
@@ -1298,8 +1329,7 @@ def _continuation_head_match_kind(state: dict[str, Any], *, review_root: Path, h
         return "exact"
     stage = str(state.get("stage") or "")
     if stage == STAGE_CREATED:
-        deslop = dict(state.get("deslop") or {})
-        if str(deslop.get("status") or "").strip() != DESLOP_STATUS_DONE:
+        if not _deslop_is_done_or_skipped(state):
             return None
         try:
             if is_ancestor(review_root, recorded_head, head) or is_ancestor(review_root, head, recorded_head):
@@ -1327,6 +1357,7 @@ def _compatible_continuation_cycle(
     merge_base_head: str,
     effective_mode: str,
     fresh_token: str | None = None,
+    skip_deslop: bool = False,
 ) -> dict[str, Any] | None:
     normalized_cwd = normalize_cwd(str(review_root))
     normalized_branch = _normalized_branch(branch)
@@ -1383,6 +1414,8 @@ def _compatible_continuation_cycle(
         state_mode = str(mode.get("effective") or mode.get("requested") or "").strip()
         if state_mode != effective_mode:
             continue
+        if _cycle_cli_skips_deslop(state) != bool(skip_deslop):
+            continue
         match_kind = _continuation_head_match_kind(state, review_root=review_root, head=head)
         if match_kind is None:
             continue
@@ -1428,6 +1461,8 @@ def _create_or_resume_cycle(*, args: argparse.Namespace, state_dir: Path) -> dic
     merge_base_head = merge_base(review_root, base, "HEAD")
     config = load_config(state_dir)
     resolution = resolve_orchestrator_profile(config, mode=str(args.mode), selection=_configured_selection(config))
+    profile_deslop_enabled = bool(resolution.profile.deslop_enabled)
+    skip_deslop = bool(args.skip_deslop) and profile_deslop_enabled
     continuation = _compatible_continuation_cycle(
         state_dir=state_dir,
         review_root=review_root,
@@ -1437,6 +1472,7 @@ def _create_or_resume_cycle(*, args: argparse.Namespace, state_dir: Path) -> dic
         merge_base_head=merge_base_head,
         effective_mode=resolution.effective_mode,
         fresh_token=args.fresh_token,
+        skip_deslop=skip_deslop,
     )
     if continuation is not None:
         return continuation
@@ -1450,8 +1486,9 @@ def _create_or_resume_cycle(*, args: argparse.Namespace, state_dir: Path) -> dic
         effective_mode=resolution.effective_mode,
         selection=resolution.requested_selection,
         effective_selection=resolution.effective_selection,
-        deslop_enabled=resolution.profile.deslop_enabled,
-        cycle_token=str(args.fresh_token or "").strip() or None,
+        deslop_enabled=profile_deslop_enabled and not skip_deslop,
+        deslop_skip_source="cli" if skip_deslop else None,
+        cycle_token=_creation_cycle_token(args, skip_deslop=skip_deslop),
     )
     if str(base_info["requested_base"]) != base:
         state["identity"]["requested_base"] = str(base_info["requested_base"])
@@ -1525,6 +1562,9 @@ def _create_restart_cycle(
     config = load_config(state_dir)
     selection = str(dict(state.get("selection") or {}).get("requested") or _configured_selection(config)).strip()
     resolution = resolve_orchestrator_profile(config, mode=target_mode, selection=selection)
+    source_deslop = dict(state.get("deslop") or {})
+    source_skipped_deslop = str(source_deslop.get("status") or "").strip() == DESLOP_STATUS_SKIPPED
+    deslop_skip_source = str(source_deslop.get("source") or "cli").strip() if source_skipped_deslop else None
     restart_token = f"{state.get('cycle_key')}:{target_mode}"
     replacement = create_cycle(
         cwd=review_root,
@@ -1536,7 +1576,8 @@ def _create_restart_cycle(
         effective_mode=resolution.effective_mode,
         selection=resolution.requested_selection,
         effective_selection=resolution.effective_selection,
-        deslop_enabled=resolution.profile.deslop_enabled,
+        deslop_enabled=False if source_skipped_deslop else resolution.profile.deslop_enabled,
+        deslop_skip_source=deslop_skip_source,
         restart_token=restart_token,
     )
     existing = load_cycle_by_key(state_dir, str(replacement["cycle_key"]))
@@ -1947,6 +1988,8 @@ def main() -> int:
             raise ValueError("--restart-mode requires --id")
         if args.fresh_token and args.id:
             raise ValueError("--fresh-token cannot be combined with --id")
+        if args.skip_deslop and args.id:
+            raise ValueError("--skip-deslop/--no-deslop can only be used when creating a review cycle")
         if args.reason and not args.restart_mode:
             raise ValueError("--reason requires --restart-mode")
         if args.deslop_done and not args.id:

@@ -95,6 +95,17 @@ def test_create_cycle_is_compact_json_state_keyed_by_normalized_inputs(tmp_path:
         effective_mode="emergency",
         selection="stable",
     )
+    skipped = create_cycle(
+        cwd=repo,
+        base="main",
+        branch="feature/no-deslop",
+        head="head-1",
+        merge_base="base-1",
+        requested_mode="normal",
+        effective_mode="normal",
+        selection="stable",
+        deslop_enabled=False,
+    )
 
     assert json.loads(json.dumps(state)) == state
     assert state["cycle_key"] == same_state["cycle_key"]
@@ -105,6 +116,7 @@ def test_create_cycle_is_compact_json_state_keyed_by_normalized_inputs(tmp_path:
     assert state["validation"]["full_suite"] == "unknown"
     assert emergency["identity"]["branch"] is None
     assert emergency["deslop"] == {"tracked": False, "status": "skipped-emergency"}
+    assert skipped["deslop"] == {"tracked": False, "status": "skipped", "source": "profile"}
 
 
 def test_mark_deslop_closed_disables_tracked_sidecar_and_leaves_emergency_untracked(tmp_path: Path) -> None:
