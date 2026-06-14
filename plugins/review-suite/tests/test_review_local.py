@@ -12,12 +12,12 @@ SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts"
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+import review
 import review_deslop
 import review_followup
 import review_github
 import review_plan
 import review_suite_arena
-import review_state
 import review_t1
 import review_t2
 import review_t3
@@ -499,9 +499,9 @@ def test_primary_wrappers_hide_operator_state_knobs_from_help() -> None:
         "--bot-login",
     )
     help_texts = [
+        review.build_parser().format_help(),
         review_followup.build_parser().format_help(),
         _subparser_help(review_github.build_parser(), "run"),
-        _subparser_help(review_state.build_parser(), "status"),
     ]
 
     for help_text in help_texts:
@@ -584,7 +584,8 @@ def test_agent_wrapper_help_keeps_useful_targeting_controls_visible() -> None:
     assert "--focus" in review_deslop.build_parser().format_help()
     assert "--note-file" in review_followup.build_parser().format_help()
     assert "--pr-number" in _subparser_help(review_github.build_parser(), "run")
-    assert "--base" in _subparser_help(review_state.build_parser(), "status")
+    assert "--base" in review.build_parser().format_help()
+    assert "--status" in review.build_parser().format_help()
 
 
 def test_local_review_wrappers_expose_short_wsl_flag() -> None:

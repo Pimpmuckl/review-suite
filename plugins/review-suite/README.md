@@ -11,10 +11,9 @@ codex plugin add review-suite@review-suite
 
 ## Skills
 
-- `review`: default local orchestrator.
+- `review`: default local orchestrator and status checks.
 - `review-plan`: review a written plan.
 - `review-deslop`: simplify a completed slice.
-- `review-state`: legacy branch/gate routing when no `rvw_*` id exists.
 - `review-github`: anchored GitHub PR review.
 
 ## Review Modes
@@ -78,6 +77,7 @@ To explicitly replace an existing local review ladder with a stricter one, use t
 
 - Start with `--mode brief|normal|deep|emergency`.
 - Follow emitted `Action.cmd`.
+- Without an id, inspect branch/gate routing with `review.py --status --cd <repo-root> --base main`.
 - After an id exists, the normal advance command is bare `review.py --id <id>`; Review Suite auto-records structured `clean` / `findings` reviewer verdicts when available.
 - Inspect an existing id without advancing it with `review.py --id <id> --show-status`.
 - After an id exists, do not repeat creation flags.
@@ -93,6 +93,7 @@ To explicitly replace an existing local review ladder with a stricter one, use t
 
 ```powershell
 <python> <review-suite-plugin-root>/scripts/review.py --mode brief|normal|deep|emergency --cd <repo-root> --base main
+<python> <review-suite-plugin-root>/scripts/review.py --status --cd <repo-root> --base main
 <python> <review-suite-plugin-root>/scripts/review.py --id <id>
 <python> <review-suite-plugin-root>/scripts/review.py --id <id> --decision clean|findings  # manual override
 <python> <review-suite-plugin-root>/scripts/review.py --id <id> --show-status

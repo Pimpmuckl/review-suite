@@ -76,9 +76,9 @@ def load_followup_note(*, note: str | None, note_file: str | None, review_root: 
 
 def _followup_guard_error(*, recommendation: str, note: str) -> str:
     if recommendation == "coherence-review":
-        return f"{note} Run review-state status and use coherence/reset or a full review, or pass --force to override."
+        return f"{note} Run review.py --status and use coherence/reset or a full review, or pass --force to override."
     if recommendation == "full-review":
-        return f"{note} Run review-state status and use the appropriate full-diff review lane, or pass --force to override."
+        return f"{note} Run review.py --status and use the appropriate full-diff review lane, or pass --force to override."
     return note
 
 
@@ -114,7 +114,7 @@ def resolve_since_head(
             if str(status.get("reason") or "") != "gate_findings_fix_delta" or resolved_status_anchor != resolved_since:
                 raise ValueError(
                     "--since must resolve to an ancestor of HEAD for a non-forced follow-up review. "
-                    "Use review-state status to choose the right lane, or pass --force to override."
+                    "Use review.py --status to choose the right lane, or pass --force to override."
                 )
         decision = classify_delta_recommendation(diff_stats(review_cwd, resolved_since, "HEAD"))
         if str(decision.get("recommendation") or "") != "review-followup":

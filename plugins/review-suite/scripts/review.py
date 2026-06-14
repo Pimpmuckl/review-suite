@@ -40,6 +40,7 @@ from review_suite_core import (
 )
 from review_suite_core.config import default_state_dir, load_config
 from review_suite_core.orchestrator_profiles import RESTART_MODE_ORDER, SUPPORTED_MODES, resolve_orchestrator_profile
+from review_suite_core.review_branch_status import cmd_status as cmd_branch_status
 from review_suite_core.orchestrator_runner import run_one_expensive_step
 from review_suite_core.orchestrator_state import (
     DECISION_CLEAN,
@@ -130,6 +131,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--full-suite", choices=CLI_VALIDATION_STATUSES)
     parser.add_argument("--ci", choices=CLI_VALIDATION_STATUSES)
     parser.add_argument("--deslop-done", action="store_true")
+    parser.add_argument("--status", action="store_true", help="Inspect branch/gate routing when no review id exists.")
+    parser.add_argument("--verbose", action="store_true", help="Print the full branch/gate routing snapshot for --status.")
     parser.add_argument(
         "--skip-deslop",
         "--no-deslop",
@@ -2092,6 +2095,31 @@ def main() -> int:
         args = parser.parse_args()
         state_dir = Path(default_state_dir()).resolve(strict=False)
         has_validation_status = _has_validation_status(args)
+        if args.verbose and not args.status:
+            raise ValueError("--verbose requires --status")
+        if args.status:
+            if args.id:
+                raise ValueError("--status cannot be combined with --id; use --id <id> --show-status")
+            if (
+                args.mode
+                or args.restart_mode
+                or args.reason
+                or args.decision
+                or args.github_review
+                or args.github_force
+                or args.github_result
+                or args.github_note
+                or args.focused_validation
+                or args.full_suite
+                or args.ci
+                or args.deslop_done
+                or args.skip_deslop
+                or args.show_findings
+                or args.show_status
+                or args.fresh_token
+            ):
+                raise ValueError("--status cannot be combined with review creation, id actions, validation, or restart flags")
+            return cmd_branch_status(args)
         if args.restart_mode and not args.id:
             raise ValueError("--restart-mode requires --id")
         if args.fresh_token and args.id:

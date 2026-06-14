@@ -32,7 +32,7 @@ codex plugin marketplace upgrade review-suite
 
 ## Quick Start
 
-Use `$review` for local review, `$review-github` for PR-scoped GitHub review, and `$review-state` only for branch/gate routing when no `rvw_*` id exists.
+Use `$review` for local review/status and `$review-github` for PR-scoped GitHub review.
 
 Default local runs print reviewer text once in `Output:`, then one `Action.cmd`.
 

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 from __future__ import annotations
 
 import argparse
@@ -6,15 +5,11 @@ import json
 import sys
 from pathlib import Path
 
-from review_suite_runtime_bootstrap import bootstrap_from_installed_cache
-
-bootstrap_from_installed_cache(__file__)
-
-from review_suite_core import AxiArgumentParser, emit_error, emit_toon, format_command, inspect_workflow_status, resolve_repo_root
+from review_suite_core import emit_toon, format_command, inspect_workflow_status, resolve_repo_root
+from review_suite_core.config import default_state_dir
 from review_suite_core.orchestrator_profiles import RESTART_MODE_ORDER
 from review_gate import gate_signoff_action_payload, gate_signoff_decisions_by_round, load_gate_record, pending_gate_signoff_records
 from review_suite_local import (
-    default_state_dir,
     load_round,
     normalize_record_review_cwd_value,
     normalize_review_cwd_value,
@@ -39,20 +34,8 @@ VALIDATION_READY_STATUSES = {"passed", "waived", "classified"}
 DECISION_COMMANDS = {"clean", "findings"}
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = AxiArgumentParser(description="Inspect deterministic review workflow state for the current branch.")
-    sub = parser.add_subparsers(dest="command", required=True, parser_class=AxiArgumentParser)
-
-    status = sub.add_parser("status")
-    status.add_argument("--cd")
-    status.add_argument("--base", default="main")
-    status.add_argument("--wsl", action="store_true", help=argparse.SUPPRESS)
-    status.add_argument("--verbose", action="store_true", help="Print the full routing snapshot.")
-    return parser
-
-
-def _help_command() -> str:
-    return format_command([sys.executable, str(Path(__file__).resolve()), "--help"])
+def _script_path(name: str) -> str:
+    return (Path(__file__).resolve().parents[1] / name).as_posix()
 
 
 def _wsl_unc_cd(cd: str | None) -> bool:
@@ -60,12 +43,21 @@ def _wsl_unc_cd(cd: str | None) -> bool:
     return normalized.startswith("//wsl.localhost/") or normalized.startswith("//wsl$/")
 
 
-def _reject_review_state_unc_wsl(cd: str | None) -> None:
-    if sys.platform != "win32" or not _wsl_unc_cd(cd):
+def _status_path_for_wsl_check(cd: str | None) -> str | None:
+    if str(cd or "").strip():
+        return str(cd)
+    try:
+        return str(Path.cwd())
+    except OSError:
+        return None
+
+
+def _reject_status_unc_wsl(path: str | None) -> None:
+    if sys.platform != "win32" or not _wsl_unc_cd(path):
         return
     raise ValueError(
-        "review_state does not launch Codex, so --wsl is not useful here. "
-        "Run review_state from native WSL with the Linux repo path instead of a Windows UNC path; Windows git over //wsl.localhost can hang."
+        "review.py --status does not launch Codex, so --wsl is not useful here. "
+        "Run review.py --status from native WSL with the Linux repo path instead of a Windows UNC path; Windows git over //wsl.localhost can hang."
     )
 
 
@@ -73,7 +65,7 @@ def _arena_show_round_command(*, round_id: str) -> str:
     return format_command(
         [
             sys.executable,
-            Path(__file__).resolve().with_name("review_suite_arena.py").as_posix(),
+            _script_path("review_suite_arena.py"),
             "show-round",
             "--round-id",
             round_id,
@@ -89,7 +81,7 @@ def _start_review_command(*, review_cwd: Path, base: str, mode: str) -> str:
     return format_command(
         [
             sys.executable,
-            Path(__file__).resolve().with_name("review.py").as_posix(),
+            _script_path("review.py"),
             "--mode",
             mode,
             "--cd",
@@ -123,7 +115,7 @@ def _gate_signoff_override(
     head_matches_current = bool(reviewed_head and current_head and reviewed_head == current_head)
     note = "View the round, then close the gate as clean or findings."
     if reviewed_head and current_head and reviewed_head != current_head:
-        note = "Reviewed head moved since this gate ran. View the round, close the gate for that head, then rerun review-state."
+        note = "Reviewed head moved since this gate ran. View the round, close the gate for that head, then rerun review.py --status."
     return {
         "recommendation": "signoff-decision",
         "reason": "pending_gate_signoff_decision",
@@ -252,7 +244,7 @@ def _review_command(public_id: str, *, extra: tuple[str, ...] = ()) -> str:
     return format_command(
         [
             sys.executable,
-            Path(__file__).resolve().with_name("review.py").as_posix(),
+            _script_path("review.py"),
             "--id",
             public_id,
             *extra,
@@ -414,7 +406,7 @@ def _arena_grade_command(
     return format_command(
         [
             sys.executable,
-            Path(__file__).resolve().with_name("review_suite_arena.py").as_posix(),
+            _script_path("review_suite_arena.py"),
             "grade",
             "--round-id",
             round_id,
@@ -620,7 +612,7 @@ def _status_action(payload: dict[str, object], *, review_cwd: Path, base: str, s
             {
                 "lane": "gate-findings",
                 "show_cmd": _arena_show_round_command(round_id=round_id),
-                "note": "View the round, fix valid bugs, then rerun review-state.",
+                "note": "View the round, fix valid bugs, then rerun review.py --status.",
             },
             review_cwd=review_cwd,
             round_id=round_id,
@@ -635,14 +627,14 @@ def _status_action(payload: dict[str, object], *, review_cwd: Path, base: str, s
                     "lane": "commit-or-stash",
                     "note": (
                         "Commit intended follow-up changes or stash unrelated dirty files, "
-                        "then rerun review-state to get the review-followup command."
+                        "then rerun review.py --status to get the review-followup command."
                     ),
                 },
                 review_cwd=review_cwd,
             )
         command = [
             sys.executable,
-            Path(__file__).resolve().with_name("review_followup.py").as_posix(),
+            _script_path("review_followup.py"),
             "--base",
             base,
             "--since",
@@ -696,18 +688,19 @@ def _status_action(payload: dict[str, object], *, review_cwd: Path, base: str, s
 
 
 def cmd_status(args: argparse.Namespace) -> int:
-    _reject_review_state_unc_wsl(getattr(args, "cd", None))
+    _reject_status_unc_wsl(_status_path_for_wsl_check(getattr(args, "cd", None)))
     review_cwd = resolve_repo_root(args.cd)
     state_dir = Path(default_state_dir()).resolve(strict=False)
+    base = str(args.base or "main")
     payload = inspect_workflow_status(
         state_dir=state_dir,
         review_cwd=review_cwd,
-        base=str(args.base),
+        base=base,
     )
     orchestrator_override = _orchestrator_status_override(
         state_dir=state_dir,
         review_cwd=review_cwd,
-        base=str(args.base),
+        base=base,
         current_payload=payload,
     )
     if orchestrator_override is not None:
@@ -716,7 +709,7 @@ def cmd_status(args: argparse.Namespace) -> int:
         signoff_override = _gate_signoff_override(
             state_dir=state_dir,
             review_cwd=review_cwd,
-            base=str(args.base),
+            base=base,
             current_payload=payload,
         )
         if signoff_override is not None:
@@ -725,32 +718,13 @@ def cmd_status(args: argparse.Namespace) -> int:
             gate_findings_override = _gate_findings_rerun_override(
                 state_dir=state_dir,
                 review_cwd=review_cwd,
-                base=str(args.base),
+                base=base,
                 current_payload=payload,
             )
             if gate_findings_override is not None:
                 payload.update(gate_findings_override)
-    action = _status_action(payload, review_cwd=review_cwd, base=str(args.base), state_dir=state_dir)
+    action = _status_action(payload, review_cwd=review_cwd, base=base, state_dir=state_dir)
     if action is not None:
         payload["Action"] = action
     emit_toon(payload if bool(args.verbose) else _public_status_payload(payload))
     return 0
-
-
-def main() -> int:
-    parser = build_parser()
-    try:
-        args = parser.parse_args()
-        if args.command == "status":
-            return cmd_status(args)
-    except ValueError as exc:
-        return emit_error(
-            str(exc),
-            status="usage_error",
-            help_items=[_help_command()],
-        )
-    raise SystemExit(f"unknown command: {args.command}")
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

@@ -11,7 +11,8 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import review_suite_core.workflow_state as workflow_state_module
-import review_state
+import review
+import review_suite_core.review_branch_status as review_state
 
 from review_suite_core.workflow_state import (
     branch_token,
@@ -81,9 +82,9 @@ def _use_default_state_dir(monkeypatch, state_dir: Path) -> None:
 
 
 def test_review_state_status_rejects_state_dir(monkeypatch, tmp_path: Path, capsys) -> None:
-    monkeypatch.setattr(sys, "argv", ["review_state.py", "status", "--state-dir", str(tmp_path / "state")])
+    monkeypatch.setattr(sys, "argv", ["review.py", "--status", "--state-dir", str(tmp_path / "state")])
 
-    assert review_state.main() == 2
+    assert review.main() == 2
     rendered = capsys.readouterr().out
     assert "status: usage_error" in rendered
     assert "unrecognized arguments: --state-dir" in rendered
@@ -214,8 +215,8 @@ def test_review_state_status_stays_on_existing_gate_stage_without_anchor(
         sys,
         "argv",
         [
-            "review_state.py",
-            "status",
+            "review.py",
+            "--status",
             "--cd",
             str(repo),
             "--base",
@@ -223,7 +224,7 @@ def test_review_state_status_stays_on_existing_gate_stage_without_anchor(
         ],
     )
 
-    exit_code = review_state.main()
+    exit_code = review.main()
 
     assert exit_code == 0
     assert emitted[0]["recommendation"] == "fix-gate-findings"
@@ -268,8 +269,8 @@ def test_review_state_status_ignores_blocked_gate_for_monotonic_stage_without_an
         sys,
         "argv",
         [
-            "review_state.py",
-            "status",
+            "review.py",
+            "--status",
             "--cd",
             str(repo),
             "--base",
@@ -277,7 +278,7 @@ def test_review_state_status_ignores_blocked_gate_for_monotonic_stage_without_an
         ],
     )
 
-    exit_code = review_state.main()
+    exit_code = review.main()
 
     assert exit_code == 0
     assert emitted[0]["recommendation"] == "full-review"
@@ -309,10 +310,10 @@ def test_review_state_status_verbose_keeps_router_details(monkeypatch, tmp_path:
     monkeypatch.setattr(
         sys,
         "argv",
-        ["review_state.py", "status", "--base", "main", "--verbose"],
+        ["review.py", "--status", "--base", "main", "--verbose"],
     )
 
-    exit_code = review_state.main()
+    exit_code = review.main()
 
     assert exit_code == 0
     assert emitted[0]["current_stage_lane"] == "review_t2"
@@ -369,10 +370,10 @@ def test_review_state_status_surfaces_orchestrator_progress(monkeypatch, tmp_pat
     monkeypatch.setattr(
         sys,
         "argv",
-        ["review_state.py", "status", "--base", "main"],
+        ["review.py", "--status", "--base", "main"],
     )
 
-    exit_code = review_state.main()
+    exit_code = review.main()
 
     assert exit_code == 0
     assert emitted[0]["review"] == "rvw_progress"
@@ -551,10 +552,10 @@ def test_review_state_status_ignores_stale_green_orchestrator_cycle(monkeypatch,
     monkeypatch.setattr(
         sys,
         "argv",
-        ["review_state.py", "status", "--base", "main"],
+        ["review.py", "--status", "--base", "main"],
     )
 
-    exit_code = review_state.main()
+    exit_code = review.main()
 
     assert exit_code == 0
     assert "review" not in emitted[0]
@@ -830,13 +831,13 @@ def test_review_state_status_rejects_windows_wsl_unc_before_git(
         "resolve_repo_root",
         lambda cd: (_ for _ in ()).throw(AssertionError("UNC WSL path should fail before git")),
     )
-    monkeypatch.setattr(review_state, "emit_error", lambda message, **kwargs: captured_errors.append(message) or 2)
+    monkeypatch.setattr(review, "emit_error", lambda message, **kwargs: captured_errors.append(message) or 2)
     monkeypatch.setattr(
         sys,
         "argv",
         [
-            "review_state.py",
-            "status",
+            "review.py",
+            "--status",
             "--cd",
             "//wsl.localhost/Ubuntu/home/alice/code/repo",
             "--base",
@@ -845,11 +846,30 @@ def test_review_state_status_rejects_windows_wsl_unc_before_git(
         ],
     )
 
-    exit_code = review_state.main()
+    exit_code = review.main()
 
     assert exit_code == 2
-    assert "Run review_state from native WSL" in captured_errors[0]
+    assert "Run review.py --status from native WSL" in captured_errors[0]
     assert "--wsl is not useful" in captured_errors[0]
+
+
+def test_review_state_status_rejects_windows_wsl_cwd_before_git(monkeypatch) -> None:
+    captured_errors: list[str] = []
+
+    monkeypatch.setattr(review_state.sys, "platform", "win32")
+    monkeypatch.setattr(review_state, "_status_path_for_wsl_check", lambda cd: "//wsl.localhost/Ubuntu/home/alice/code/repo")
+    monkeypatch.setattr(
+        review_state,
+        "resolve_repo_root",
+        lambda cd: (_ for _ in ()).throw(AssertionError("UNC WSL cwd should fail before git")),
+    )
+    monkeypatch.setattr(review, "emit_error", lambda message, **kwargs: captured_errors.append(message) or 2)
+    monkeypatch.setattr(sys, "argv", ["review.py", "--status", "--base", "main"])
+
+    exit_code = review.main()
+
+    assert exit_code == 2
+    assert "Run review.py --status from native WSL" in captured_errors[0]
 
 
 def test_inspect_workflow_status_warns_after_six_same_tier_runs_without_counting_followups(tmp_path: Path) -> None:
@@ -1949,9 +1969,9 @@ def test_review_state_status_does_not_route_coherence_to_review_deslop(monkeypat
         },
     )
     monkeypatch.setattr(review_state, "emit_toon", lambda payload: emitted.append(payload))
-    monkeypatch.setattr(sys, "argv", ["review_state.py", "status", "--base", "main"])
+    monkeypatch.setattr(sys, "argv", ["review.py", "--status", "--base", "main"])
 
-    exit_code = review_state.main()
+    exit_code = review.main()
 
     assert exit_code == 0
     assert "lane" not in emitted[0]["Action"]
@@ -1976,9 +1996,9 @@ def test_review_state_status_routes_stage_full_review_lane(monkeypatch, tmp_path
     )
     _use_default_state_dir(monkeypatch, state_dir)
     monkeypatch.setattr(review_state, "emit_toon", lambda payload: emitted.append(payload))
-    monkeypatch.setattr(sys, "argv", ["review_state.py", "status", "--base", "main"])
+    monkeypatch.setattr(sys, "argv", ["review.py", "--status", "--base", "main"])
 
-    exit_code = review_state.main()
+    exit_code = review.main()
 
     assert exit_code == 0
     assert "lane" not in emitted[0]["Action"]
@@ -2004,9 +2024,9 @@ def test_review_state_status_adds_followup_action(monkeypatch, tmp_path: Path) -
     )
     _use_default_state_dir(monkeypatch, state_dir)
     monkeypatch.setattr(review_state, "emit_toon", lambda payload: emitted.append(payload))
-    monkeypatch.setattr(sys, "argv", ["review_state.py", "status", "--base", "main"])
+    monkeypatch.setattr(sys, "argv", ["review.py", "--status", "--base", "main"])
 
-    exit_code = review_state.main()
+    exit_code = review.main()
 
     assert exit_code == 0
     assert "lane" not in emitted[0]["Action"]
@@ -2036,9 +2056,9 @@ def test_review_state_status_routes_dirty_followup_to_commit_instruction(monkeyp
     )
     _use_default_state_dir(monkeypatch, state_dir)
     monkeypatch.setattr(review_state, "emit_toon", lambda payload: emitted.append(payload))
-    monkeypatch.setattr(sys, "argv", ["review_state.py", "status", "--base", "main"])
+    monkeypatch.setattr(sys, "argv", ["review.py", "--status", "--base", "main"])
 
-    exit_code = review_state.main()
+    exit_code = review.main()
 
     assert exit_code == 0
     assert "lane" not in emitted[0]["Action"]
@@ -2097,9 +2117,9 @@ def test_review_state_status_routes_pending_gate_signoff_decision(monkeypatch, t
     )
     _use_default_state_dir(monkeypatch, state_dir)
     monkeypatch.setattr(review_state, "emit_toon", lambda payload: emitted.append(payload))
-    monkeypatch.setattr(sys, "argv", ["review_state.py", "status", "--base", "main"])
+    monkeypatch.setattr(sys, "argv", ["review.py", "--status", "--base", "main"])
 
-    exit_code = review_state.main()
+    exit_code = review.main()
 
     assert exit_code == 0
     assert emitted[0]["recommendation"] == "signoff-decision"
@@ -2153,9 +2173,9 @@ def test_review_state_status_keeps_pending_gate_signoff_visible_after_amend(monk
     )
     _use_default_state_dir(monkeypatch, state_dir)
     monkeypatch.setattr(review_state, "emit_toon", lambda payload: emitted.append(payload))
-    monkeypatch.setattr(sys, "argv", ["review_state.py", "status", "--base", "main"])
+    monkeypatch.setattr(sys, "argv", ["review.py", "--status", "--base", "main"])
 
-    exit_code = review_state.main()
+    exit_code = review.main()
 
     assert exit_code == 0
     assert emitted[0]["recommendation"] == "signoff-decision"
@@ -2185,9 +2205,9 @@ def test_review_state_status_adds_fix_gate_findings_action(monkeypatch, tmp_path
     )
     _use_default_state_dir(monkeypatch, tmp_path / "state")
     monkeypatch.setattr(review_state, "emit_toon", lambda payload: emitted.append(payload))
-    monkeypatch.setattr(sys, "argv", ["review_state.py", "status", "--base", "main"])
+    monkeypatch.setattr(sys, "argv", ["review.py", "--status", "--base", "main"])
 
-    exit_code = review_state.main()
+    exit_code = review.main()
 
     assert exit_code == 0
     assert "lane" not in emitted[0]["Action"]
@@ -2248,9 +2268,9 @@ def test_review_state_status_routes_t4_findings_followup_back_to_t4(monkeypatch,
     )
     _use_default_state_dir(monkeypatch, state_dir)
     monkeypatch.setattr(review_state, "emit_toon", lambda payload: emitted.append(payload))
-    monkeypatch.setattr(sys, "argv", ["review_state.py", "status", "--base", "main"])
+    monkeypatch.setattr(sys, "argv", ["review.py", "--status", "--base", "main"])
 
-    exit_code = review_state.main()
+    exit_code = review.main()
 
     assert exit_code == 0
     assert emitted[0]["recommendation"] == "full-review"
@@ -2315,9 +2335,9 @@ def test_review_state_status_routes_t2_findings_followup_back_to_t2(monkeypatch,
     )
     _use_default_state_dir(monkeypatch, state_dir)
     monkeypatch.setattr(review_state, "emit_toon", lambda payload: emitted.append(payload))
-    monkeypatch.setattr(sys, "argv", ["review_state.py", "status", "--base", "main"])
+    monkeypatch.setattr(sys, "argv", ["review.py", "--status", "--base", "main"])
 
-    exit_code = review_state.main()
+    exit_code = review.main()
 
     assert exit_code == 0
     assert emitted[0]["recommendation"] == "full-review"
@@ -2345,9 +2365,9 @@ def test_review_state_status_ignores_legacy_pending_grade_for_caller(monkeypatch
     )
     _use_default_state_dir(monkeypatch, state_dir)
     monkeypatch.setattr(review_state, "emit_toon", lambda payload: emitted.append(payload))
-    monkeypatch.setattr(sys, "argv", ["review_state.py", "status", "--base", "main"])
+    monkeypatch.setattr(sys, "argv", ["review.py", "--status", "--base", "main"])
 
-    exit_code = review_state.main()
+    exit_code = review.main()
 
     assert exit_code == 0
     assert emitted[0]["recommendation"] == "review-followup"
@@ -2374,9 +2394,9 @@ def test_review_state_status_ignores_legacy_running_round_for_caller(monkeypatch
     )
     _use_default_state_dir(monkeypatch, state_dir)
     monkeypatch.setattr(review_state, "emit_toon", lambda payload: emitted.append(payload))
-    monkeypatch.setattr(sys, "argv", ["review_state.py", "status", "--base", "main"])
+    monkeypatch.setattr(sys, "argv", ["review.py", "--status", "--base", "main"])
 
-    exit_code = review_state.main()
+    exit_code = review.main()
 
     assert exit_code == 0
     assert emitted[0]["recommendation"] == "review-followup"

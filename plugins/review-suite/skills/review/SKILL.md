@@ -1,6 +1,6 @@
 ---
 name: review
-description: "Run local code review after focused validation; choose `brief`, `normal`, `deep`, or `emergency` by risk."
+description: "Run local code review/status; choose `brief`, `normal`, `deep`, or `emergency` by risk."
 ---
 
 # Review
@@ -29,6 +29,7 @@ Rules:
 - Review orchestration expects committed review changes. If `git diff` is non-empty but `base..HEAD` is empty, commit intended changes or stash unrelated worktree changes before rerunning.
 - Review commands do not support a dirty-worktree override. Do not append `--allow-dirty`; commit intended review changes first.
 - Read `Output:`, then follow the emitted `Action.cmd`.
+- Without an id, use `review.py --status --cd <repo-root> --base main` for branch/gate routing.
 - The normal advance command after a review id exists is bare `review.py --id <id>`; explicit `--decision clean|findings` is an override when Review Suite cannot auto-advance from a structured reviewer verdict or a human intentionally disagrees.
 - For a read-only id check, run `review.py --id <id> --show-status`.
 - If the caller session was restarted after reviewer output was produced, run `review.py --id <id> --show-findings` to recover stored reviewer text without launching another review.

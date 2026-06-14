@@ -322,12 +322,12 @@ def _is_branch_review_scope(review_scope: dict[str, Any]) -> bool:
     return True
 
 
-def _review_state_status_command(*, review_cwd: Path, base: str) -> str:
+def _review_status_command(*, review_cwd: Path, base: str) -> str:
     return format_command(
         [
             sys.executable,
-            Path(__file__).resolve().with_name("review_state.py").as_posix(),
-            "status",
+            Path(__file__).resolve().with_name("review.py").as_posix(),
+            "--status",
             "--cd",
             str(review_cwd),
             "--base",
@@ -361,7 +361,7 @@ def guard_branch_signoff_lane(
     if recommended_lane == lane and recommendation in {"coherence-review", "full-review"}:
         return
     note = str(status.get("note") or "").strip()
-    command = _review_state_status_command(
+    command = _review_status_command(
         review_cwd=review_cwd,
         base=str(base),
     )
@@ -406,7 +406,7 @@ def guard_no_stage_step_down(
     current_stage_rank = LOCAL_REVIEW_LANE_STAGE_RANK.get(current_stage_lane)
     if current_stage_rank is None or lane_rank >= current_stage_rank:
         return
-    command = _review_state_status_command(
+    command = _review_status_command(
         review_cwd=review_cwd,
         base=str(base),
     )
