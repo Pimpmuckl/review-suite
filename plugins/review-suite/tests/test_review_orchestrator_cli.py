@@ -368,6 +368,21 @@ def _use_compact_normal_profile(monkeypatch: pytest.MonkeyPatch, state_dir: Path
     return config
 
 
+def _use_single_step_normal_profile(monkeypatch: pytest.MonkeyPatch, state_dir: Path) -> None:
+    config = deepcopy(review.load_config(state_dir))
+    normal = config["orchestrator"]["profiles"]["stable"]["normal"]
+    normal["deslop_enabled"] = False
+    normal["steps"] = [
+        {
+            "name": "precision-signoff",
+            "count": 2,
+            "model_ref": "signoff_brief_model",
+            "rerun_on_findings": True,
+        }
+    ]
+    monkeypatch.setattr(review, "load_config", lambda state_dir: config)
+
+
 def _cycle_payload(state_dir: Path, public_id: str) -> dict[str, object]:
     index = json.loads((state_dir / "orchestrator" / "index.json").read_text(encoding="utf-8"))
     cycle_key = index["ids"][public_id]
@@ -2680,6 +2695,7 @@ def test_github_result_findings_reenters_existing_cycle_for_final_signoff(
     followup_calls = _stub_followup(monkeypatch, "github-followup-1")
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
+    _use_single_step_normal_profile(monkeypatch, state_dir)
     _init_repo(repo)
     _commit_file(repo, "app.txt", "base\n", "base")
     _git(repo, "checkout", "-b", "feature/github-findings")
@@ -2687,7 +2703,7 @@ def test_github_result_findings_reenters_existing_cycle_for_final_signoff(
 
     _, opened = _run_review(
         monkeypatch,
-        ["--mode", "emergency", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)],
+        ["--mode", "normal", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)],
     )
     public_id = str(opened["review"])
     _, green = _run_review(monkeypatch, ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)])
@@ -2725,7 +2741,7 @@ def test_github_result_findings_reenters_existing_cycle_for_final_signoff(
     assert "--decision clean" in str(signoff["Action"]["cmd"])
     assert len(followup_calls) == 0
     assert len(review_calls) == 2
-    assert review_calls[1]["step_name"] == "urgent-signoff"
+    assert review_calls[1]["step_name"] == "precision-signoff"
     assert review_calls[1]["step_position"] == 1
     assert review_calls[1]["step_total"] == 1
     state = _cycle_payload(state_dir, public_id)
@@ -2745,12 +2761,13 @@ def test_github_result_clean_and_waived_are_terminal_for_existing_cycle(
     _stub_review(monkeypatch)
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
+    _use_single_step_normal_profile(monkeypatch, state_dir)
     _init_repo(repo)
     _commit_file(repo, "app.txt", "base\n", "base")
 
     _, opened = _run_review(
         monkeypatch,
-        ["--mode", "emergency", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)],
+        ["--mode", "normal", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)],
     )
     public_id = str(opened["review"])
     _run_review(monkeypatch, ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)])
@@ -4045,14 +4062,75 @@ def test_emergency_mode_skips_deslop_and_runs_review(monkeypatch: pytest.MonkeyP
     exit_code, clean = _run_review(monkeypatch, ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)])
     assert exit_code == 0
     assert "stage" not in clean
+    assert "Action" not in clean
+    assert len(review_calls) == 1
+    assert _gate_signoff_decisions(state_dir) == []
+
+    exit_code, github_clean = _run_review(
+        monkeypatch,
+        ["--id", public_id, "--github-result", "clean", "--state-dir", str(state_dir)],
+    )
+    assert exit_code == 0
+    assert github_clean["github_review"] == "clean"
+    assert github_clean["Action"]["blocked_by"] == ["full_suite:unknown", "ci:unknown"]
+    assert "--full-suite passed --ci passed" in str(github_clean["Action"]["cmd"])
+
+
+def test_emergency_manual_github_findings_keeps_re_review_action(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    review_calls = _stub_review(monkeypatch, "signoff-round-1", "signoff-round-2")
+
+    def fail_run(*, command: list[str], cwd: Path) -> subprocess.CompletedProcess:
+        raise AssertionError("emergency mode must not run deslop")
+
+    monkeypatch.setattr(orchestrator_runner, "run_deslop_subprocess", fail_run)
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/emergency-github-findings")
+    _commit_file(repo, "app.txt", "feature\n", "feature")
+
+    _, opened = _run_review(
+        monkeypatch,
+        ["--mode", "emergency", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)],
+    )
+    public_id = str(opened["review"])
+    _, clean = _run_review(monkeypatch, ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)])
+    assert "Action" not in clean
+
+    exit_code, github_findings = _run_review(
+        monkeypatch,
+        [
+            "--id",
+            public_id,
+            "--github-result",
+            "findings",
+            "--github-note",
+            "GitHub found a stale replay bug.",
+            "--state-dir",
+            str(state_dir),
+        ],
+    )
+    assert exit_code == 0
+    assert github_findings["github_review"] == "findings"
+    assert github_findings["Action"]["note"] == "Commit/amend valid fixes, then rerun this command."
+
+    _commit_file(repo, "app.txt", "feature\nfixed\n", "fix github finding")
+    _, signoff = _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+    assert "--decision clean" in str(signoff["Action"]["cmd"])
+    assert len(review_calls) == 2
+    assert review_calls[1]["step_name"] == "urgent-signoff"
+
+    _, final_clean = _run_review(monkeypatch, ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)])
     _assert_github_handoff(
-        clean["Action"],
+        final_clean["Action"],
         public_id=public_id,
         state_dir=state_dir,
         blocked_by=["full_suite:unknown", "ci:unknown"],
     )
-    assert len(review_calls) == 1
-    assert _gate_signoff_decisions(state_dir) == []
+    assert final_clean["Action"]["note"] == "GitHub findings were fixed and locally signed off; request GitHub review again."
 
 
 def test_emergency_skip_deslop_flag_reuses_same_cycle(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -4113,14 +4191,8 @@ def test_stale_decision_renders_current_action_without_mutating_cycle(
     assert stale["status"] == "decision_not_pending"
     assert stale["decision"] == "findings"
     assert "already advanced past that decision" in str(stale["note"])
-    assert "Continue with Action.cmd" in str(stale["note"])
-    assert "Action.override" in str(stale["note"])
-    _assert_github_handoff(
-        stale["Action"],
-        public_id=public_id,
-        state_dir=state_dir,
-        blocked_by=["full_suite:unknown", "ci:unknown"],
-    )
+    assert "No further action is pending" in str(stale["note"])
+    assert "Action" not in stale
     assert _cycle_payload(state_dir, public_id) == before
     assert len(review_calls) == 1
 

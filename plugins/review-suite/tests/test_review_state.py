@@ -514,6 +514,60 @@ def test_orchestrator_action_routes_superseded_reviews(tmp_path: Path) -> None:
     assert "restart" not in action
 
 
+def test_orchestrator_action_omits_initial_emergency_github_handoff(tmp_path: Path) -> None:
+    action = review_state._orchestrator_action(
+        {
+            "stage": "review-green",
+            "mode": {"effective": "emergency"},
+            "github_review": {"status": "unknown"},
+        },
+        "rvw_emergency",
+        state_dir=tmp_path / "state",
+    )
+
+    assert action is None
+
+
+def test_orchestrator_action_routes_terminal_github_result_to_validation(tmp_path: Path) -> None:
+    action = review_state._orchestrator_action(
+        {
+            "stage": "review-green",
+            "mode": {"effective": "emergency"},
+            "identity": {"head": "old-head"},
+            "review_heads": {"last_gate_clean_head": "gate-head", "last_reviewed_head": "head-1"},
+            "github_review": {"status": "clean", "reviewed_head": "head-1"},
+            "validation": {"full_suite": "unknown", "ci": "unknown"},
+        },
+        "rvw_emergency",
+        state_dir=tmp_path / "state",
+        current_head="head-1",
+    )
+
+    assert action is not None
+    assert action["blocked_by"] == ["full_suite:unknown", "ci:unknown"]
+    assert "--full-suite passed --ci passed" in str(action["cmd"])
+    assert "--github-review" not in str(action["cmd"])
+
+
+def test_orchestrator_action_does_not_treat_stale_github_result_as_terminal(tmp_path: Path) -> None:
+    action = review_state._orchestrator_action(
+        {
+            "stage": "review-green",
+            "mode": {"effective": "normal"},
+            "identity": {"head": "old-head"},
+            "review_heads": {"last_reviewed_head": "old-head", "last_followup_head": "fixed-head"},
+            "github_review": {"status": "clean", "reviewed_head": "old-head"},
+            "validation": {"full_suite": "passed", "ci": "passed"},
+        },
+        "rvw_progress",
+        state_dir=tmp_path / "state",
+        current_head="fixed-head",
+    )
+
+    assert action is not None
+    assert "--github-review" in str(action["cmd"])
+
+
 def test_review_state_status_ignores_stale_green_orchestrator_cycle(monkeypatch, tmp_path: Path) -> None:
     emitted: list[dict[str, object]] = []
     repo = tmp_path / "repo"

@@ -1913,6 +1913,10 @@ def _github_review_is_terminal(state: dict[str, Any]) -> bool:
     return bool(current_head_value) and reviewed_head == current_head_value
 
 
+def _github_review_status(state: dict[str, Any]) -> str:
+    return str(dict(state.get("github_review") or {}).get("status") or "unknown").strip() or "unknown"
+
+
 def _github_terminal_action(state: dict[str, Any], public_id: str, *, state_dir: Path) -> dict[str, Any] | None:
     blockers = _validation_blockers(state)
     if blockers:
@@ -2018,6 +2022,8 @@ def _action_payload(state: dict[str, Any], *, state_dir: Path) -> dict[str, Any]
     if stage in {STAGE_REVIEW_GREEN, STAGE_LOCAL_GREEN_HANDOFF}:
         if _github_review_is_terminal(state):
             action = _github_terminal_action(state, public_id, state_dir=state_dir)
+        elif _mode_label(state) == "emergency" and _github_review_status(state) == "unknown":
+            action = None
         else:
             action = _github_handoff_action(state, state_dir=state_dir)
         return _with_deslop_done_action(state, action, public_id, state_dir=state_dir)
@@ -2044,16 +2050,18 @@ def _render(state: dict[str, Any], *, state_dir: Path) -> None:
 
 
 def _render_stale_decision_recovery(state: dict[str, Any], *, state_dir: Path, decision: str) -> None:
+    action = _action_payload(state, state_dir=state_dir)
+    note = "The review already advanced past that decision."
+    if action:
+        note += " Continue with Action.cmd; do not add --decision unless Action.override asks for it."
+    else:
+        note += " No further action is pending."
     payload: dict[str, Any] = {
         "review": state.get("public_id"),
         "status": "decision_not_pending",
         "decision": decision,
-        "note": (
-            "The review already advanced past that decision. Continue with Action.cmd; "
-            "do not add --decision unless Action.override asks for it."
-        ),
+        "note": note,
     }
-    action = _action_payload(state, state_dir=state_dir)
     if action:
         payload["Action"] = action
     emit_toon(payload)

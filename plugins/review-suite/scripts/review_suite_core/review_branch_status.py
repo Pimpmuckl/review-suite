@@ -252,6 +252,36 @@ def _review_command(public_id: str, *, extra: tuple[str, ...] = ()) -> str:
     )
 
 
+def _orchestrator_validation_blockers(state: dict[str, object]) -> list[str]:
+    validation = dict(state.get("validation") or {})
+    blockers: list[str] = []
+    for key in ("full_suite", "ci"):
+        value = str(validation.get(key) or "unknown").strip() or "unknown"
+        if value not in VALIDATION_READY_STATUSES:
+            blockers.append(f"{key}:{value}")
+    return blockers
+
+
+def _orchestrator_validation_status_command(public_id: str, blockers: list[str], status: str) -> str:
+    args: list[str] = []
+    for blocker in blockers:
+        key = blocker.split(":", 1)[0]
+        if key == "full_suite":
+            args.extend(["--full-suite", status])
+        if key == "ci":
+            args.extend(["--ci", status])
+    return _review_command(public_id, extra=tuple(args))
+
+
+def _orchestrator_validation_blocker_action(public_id: str, blockers: list[str]) -> dict[str, object]:
+    return {
+        "cmd": _orchestrator_validation_status_command(public_id, blockers, "passed"),
+        "alt": _orchestrator_validation_status_command(public_id, blockers, "waived"),
+        "blocked_by": blockers,
+        "note": "GitHub result is recorded; record full-suite/CI before PR-final or merge-ready.",
+    }
+
+
 def _restart_deep_action(state: dict[str, object], public_id: str) -> dict[str, object] | None:
     stage = str(state.get("stage") or "").strip()
     if stage in ORCHESTRATOR_HIDDEN_STAGES or isinstance(state.get("superseded_by"), dict):
@@ -472,7 +502,42 @@ def _auto_decision_command(state: dict[str, object], *, state_dir: Path) -> str 
     return _round_terminal_command(round_payload)
 
 
-def _orchestrator_action(state: dict[str, object], public_id: str, *, state_dir: Path) -> dict[str, object]:
+def _orchestrator_mode_label(state: dict[str, object]) -> str:
+    mode = dict(state.get("mode") or {})
+    return str(mode.get("effective") or mode.get("requested") or "").strip()
+
+
+def _orchestrator_github_review_status(state: dict[str, object]) -> str:
+    return str(dict(state.get("github_review") or {}).get("status") or "unknown").strip() or "unknown"
+
+
+def _orchestrator_terminal_review_head(state: dict[str, object]) -> str:
+    review_heads = dict(state.get("review_heads") or {})
+    for key in ("last_reviewed_head", "last_followup_head", "last_gate_clean_head", "last_fix_head", "head"):
+        value = str(review_heads.get(key) or "").strip()
+        if value:
+            return value
+    return str(dict(state.get("identity") or {}).get("head") or "").strip()
+
+
+def _orchestrator_github_review_is_terminal(state: dict[str, object], *, current_head: str | None = None) -> bool:
+    github_review = dict(state.get("github_review") or {})
+    if str(github_review.get("status") or "").strip() not in {"clean", "waived"}:
+        return False
+    reviewed_head = str(github_review.get("reviewed_head") or "").strip()
+    if not reviewed_head:
+        return False
+    comparison_head = str(current_head or "").strip() or _orchestrator_terminal_review_head(state)
+    return bool(comparison_head) and reviewed_head == comparison_head
+
+
+def _orchestrator_action(
+    state: dict[str, object],
+    public_id: str,
+    *,
+    state_dir: Path,
+    current_head: str | None = None,
+) -> dict[str, object] | None:
     stage = str(state.get("stage") or "").strip()
     superseded_by = state.get("superseded_by")
     if stage == "aborted" and isinstance(superseded_by, dict):
@@ -514,18 +579,21 @@ def _orchestrator_action(state: dict[str, object], public_id: str, *, state_dir:
             "note": "Commit/amend valid fixes, then rerun this command.",
         }
     elif stage in {"review-green", "local-green-handoff"}:
-        action = {
-            "cmd": _review_command(public_id, extra=("--github-review",)),
-            "after": "PR create/update",
-        }
-        blockers = []
-        validation = dict(state.get("validation") or {})
-        for key in ("full_suite", "ci"):
-            value = str(validation.get(key) or "unknown").strip() or "unknown"
-            if value not in VALIDATION_READY_STATUSES:
-                blockers.append(f"{key}:{value}")
-        if blockers:
-            action["blocked_by"] = blockers
+        if _orchestrator_github_review_is_terminal(state, current_head=current_head):
+            blockers = _orchestrator_validation_blockers(state)
+            if not blockers:
+                return None
+            action = _orchestrator_validation_blocker_action(public_id, blockers)
+        elif _orchestrator_mode_label(state) == "emergency" and _orchestrator_github_review_status(state) == "unknown":
+            return None
+        else:
+            action = {
+                "cmd": _review_command(public_id, extra=("--github-review",)),
+                "after": "PR create/update",
+            }
+            blockers = _orchestrator_validation_blockers(state)
+            if blockers:
+                action["blocked_by"] = blockers
     else:
         action = {"cmd": _review_command(public_id)}
     restart = _restart_deep_action(state, public_id)
@@ -587,10 +655,11 @@ def _orchestrator_status_override(
         ),
     )[-1]
     public_id = str(state.get("public_id") or "").strip()
-    payload: dict[str, object] = {
-        "review": public_id,
-        "Action": _orchestrator_action(state, public_id, state_dir=state_dir),
-    }
+    payload: dict[str, object] = {"review": public_id}
+    current_head = str(current_payload.get("head") or "").strip()
+    action = _orchestrator_action(state, public_id, state_dir=state_dir, current_head=current_head)
+    if action is not None:
+        payload["Action"] = action
     progress = _orchestrator_progress_label(state)
     if progress:
         payload["progress"] = progress
