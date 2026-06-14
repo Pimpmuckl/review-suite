@@ -32,7 +32,7 @@ codex plugin marketplace upgrade review-suite
 
 ## Quick Start
 
-Use `$review` for local review, `$review-state` to inspect progress, and `$review-github` for PR-scoped GitHub review.
+Use `$review` for local review, `$review-github` for PR-scoped GitHub review, and `$review-state` only for branch/gate routing when no `rvw_*` id exists.
 
 Default local runs print reviewer text once in `Output:`, then one `Action.cmd`.
 
@@ -40,6 +40,7 @@ Review orchestration expects committed review changes. If `git diff` is non-empt
 If you accidentally repeat `--mode` after amending fixes on the same branch/base/merge-base, Review Suite reconnects to the active review id instead of starting a fresh ladder. Use `--fresh-token` only when you intentionally want a separate ladder.
 Review commands do not support a dirty-worktree override. Do not append `--allow-dirty`; commit intended review changes first.
 After a review id exists, the normal advance command is bare `review.py --id <id>`. Review Suite records structured reviewer `clean` / `findings` verdicts automatically when available, runs the next safe step, and leaves explicit `--decision clean|findings` as a manual override for ambiguous or intentional human judgment cases.
+Inspect an existing id without advancing it with `review.py --id <id> --show-status`.
 
 Modes are built from one phased stack. Discovery uses GPT 5.4 for high-recall bug finding; signoff uses GPT 5.5 for relevance, convergence, and current-head green checks.
 Deslop passes are folded into any review that isn't using `emergency` as target.

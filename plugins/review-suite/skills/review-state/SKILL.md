@@ -1,11 +1,11 @@
 ---
 name: review-state
-description: "Inspect local review progress or the next required review action for the current repo."
+description: "Inspect legacy branch/gate routing when no `rvw_*` review id exists."
 ---
 
 # Review State
 
-Use to check review progress or choose the next review action.
+Use only when no `rvw_*` id exists and branch/gate routing is needed. For an existing id, use `review.py --id <id> --show-status`.
 
 ```powershell
 <python> <review-suite-plugin-root>/scripts/review_state.py status --base main --cd <repo-root>
@@ -16,6 +16,7 @@ Path rules:
 - Follow emitted `Action.cmd` when it points at `%USERPROFILE%\.codex\plugin-runtimes\review-suite\<version-hash>\scripts\...`; that runtime path is expected after bootstrap.
 
 Rules:
+- Branch/gate routing only; do not use for active `rvw_*` cycles.
 - Deterministic compact TOON.
 - Run emitted `Action.cmd` when present.
 - Use `--verbose` only when compact output lacks enough routing detail.

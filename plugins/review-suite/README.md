@@ -14,7 +14,7 @@ codex plugin add review-suite@review-suite
 - `review`: default local orchestrator.
 - `review-plan`: review a written plan.
 - `review-deslop`: simplify a completed slice.
-- `review-state`: choose the next review action.
+- `review-state`: legacy branch/gate routing when no `rvw_*` id exists.
 - `review-github`: anchored GitHub PR review.
 
 ## Review Modes
@@ -79,6 +79,7 @@ To explicitly replace an existing local review ladder with a stricter one, use t
 - Start with `--mode brief|normal|deep|emergency`.
 - Follow emitted `Action.cmd`.
 - After an id exists, the normal advance command is bare `review.py --id <id>`; Review Suite auto-records structured `clean` / `findings` reviewer verdicts when available.
+- Inspect an existing id without advancing it with `review.py --id <id> --show-status`.
 - After an id exists, do not repeat creation flags.
 - If you accidentally repeat `--mode` after amending fixes on the same branch/base/merge-base, Review Suite reconnects to the active review id instead of starting a fresh ladder. Use `--fresh-token` only when you intentionally want a separate ladder.
 - Classify reviewer output before coding valid findings.
@@ -94,6 +95,7 @@ To explicitly replace an existing local review ladder with a stricter one, use t
 <python> <review-suite-plugin-root>/scripts/review.py --mode brief|normal|deep|emergency --cd <repo-root> --base main
 <python> <review-suite-plugin-root>/scripts/review.py --id <id>
 <python> <review-suite-plugin-root>/scripts/review.py --id <id> --decision clean|findings  # manual override
+<python> <review-suite-plugin-root>/scripts/review.py --id <id> --show-status
 <python> <review-suite-plugin-root>/scripts/review.py --id <id> --show-findings
 <python> <review-suite-plugin-root>/scripts/review.py --id <id> --focused-validation passed|failed|pending|waived|classified
 <python> <review-suite-plugin-root>/scripts/review.py --id <id> --full-suite passed|failed|pending|waived|classified
@@ -110,6 +112,7 @@ To explicitly replace an existing local review ladder with a stricter one, use t
 
 - Long runs emit `OK <minutes>m: ...` about every 60s.
 - Reviewer text prints once in the final `Output:` block.
+- Use `review.py --id <id> --show-status` for a read-only id check.
 - If the calling Codex session was restarted after reviewers completed, recover the stored reviewer text with `review.py --id <id> --show-findings`; this does not launch or collect another review round.
 - If GitHub review finds issues, record them on the owning review id with `--github-result findings`; after the fix, non-deep reviews rerun the final local signoff step directly, while deep reviews run a follow-up before rerunning Deep Signoff.
 - If GitHub cannot run or the parent workflow approves no GitHub review, record the explicit escape hatch with `--github-result waived --github-note "why"`.
