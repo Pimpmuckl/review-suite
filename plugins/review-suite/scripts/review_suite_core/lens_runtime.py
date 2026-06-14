@@ -552,6 +552,7 @@ def run_codex_review(
     review_root: Path,
     base: str | None = None,
     commit: str | None = None,
+    commit_end: str | None = None,
     progress_interval_seconds: int,
     timeout_seconds: int,
     allow_unsafe_windows_wsl_fallback: bool,
@@ -565,6 +566,7 @@ def run_codex_review(
         review_root=review_root,
         base=base,
         commit=commit,
+        commit_end=commit_end,
         prompt=prompt,
         allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
     )
