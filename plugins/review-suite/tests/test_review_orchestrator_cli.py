@@ -1934,6 +1934,65 @@ def test_id_show_findings_reads_orchestrator_round_payload_without_running(
     assert len(review_calls) == before_calls
 
 
+def test_id_show_status_reports_cycle_without_advancing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    review_calls = _stub_review(monkeypatch, "phase_review-round-1")
+
+    def fail_deslop(*, command: list[str], cwd: Path) -> subprocess.CompletedProcess:
+        raise AssertionError("show-status fixture must not run deslop")
+
+    monkeypatch.setattr(orchestrator_runner, "run_deslop_subprocess", fail_deslop)
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/show-status")
+    _commit_file(repo, "app.txt", "feature\n", "feature")
+
+    _, created = _run_review(
+        monkeypatch,
+        ["--mode", "emergency", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)],
+    )
+    public_id = str(created["review"])
+    before_state = _cycle_payload(state_dir, public_id)
+    before_calls = len(review_calls)
+    (repo / "scratch.txt").write_text("dirty\n", encoding="utf-8")
+
+    exit_code, payload = _run_review(monkeypatch, ["--id", public_id, "--show-status", "--state-dir", str(state_dir)])
+
+    assert exit_code == 0
+    assert payload["review"] == public_id
+    assert payload["status"] == "decision-pending"
+    assert payload["mode"] == "emergency"
+    assert payload["cwd"] == str(repo)
+    assert payload["base"] == "main"
+    assert payload["branch"] == "feature/show-status"
+    assert payload["head"] == str(dict(before_state["identity"])["head"])[:12]
+    assert payload["merge_base"] == str(dict(before_state["identity"])["merge_base"])[:12]
+    assert payload["rounds"] == 1
+    assert payload["deslop"] == "skipped-emergency"
+    assert dict(payload["worktree"]) == {
+        "branch": "feature/show-status",
+        "head": str(dict(before_state["identity"])["head"])[:12],
+        "dirty": True,
+    }
+    action = dict(payload["Action"])
+    assert set(action) == {"cmd", "alt"}
+    assert f"--id {public_id}" in str(action["cmd"])
+    assert "--state-dir" not in str(action["cmd"])
+    assert len(review_calls) == before_calls
+    assert _cycle_payload(state_dir, public_id) == before_state
+
+
+def test_show_status_requires_id(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    errors: list[str] = []
+    monkeypatch.setattr(review, "emit_error", lambda message, **kwargs: errors.append(str(message)) or 2)
+    monkeypatch.setattr(review, "default_state_dir", lambda: tmp_path / "state")
+    monkeypatch.setattr(sys, "argv", ["review.py", "--show-status"])
+
+    assert review.main() == 2
+    assert errors[-1] == "--show-status requires --id"
+
+
 def test_id_collects_running_round_without_spawning_duplicate(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _stub_deslop(monkeypatch)
     review_calls = _stub_review(monkeypatch, "phase_review-round-1", "phase_review-round-duplicate")
@@ -2309,14 +2368,15 @@ def test_deslop_done_requires_id_and_rejects_other_actions(monkeypatch: pytest.M
     assert review.main() == 2
     assert errors[-1] == "--deslop-done requires --id"
 
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        ["review.py", "--id", "rvw_example", "--deslop-done", "--show-findings"],
-    )
+    for read_only_flag in ("--show-findings", "--show-status"):
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            ["review.py", "--id", "rvw_example", "--deslop-done", read_only_flag],
+        )
 
-    assert review.main() == 2
-    assert "--deslop-done cannot be combined" in errors[-1]
+        assert review.main() == 2
+        assert "--deslop-done cannot be combined" in errors[-1]
 
 
 def test_deslop_done_is_noop_for_emergency_cycle(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

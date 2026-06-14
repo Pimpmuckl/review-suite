@@ -30,6 +30,7 @@ Rules:
 - Review commands do not support a dirty-worktree override. Do not append `--allow-dirty`; commit intended review changes first.
 - Read `Output:`, then follow the emitted `Action.cmd`.
 - The normal advance command after a review id exists is bare `review.py --id <id>`; explicit `--decision clean|findings` is an override when Review Suite cannot auto-advance from a structured reviewer verdict or a human intentionally disagrees.
+- For a read-only id check, run `review.py --id <id> --show-status`.
 - If the caller session was restarted after reviewer output was produced, run `review.py --id <id> --show-findings` to recover stored reviewer text without launching another review.
 - Classify reviewer output before coding valid findings.
 - Fix valid findings, then run emitted `review.py --id <id>`.

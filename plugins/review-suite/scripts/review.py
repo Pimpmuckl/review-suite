@@ -138,6 +138,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Skip the deslop sidecar when creating a review cycle.",
     )
     parser.add_argument("--show-findings", action="store_true", help="Print stored reviewer output for --id without running review.")
+    parser.add_argument("--show-status", action="store_true", help="Print compact status for --id without running review.")
     parser.add_argument("--fresh-token", help=argparse.SUPPRESS)
     parser.add_argument("--wsl", action="store_true")
     return parser
@@ -876,6 +877,113 @@ def _show_findings(state: dict[str, Any], *, state_dir: Path) -> int:
     write_text("")
     if not print_reviewer_output_section([run for run in list(payload.get("runs") or []) if isinstance(run, dict)]):
         write_text("no stored reviewer output found for this round")
+    return 0
+
+
+def _short_sha(value: object) -> str:
+    text = str(value or "").strip()
+    if len(text) > 12:
+        return text[:12]
+    return text
+
+
+def _mode_label(state: dict[str, Any]) -> str | None:
+    mode = dict(state.get("mode") or {})
+    value = str(mode.get("effective") or mode.get("requested") or "").strip()
+    return value or None
+
+
+def _cwd_label(identity: dict[str, Any]) -> str:
+    cwd = str(identity.get("cwd") or "").strip()
+    if not cwd:
+        return ""
+    try:
+        return str(cwd_path_from_normalized(cwd))
+    except ValueError:
+        return cwd
+
+
+def _live_worktree_status(identity: dict[str, Any]) -> dict[str, Any] | str:
+    cwd = str(identity.get("cwd") or "").strip()
+    if not cwd:
+        return "unknown"
+    try:
+        review_cwd = cwd_path_from_normalized(cwd)
+        payload: dict[str, Any] = {
+            "head": _short_sha(current_head(review_cwd)),
+            "dirty": has_worktree_changes(review_cwd),
+        }
+        if branch := current_branch(review_cwd):
+            payload["branch"] = branch
+        return payload
+    except (OSError, ValueError):
+        return "unavailable"
+
+
+def _progress_label(state: dict[str, Any]) -> str | None:
+    steps = [item for item in list(dict(state.get("review_plan") or {}).get("steps") or []) if isinstance(item, dict)]
+    if not steps:
+        return None
+    completed = [item for item in list(dict(state.get("review_progress") or {}).get("completed_steps") or []) if isinstance(item, dict)]
+    return f"{len(completed)}/{len(steps)}"
+
+
+def _current_label(state: dict[str, Any]) -> str | None:
+    pending = dict(state.get("pending_action") or {})
+    if pending:
+        kind = str(pending.get("kind") or "").strip()
+        step = str(pending.get("step") or pending.get("lane") or pending.get("gate") or "").strip()
+        if kind and step:
+            return f"{kind}:{step}"
+        return kind or None
+    current = dict(dict(state.get("review_progress") or {}).get("current_step") or {})
+    if current:
+        return str(current.get("name") or current.get("step") or "").strip() or None
+    return None
+
+
+def _validation_summary(state: dict[str, Any]) -> dict[str, str]:
+    validation = dict(state.get("validation") or {})
+    return {
+        key: value
+        for key in ("focused", "full_suite", "ci", "review_green")
+        if (value := str(validation.get(key) or "").strip()) and value != "unknown"
+    }
+
+
+def _show_status(state: dict[str, Any], *, state_dir: Path) -> int:
+    identity = dict(state.get("identity") or {})
+    payload: dict[str, Any] = {
+        "review": state.get("public_id"),
+        "status": state.get("stage") or "unknown",
+    }
+    if mode := _mode_label(state):
+        payload["mode"] = mode
+    if cwd := _cwd_label(identity):
+        payload["cwd"] = cwd
+    for key in ("base", "branch"):
+        value = str(identity.get(key) or "").strip()
+        if value:
+            payload[key] = value
+    if head := _short_sha(identity.get("head")):
+        payload["head"] = head
+    if merge_base_value := _short_sha(identity.get("merge_base")):
+        payload["merge_base"] = merge_base_value
+    payload["worktree"] = _live_worktree_status(identity)
+    if progress := _progress_label(state):
+        payload["progress"] = progress
+    if current := _current_label(state):
+        payload["current"] = current
+    payload["rounds"] = len([item for item in list(state.get("rounds") or []) if isinstance(item, dict)])
+    deslop = dict(state.get("deslop") or {})
+    if deslop_status := str(deslop.get("status") or "").strip():
+        payload["deslop"] = deslop_status
+    if validation := _validation_summary(state):
+        payload["validation"] = validation
+    action = _action_payload(state, state_dir=state_dir)
+    if action:
+        payload["Action"] = action
+    emit_toon(payload)
     return 0
 
 
@@ -2003,10 +2111,11 @@ def main() -> int:
             or args.github_note
             or has_validation_status
             or args.show_findings
+            or args.show_status
         ):
             raise ValueError(
                 "--deslop-done cannot be combined with restart, decisions, GitHub review, GitHub results, "
-                "GitHub notes, validation status flags, or show-findings"
+                "GitHub notes, validation status flags, show-findings, or show-status"
             )
         if args.restart_mode and (
             args.decision or args.github_review or args.github_force or args.github_result or has_validation_status
@@ -2030,6 +2139,10 @@ def main() -> int:
             raise ValueError("validation status flags require --id")
         if args.show_findings and not args.id:
             raise ValueError("--show-findings requires --id")
+        if args.show_status and not args.id:
+            raise ValueError("--show-status requires --id")
+        if args.show_findings and args.show_status:
+            raise ValueError("--show-findings cannot be combined with --show-status")
         if args.show_findings and (
             args.restart_mode
             or args.decision
@@ -2040,12 +2153,24 @@ def main() -> int:
             or has_validation_status
         ):
             raise ValueError("--show-findings cannot be combined with decisions, GitHub review, GitHub results, validation status flags, or restart")
+        if args.show_status and (
+            args.restart_mode
+            or args.decision
+            or args.github_review
+            or args.github_force
+            or args.github_result
+            or args.github_note
+            or has_validation_status
+        ):
+            raise ValueError("--show-status cannot be combined with decisions, GitHub review, GitHub results, validation status flags, or restart")
         if args.id:
             state_dir, state = _load_cycle_and_state_dir(state_dir, str(args.id))
             state = _apply_runtime_options(state, args)
             _reject_id_creation_args(args, state)
             if args.show_findings:
                 return _show_findings(state, state_dir=state_dir)
+            if args.show_status:
+                return _show_status(state, state_dir=state_dir)
             if args.deslop_done:
                 state = mark_deslop_closed(state)
                 saved = save_cycle(state_dir, state)
