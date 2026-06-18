@@ -51,6 +51,7 @@ NO_WORK_STAGES = {
     STAGE_RUNNING,
 }
 VALIDATION_STATUSES = {"unknown", "pending", "passed", "failed", "waived", "classified"}
+VALIDATION_READY_STATUSES = {"passed", "waived", "classified"}
 
 
 def _required_text(value: Any, *, field: str) -> str:
@@ -63,6 +64,97 @@ def _required_text(value: Any, *, field: str) -> str:
 def _optional_text(value: Any) -> str | None:
     text = str(value or "").strip()
     return text or None
+
+
+def _base_drift_equivalent_head(state: dict[str, Any], head: str) -> str:
+    drift = dict(state.get("base_drift") or {})
+    if not bool(drift.get("patch_equivalent")):
+        return head
+    reviewed_head = str(drift.get("reviewed_head") or "").strip()
+    equivalent_head = str(drift.get("equivalent_reviewed_head") or "").strip()
+    if head and reviewed_head == head and equivalent_head:
+        return equivalent_head
+    return head
+
+
+def _review_ladder_heads(state: dict[str, Any]) -> list[str]:
+    review_heads = dict(state.get("review_heads") or {})
+    heads: list[str] = []
+    for key in ("last_gate_clean_head", "last_followup_head", "last_reviewed_head", "last_fix_head", "head"):
+        value = str(review_heads.get(key) or "").strip()
+        if value:
+            heads.append(_base_drift_equivalent_head(state, value))
+    identity_head = _base_drift_equivalent_head(state, str(dict(state.get("identity") or {}).get("head") or "").strip())
+    if identity_head:
+        heads.append(identity_head)
+    return heads
+
+
+def _review_ladder_head(state: dict[str, Any], *, current_head: str = "") -> str:
+    heads = _review_ladder_heads(state)
+    if current_head:
+        for head in heads:
+            if head == current_head:
+                return head
+    return heads[0] if heads else ""
+
+
+def _github_review_required(state: dict[str, Any]) -> bool:
+    github_status = str(dict(state.get("github_review") or {}).get("status") or "unknown").strip()
+    return not (_effective_mode(state) == "emergency" and github_status == "unknown")
+
+
+def _github_review_matches_head(state: dict[str, Any], comparison_head: str) -> bool:
+    github_review = dict(state.get("github_review") or {})
+    if str(github_review.get("status") or "").strip() not in {GITHUB_RESULT_CLEAN, GITHUB_RESULT_WAIVED}:
+        return False
+    reviewed_head = _base_drift_equivalent_head(state, str(github_review.get("reviewed_head") or "").strip())
+    return bool(reviewed_head and comparison_head and reviewed_head == comparison_head)
+
+
+def _validation_ready(state: dict[str, Any]) -> bool:
+    validation = dict(state.get("validation") or {})
+    for key in ("full_suite", "ci"):
+        value = str(validation.get(key) or "unknown").strip() or "unknown"
+        if value not in VALIDATION_READY_STATUSES:
+            return False
+    return True
+
+
+def _deslop_closed_or_untracked(state: dict[str, Any]) -> bool:
+    deslop = dict(state.get("deslop") or {})
+    return not bool(deslop.get("tracked")) or str(deslop.get("status") or "").strip() == DESLOP_STATUS_CLOSED
+
+
+def review_ladder_summary(state: dict[str, Any], *, current_head: str | None = None) -> dict[str, Any]:
+    stage = str(state.get("stage") or "").strip()
+    summary: dict[str, Any] = {"done": False, "review_ladder": "pending"}
+    if stage not in {STAGE_REVIEW_GREEN, STAGE_LOCAL_GREEN_HANDOFF}:
+        return summary
+
+    comparison_head = str(current_head or "").strip()
+    reviewed_head = _review_ladder_head(state, current_head=comparison_head)
+    comparison_head = comparison_head or reviewed_head
+    if reviewed_head and comparison_head and reviewed_head != comparison_head:
+        summary.update({"review_ladder": "invalidated", "reviewed_head": reviewed_head, "current_head": comparison_head})
+        return summary
+
+    github_review = dict(state.get("github_review") or {})
+    github_status = str(github_review.get("status") or "").strip()
+    github_head = _base_drift_equivalent_head(state, str(github_review.get("reviewed_head") or "").strip())
+    if github_status in {GITHUB_RESULT_CLEAN, GITHUB_RESULT_WAIVED} and github_head and comparison_head and github_head != comparison_head:
+        summary.update({"review_ladder": "invalidated", "reviewed_head": github_head, "current_head": comparison_head})
+        return summary
+
+    github_required = _github_review_required(state)
+    if not github_required and _deslop_closed_or_untracked(state):
+        summary.update({"done": True, "review_ladder": "complete"})
+        return summary
+
+    github_ready = _github_review_matches_head(state, comparison_head)
+    if github_ready and _validation_ready(state) and _deslop_closed_or_untracked(state):
+        summary.update({"done": True, "review_ladder": "complete"})
+    return summary
 
 
 def _normalize_mode(mode: str, *, field: str) -> str:

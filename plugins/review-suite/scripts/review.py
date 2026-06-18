@@ -73,6 +73,7 @@ from review_suite_core.orchestrator_state import (
     record_followup_findings,
     record_github_result,
     record_validation_statuses,
+    review_ladder_summary,
     mark_review_step_retry,
     abort_cycle,
 )
@@ -954,6 +955,40 @@ def _validation_summary(state: dict[str, Any]) -> dict[str, str]:
     }
 
 
+def _next_action_label(summary: dict[str, Any], action: dict[str, Any] | None) -> str:
+    if bool(summary.get("done")):
+        return "none"
+    if summary.get("review_ladder") == "invalidated":
+        return "rerun_review"
+    if not action:
+        return "none"
+    command = str(action.get("cmd") or "")
+    if "--github-review" in command:
+        return "github_review"
+    if "--full-suite" in command or "--ci" in command:
+        return "validation"
+    if "--deslop-done" in command:
+        return "deslop_done"
+    return "continue"
+
+
+def _add_review_ladder_fields(
+    payload: dict[str, Any],
+    state: dict[str, Any],
+    action: dict[str, Any] | None,
+    *,
+    current_head_value: str | None = None,
+) -> dict[str, Any]:
+    summary = review_ladder_summary(state, current_head=current_head_value or _identity_head(state))
+    payload.update(summary)
+    payload["next_action"] = _next_action_label(summary, action)
+    if summary.get("review_ladder") == "invalidated":
+        payload["status"] = "stale"
+    elif bool(summary.get("done")):
+        payload["status"] = "done"
+    return summary
+
+
 def _show_status(state: dict[str, Any], *, state_dir: Path) -> int:
     identity = dict(state.get("identity") or {})
     payload: dict[str, Any] = {
@@ -983,9 +1018,15 @@ def _show_status(state: dict[str, Any], *, state_dir: Path) -> int:
         payload["deslop"] = deslop_status
     if validation := _validation_summary(state):
         payload["validation"] = validation
+    github_review = dict(state.get("github_review") or {})
+    github_status = str(github_review.get("status") or "").strip()
+    if github_status and github_status != "unknown":
+        payload["github_review"] = github_status
     action = _action_payload(state, state_dir=state_dir)
+    summary = _add_review_ladder_fields(payload, state, action)
     if action:
-        payload["Action"] = action
+        if summary.get("review_ladder") != "invalidated":
+            payload["Action"] = action
     emit_toon(payload)
     return 0
 
@@ -1910,7 +1951,12 @@ def _github_review_is_terminal(state: dict[str, Any]) -> bool:
         current_head_value = str(dict(state.get("review_heads") or {}).get("last_reviewed_head") or "").strip()
     if not current_head_value:
         current_head_value = str(dict(state.get("identity") or {}).get("head") or "").strip()
-    return bool(current_head_value) and reviewed_head == current_head_value
+    if not current_head_value:
+        return False
+    if reviewed_head == current_head_value:
+        return True
+    summary = review_ladder_summary(state, current_head=current_head_value)
+    return summary.get("review_ladder") != "invalidated"
 
 
 def _github_review_status(state: dict[str, Any]) -> str:
@@ -2020,7 +2066,10 @@ def _action_payload(state: dict[str, Any], *, state_dir: Path) -> dict[str, Any]
             action["note"] = note
         return _with_deslop_done_action(state, action, public_id, state_dir=state_dir)
     if stage in {STAGE_REVIEW_GREEN, STAGE_LOCAL_GREEN_HANDOFF}:
-        if _github_review_is_terminal(state):
+        summary = review_ladder_summary(state, current_head=_identity_head(state))
+        if summary.get("review_ladder") == "invalidated":
+            action = None
+        elif _github_review_is_terminal(state):
             action = _github_terminal_action(state, public_id, state_dir=state_dir)
         elif _mode_label(state) == "emergency" and _github_review_status(state) == "unknown":
             action = None
@@ -2040,8 +2089,10 @@ def _render(state: dict[str, Any], *, state_dir: Path) -> None:
         "review": state.get("public_id"),
     }
     action = _action_payload(state, state_dir=state_dir)
+    summary = _add_review_ladder_fields(payload, state, action)
     if action:
-        payload["Action"] = action
+        if summary.get("review_ladder") != "invalidated":
+            payload["Action"] = action
     github_review = dict(state.get("github_review") or {})
     github_status = str(github_review.get("status") or "").strip()
     if github_status and github_status != "unknown":

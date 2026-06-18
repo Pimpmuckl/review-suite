@@ -2776,6 +2776,9 @@ def test_github_result_clean_and_waived_are_terminal_for_existing_cycle(
 
     assert exit_code == 0
     assert clean["github_review"] == "clean"
+    assert clean["done"] is False
+    assert clean["review_ladder"] == "pending"
+    assert clean["next_action"] == "validation"
     assert clean["Action"]["blocked_by"] == ["full_suite:unknown", "ci:unknown"]
     assert "--full-suite passed --ci passed" in str(clean["Action"]["cmd"])
     assert "--full-suite waived --ci waived" in str(clean["Action"]["alt"])
@@ -2784,8 +2787,21 @@ def test_github_result_clean_and_waived_are_terminal_for_existing_cycle(
     exit_code, clean = _run_review(monkeypatch, ["--id", public_id, "--github-result", "clean", "--state-dir", str(state_dir)])
 
     assert exit_code == 0
+    assert clean["status"] == "done"
+    assert clean["done"] is True
+    assert clean["review_ladder"] == "complete"
+    assert clean["next_action"] == "none"
     assert clean["github_review"] == "clean"
     assert "Action" not in clean
+
+    exit_code, status = _run_review(monkeypatch, ["--id", public_id, "--show-status", "--state-dir", str(state_dir)])
+    assert exit_code == 0
+    assert status["status"] == "done"
+    assert status["done"] is True
+    assert status["review_ladder"] == "complete"
+    assert status["next_action"] == "none"
+    assert status["github_review"] == "clean"
+    assert "Action" not in status
 
     state = _cycle_payload(state_dir, public_id)
     state["github_review"] = {"status": "unknown"}
@@ -2823,10 +2839,46 @@ def test_github_result_clean_and_waived_are_terminal_for_existing_cycle(
     assert waived["github_review"] == "waived"
     assert waived["Action"]["blocked_by"] == ["full_suite:unknown", "ci:unknown"]
 
-    _commit_file(repo, "app.txt", "base\nnew work\n", "new work after github waiver")
+    stale_head = _commit_file(repo, "app.txt", "base\nnew work\n", "new work after github waiver")
     _, stale = _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+    assert stale["status"] == "stale"
+    assert stale["done"] is False
+    assert stale["review_ladder"] == "invalidated"
+    assert stale["next_action"] == "rerun_review"
+    assert stale["current_head"] == stale_head
     assert stale["github_review"] == "waived"
-    assert "--github-review" in str(stale["Action"]["cmd"])
+    assert "Action" not in stale
+
+
+def test_patch_equivalent_base_drift_does_not_re_request_github(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    old_head = _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "commit", "--allow-empty", "-m", "patch equivalent rebase")
+    new_head = _git(repo, "rev-parse", "HEAD")
+    state = {
+        "public_id": "rvw_done",
+        "stage": "review-green",
+        "mode": {"requested": "normal", "effective": "normal"},
+        "identity": {
+            "cwd": str(repo),
+            "head": old_head,
+        },
+        "review_heads": {"last_reviewed_head": old_head},
+        "github_review": {"status": "clean", "reviewed_head": old_head},
+        "validation": {"full_suite": "passed", "ci": "classified"},
+        "deslop": {"tracked": False},
+        "base_drift": {
+            "patch_equivalent": True,
+            "reviewed_head": old_head,
+            "equivalent_reviewed_head": new_head,
+        },
+    }
+
+    action = review._action_payload(state, state_dir=state_dir)
+
+    assert action is None
 
 
 def test_github_result_findings_does_not_auto_start_followup_when_fix_already_committed(
@@ -4062,6 +4114,10 @@ def test_emergency_mode_skips_deslop_and_runs_review(monkeypatch: pytest.MonkeyP
     exit_code, clean = _run_review(monkeypatch, ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)])
     assert exit_code == 0
     assert "stage" not in clean
+    assert clean["status"] == "done"
+    assert clean["done"] is True
+    assert clean["review_ladder"] == "complete"
+    assert clean["next_action"] == "none"
     assert "Action" not in clean
     assert len(review_calls) == 1
     assert _gate_signoff_decisions(state_dir) == []

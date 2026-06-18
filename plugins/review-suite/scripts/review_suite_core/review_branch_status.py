@@ -8,6 +8,7 @@ from pathlib import Path
 from review_suite_core import emit_toon, format_command, inspect_workflow_status, resolve_repo_root
 from review_suite_core.config import default_state_dir
 from review_suite_core.orchestrator_profiles import RESTART_MODE_ORDER
+from review_suite_core.orchestrator_state import review_ladder_summary
 from review_gate import gate_signoff_action_payload, gate_signoff_decisions_by_round, load_gate_record, pending_gate_signoff_records
 from review_suite_local import (
     load_round,
@@ -215,7 +216,7 @@ def _public_status_action(action: dict[str, object]) -> dict[str, object]:
 
 def _public_status_payload(payload: dict[str, object]) -> dict[str, object]:
     public: dict[str, object] = {}
-    for key in ("review", "progress", "recommendation", "reason"):
+    for key in ("review", "status", "done", "review_ladder", "next_action", "recommendation", "reason", "progress"):
         value = payload.get(key)
         if value not in (None, "", [], {}):
             public[key] = value
@@ -525,6 +526,9 @@ def _orchestrator_github_review_is_terminal(state: dict[str, object], *, current
     if str(github_review.get("status") or "").strip() not in {"clean", "waived"}:
         return False
     reviewed_head = str(github_review.get("reviewed_head") or "").strip()
+    drift = dict(state.get("base_drift") or {})
+    if bool(drift.get("patch_equivalent")) and reviewed_head == str(drift.get("reviewed_head") or "").strip():
+        reviewed_head = str(drift.get("equivalent_reviewed_head") or "").strip() or reviewed_head
     if not reviewed_head:
         return False
     comparison_head = str(current_head or "").strip() or _orchestrator_terminal_review_head(state)
@@ -579,6 +583,9 @@ def _orchestrator_action(
             "note": "Commit/amend valid fixes, then rerun this command.",
         }
     elif stage in {"review-green", "local-green-handoff"}:
+        summary = review_ladder_summary(state, current_head=current_head)
+        if summary.get("review_ladder") == "invalidated":
+            return None
         if _orchestrator_github_review_is_terminal(state, current_head=current_head):
             blockers = _orchestrator_validation_blockers(state)
             if not blockers:
@@ -615,8 +622,10 @@ def _orchestrator_cycle_is_current(state: dict[str, object], current_payload: di
     if str(state.get("stage") or "") not in ORCHESTRATOR_HEAD_CURRENT_STAGES:
         return True
     current_head = str(current_payload.get("head") or "").strip()
-    reviewed_head = _orchestrator_review_head(state)
-    return not current_head or not reviewed_head or current_head == reviewed_head
+    if not current_head:
+        return True
+    summary = review_ladder_summary(state, current_head=current_head)
+    return summary.get("review_ladder") != "invalidated"
 
 
 def _orchestrator_status_override(
@@ -658,8 +667,27 @@ def _orchestrator_status_override(
     payload: dict[str, object] = {"review": public_id}
     current_head = str(current_payload.get("head") or "").strip()
     action = _orchestrator_action(state, public_id, state_dir=state_dir, current_head=current_head)
+    summary = review_ladder_summary(state, current_head=current_head)
+    payload.update(summary)
+    if summary.get("review_ladder") == "invalidated":
+        payload["status"] = "stale"
+        payload["next_action"] = "rerun_review"
+    elif bool(summary.get("done")):
+        payload["status"] = "done"
+        payload["next_action"] = "none"
+    elif action is not None:
+        command = str(action.get("cmd") or "")
+        if "--github-review" in command:
+            payload["next_action"] = "github_review"
+        elif "--full-suite" in command or "--ci" in command:
+            payload["next_action"] = "validation"
+        else:
+            payload["next_action"] = "continue"
+    else:
+        payload["next_action"] = "none"
     if action is not None:
-        payload["Action"] = action
+        if summary.get("review_ladder") != "invalidated":
+            payload["Action"] = action
     progress = _orchestrator_progress_label(state)
     if progress:
         payload["progress"] = progress

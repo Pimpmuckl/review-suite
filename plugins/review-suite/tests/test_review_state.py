@@ -391,6 +391,112 @@ def test_review_state_status_surfaces_orchestrator_progress(monkeypatch, tmp_pat
     assert "review_t1.py" not in str(emitted[0]["Action"])
 
 
+def test_review_state_status_marks_terminal_orchestrator_cycle_done(monkeypatch, tmp_path: Path) -> None:
+    emitted: list[dict[str, object]] = []
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    head = "head-1"
+    repo.mkdir()
+    _write_orchestrator_cycle(
+        state_dir,
+        "orc-done.json",
+        {
+            "public_id": "rvw_done",
+            "stage": "review-green",
+            "mode": {"requested": "normal", "effective": "normal"},
+            "identity": {
+                "cwd": str(review_state.normalize_review_cwd_value(repo)),
+                "base": "main",
+                "branch": "feature/progress",
+                "head": head,
+            },
+            "review_heads": {"last_reviewed_head": head},
+            "github_review": {"status": "clean", "reviewed_head": head},
+            "validation": {"full_suite": "passed", "ci": "classified"},
+            "deslop": {"tracked": False},
+        },
+    )
+    monkeypatch.setattr(review_state, "resolve_repo_root", lambda cd: repo)
+    monkeypatch.setattr(review_state, "pending_gate_signoff_records", lambda **kwargs: [])
+    monkeypatch.setattr(
+        review_state,
+        "inspect_workflow_status",
+        lambda **kwargs: {
+            "recommendation": "coherence-review",
+            "reason": "diff_churn_exceeded",
+            "branch": "feature/progress",
+            "head": head,
+        },
+    )
+    _use_default_state_dir(monkeypatch, state_dir)
+    monkeypatch.setattr(review_state, "emit_toon", lambda payload: emitted.append(payload))
+    monkeypatch.setattr(sys, "argv", ["review.py", "--status", "--base", "main"])
+
+    assert review.main() == 0
+
+    assert emitted[0]["review"] == "rvw_done"
+    assert emitted[0]["status"] == "done"
+    assert emitted[0]["done"] is True
+    assert emitted[0]["review_ladder"] == "complete"
+    assert emitted[0]["next_action"] == "none"
+    assert "Action" not in emitted[0]
+
+
+def test_review_state_status_keeps_patch_equivalent_base_drift_done(monkeypatch, tmp_path: Path) -> None:
+    emitted: list[dict[str, object]] = []
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    old_head = "old-head"
+    new_head = "new-head"
+    repo.mkdir()
+    _write_orchestrator_cycle(
+        state_dir,
+        "orc-base-drift-done.json",
+        {
+            "public_id": "rvw_done",
+            "stage": "review-green",
+            "mode": {"requested": "normal", "effective": "normal"},
+            "identity": {
+                "cwd": str(review_state.normalize_review_cwd_value(repo)),
+                "base": "main",
+                "branch": "feature/progress",
+                "head": old_head,
+            },
+            "review_heads": {"last_reviewed_head": old_head},
+            "github_review": {"status": "clean", "reviewed_head": old_head},
+            "validation": {"full_suite": "passed", "ci": "classified"},
+            "deslop": {"tracked": False},
+            "base_drift": {
+                "patch_equivalent": True,
+                "reviewed_head": old_head,
+                "equivalent_reviewed_head": new_head,
+            },
+        },
+    )
+    monkeypatch.setattr(review_state, "resolve_repo_root", lambda cd: repo)
+    monkeypatch.setattr(review_state, "pending_gate_signoff_records", lambda **kwargs: [])
+    monkeypatch.setattr(
+        review_state,
+        "inspect_workflow_status",
+        lambda **kwargs: {
+            "recommendation": "coherence-review",
+            "reason": "diff_churn_exceeded",
+            "branch": "feature/progress",
+            "head": new_head,
+        },
+    )
+    _use_default_state_dir(monkeypatch, state_dir)
+    monkeypatch.setattr(review_state, "emit_toon", lambda payload: emitted.append(payload))
+    monkeypatch.setattr(sys, "argv", ["review.py", "--status", "--base", "main"])
+
+    assert review.main() == 0
+
+    assert emitted[0]["status"] == "done"
+    assert emitted[0]["done"] is True
+    assert emitted[0]["review_ladder"] == "complete"
+    assert "Action" not in emitted[0]
+
+
 def test_review_state_status_uses_bare_id_for_structured_verdict(tmp_path: Path) -> None:
     state_dir = tmp_path / "state"
     round_state_dir = state_dir / "orchestrator" / "review-rounds"
@@ -549,7 +655,7 @@ def test_orchestrator_action_routes_terminal_github_result_to_validation(tmp_pat
     assert "--github-review" not in str(action["cmd"])
 
 
-def test_orchestrator_action_does_not_treat_stale_github_result_as_terminal(tmp_path: Path) -> None:
+def test_orchestrator_action_suppresses_stale_terminal_github_result(tmp_path: Path) -> None:
     action = review_state._orchestrator_action(
         {
             "stage": "review-green",
@@ -557,6 +663,23 @@ def test_orchestrator_action_does_not_treat_stale_github_result_as_terminal(tmp_
             "identity": {"head": "old-head"},
             "review_heads": {"last_reviewed_head": "old-head", "last_followup_head": "fixed-head"},
             "github_review": {"status": "clean", "reviewed_head": "old-head"},
+            "validation": {"full_suite": "passed", "ci": "passed"},
+        },
+        "rvw_progress",
+        state_dir=tmp_path / "state",
+        current_head="fixed-head",
+    )
+
+    assert action is None
+
+
+def test_orchestrator_action_uses_clean_followup_head_for_freshness(tmp_path: Path) -> None:
+    action = review_state._orchestrator_action(
+        {
+            "stage": "review-green",
+            "mode": {"effective": "normal"},
+            "review_heads": {"last_reviewed_head": "old-head", "last_followup_head": "fixed-head"},
+            "github_review": {"status": "unknown"},
             "validation": {"full_suite": "passed", "ci": "passed"},
         },
         "rvw_progress",
