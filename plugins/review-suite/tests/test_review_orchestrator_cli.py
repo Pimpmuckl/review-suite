@@ -3711,6 +3711,55 @@ def test_id_rerun_after_findings_fix_allows_non_overlapping_merge_base_drift(
     }
 
 
+def test_id_rerun_after_findings_fix_allows_overlapping_base_drift(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _stub_deslop(monkeypatch)
+    review_calls = _stub_review(monkeypatch, "phase_review-round-1", "phase_review-round-2")
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _use_compact_normal_profile(monkeypatch, state_dir)
+    _init_repo(repo)
+    _commit_file(repo, "spec.md", "base\nshared\n", "base")
+    _git(repo, "checkout", "-b", "feature/fix-after-overlap")
+    _commit_file(repo, "app.txt", "feature\n", "feature")
+    reviewed_head = _commit_file(repo, "spec.md", "feature\nshared\n", "touch shared spec")
+
+    _, created = _run_review(
+        monkeypatch,
+        ["--mode", "normal", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)],
+    )
+    public_id = str(created["review"])
+    _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+
+    _git(repo, "checkout", "main")
+    _commit_file(repo, "spec.md", "base\nmain moved\n", "main moves shared spec")
+    _git(repo, "checkout", "feature/fix-after-overlap")
+    _git(repo, "rebase", "main", "-X", "theirs")
+    fixed_head = _amend_file(repo, "app.txt", "feature\nfix\n")
+
+    _, findings = _run_review(monkeypatch, ["--id", public_id, "--decision", "findings", "--state-dir", str(state_dir)])
+    assert findings["Action"]["note"] == "Commit/amend valid fixes, then rerun this command."
+
+    exit_code, verification = _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+
+    assert exit_code == 0
+    assert verification["review"] == public_id
+    assert "--decision clean" in str(verification["Action"]["cmd"])
+    assert len(review_calls) == 2
+    assert review_calls[1]["step_name"] == "precision-signoff"
+    assert review_calls[1]["review_scope"]["reviewed_head"] == fixed_head
+    state = _cycle_payload(state_dir, public_id)
+    assert state["identity"]["head"] == fixed_head
+    assert state["review_heads"]["last_fix_head"] == fixed_head
+    assert state["pending_action"]["fix_verification"]["findings_reviewed_head"] == reviewed_head
+    assert state["decisions"][0]["reviewed_head"] == reviewed_head
+    assert state["rounds"][0]["reviewed_head"] == reviewed_head
+    assert state["rounds"][1]["reviewed_head"] == fixed_head
+    assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 1
+
+
 def test_id_rerun_after_gate_pending_amend_records_gate_findings(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

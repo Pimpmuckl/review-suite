@@ -1213,10 +1213,8 @@ def _current_cycle_identity_if_compatible(state: dict[str, Any]) -> dict[str, An
         return None
 
 
-def _github_findings_fix_identity_if_compatible(state: dict[str, Any]) -> dict[str, Any] | None:
+def _fix_pending_head_change_identity_if_compatible(state: dict[str, Any]) -> dict[str, Any] | None:
     active = dict(state.get("active_findings") or {})
-    if str(active.get("lane") or "").strip() != "review-github" or not bool(active.get("rerun_profile_round")):
-        return None
     reviewed_head = str(active.get("reviewed_head") or "").strip()
     identity = dict(state.get("identity") or {})
     cwd = str(identity.get("cwd") or "").strip()
@@ -1352,7 +1350,7 @@ def _resume_progress(state: dict[str, Any], *, state_dir: Path | None = None) ->
     except (OSError, ValueError):
         identity = None
     if not identity:
-        identity = _github_findings_fix_identity_if_compatible(state)
+        identity = _fix_pending_head_change_identity_if_compatible(state)
     head = ""
     if identity:
         head = str(identity.get("head") or "").strip()
