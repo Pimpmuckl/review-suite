@@ -27,6 +27,7 @@ codex plugin marketplace upgrade review-suite
 
 - Codex CLI available as `codex`
 - Python 3.11+
+- `uv`
 - `git`
 - GitHub CLI `gh` only for `review-github`
 
@@ -142,10 +143,16 @@ The installed cache stays a launcher surface. Emitted `Action.cmd` values may po
 
 ## Development
 
+Sync dependencies:
+
+```powershell
+uv sync
+```
+
 Run tests:
 
 ```powershell
-python -m pytest plugins/review-suite/tests -q
+uv run pytest plugins/review-suite/tests -q
 ```
 
 Compile scripts:
@@ -155,7 +162,7 @@ $files = @(
   Get-ChildItem -LiteralPath plugins/review-suite/scripts -Filter *.py -File
   Get-ChildItem -LiteralPath plugins/review-suite/scripts/review_suite_core -Filter *.py -File
 )
-python -m py_compile @($files.FullName)
+uv run python -m py_compile @($files.FullName)
 ```
 
 Sync the local installed plugin cache after source edits. When the git marketplace source clone exists, the default command syncs that clone too so local plugin add/refresh paths see the same files:
