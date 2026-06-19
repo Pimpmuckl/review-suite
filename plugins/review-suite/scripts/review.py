@@ -1213,6 +1213,31 @@ def _current_cycle_identity_if_compatible(state: dict[str, Any]) -> dict[str, An
         return None
 
 
+def _github_findings_fix_identity_if_compatible(state: dict[str, Any]) -> dict[str, Any] | None:
+    active = dict(state.get("active_findings") or {})
+    if str(active.get("lane") or "").strip() != "review-github" or not bool(active.get("rerun_profile_round")):
+        return None
+    reviewed_head = str(active.get("reviewed_head") or "").strip()
+    identity = dict(state.get("identity") or {})
+    cwd = str(identity.get("cwd") or "").strip()
+    base = str(identity.get("base") or "").strip()
+    if not reviewed_head or not cwd or not base:
+        return None
+    try:
+        review_root = cwd_path_from_normalized(cwd)
+        expected_branch = _normalized_branch(str(identity.get("branch") or ""))
+        if _normalized_branch(current_branch(review_root)) != expected_branch:
+            return None
+        if has_worktree_changes(review_root):
+            return None
+        head = current_head(review_root)
+        if head == reviewed_head:
+            return None
+        return {"head": head, "merge_base": merge_base(review_root, base, "HEAD"), "base_drift": None}
+    except (AttributeError, OSError, ValueError):
+        return None
+
+
 def _apply_decision_to_ready_state(
     state: dict[str, Any],
     decision: str,
@@ -1326,6 +1351,8 @@ def _resume_progress(state: dict[str, Any], *, state_dir: Path | None = None) ->
         identity = _current_cycle_identity_if_compatible(state)
     except (OSError, ValueError):
         identity = None
+    if not identity:
+        identity = _github_findings_fix_identity_if_compatible(state)
     head = ""
     if identity:
         head = str(identity.get("head") or "").strip()
