@@ -2916,6 +2916,140 @@ def test_github_result_findings_does_not_auto_start_followup_when_fix_already_co
     assert state["active_findings"]["reviewed_head"] == state["review_heads"]["last_reviewed_head"]
 
 
+def test_pending_github_review_after_amend_reuses_same_id_for_signoff(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _stub_deslop(monkeypatch)
+    review_calls = _stub_review(monkeypatch, "signoff-round-1", "signoff-round-2")
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _use_single_step_normal_profile(monkeypatch, state_dir)
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/github-amend")
+    _commit_file(repo, "app.txt", "feature\n", "feature")
+
+    _, opened = _run_review(
+        monkeypatch,
+        ["--mode", "normal", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)],
+    )
+    public_id = str(opened["review"])
+    _run_review(monkeypatch, ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)])
+    _run_review(
+        monkeypatch,
+        ["--id", public_id, "--full-suite", "classified", "--ci", "classified", "--state-dir", str(state_dir)],
+    )
+    amended_head = _amend_file(repo, "app.txt", "feature\nfix from github review\n")
+
+    exit_code, status = _run_review(monkeypatch, ["--id", public_id, "--show-status", "--state-dir", str(state_dir)])
+
+    assert exit_code == 0
+    assert status["review_ladder"] == "pending"
+    assert status["next_action"] == "continue"
+    assert status["current_head"] == amended_head
+    assert status["Action"]["cmd"].endswith(f"review.py --id {public_id}")
+    assert "--github-review" not in str(status["Action"]["cmd"])
+
+    def fail_github_review(*args: object, **kwargs: object) -> int:
+        raise AssertionError("--github-review must not run before amended head signoff")
+
+    monkeypatch.setattr(review, "_run_github_review", fail_github_review)
+    _, blocked_github = _run_review(monkeypatch, ["--id", public_id, "--github-review", "--state-dir", str(state_dir)])
+    assert blocked_github["next_action"] == "continue"
+    assert blocked_github["Action"]["cmd"].endswith(f"review.py --id {public_id}")
+    assert "--github-review" not in str(blocked_github["Action"]["cmd"])
+
+    _, rerun = _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+
+    assert "--decision clean" in str(rerun["Action"]["cmd"])
+    assert len(review_calls) == 2
+    assert review_calls[1]["step_name"] == "precision-signoff"
+    assert review_calls[1]["review_scope"]["reviewed_head"] == amended_head
+    state = _cycle_payload(state_dir, public_id)
+    assert state["validation"]["full_suite"] == "unknown"
+    assert state["validation"]["ci"] == "unknown"
+
+    _, final_clean = _run_review(monkeypatch, ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)])
+    _assert_github_handoff(
+        final_clean["Action"],
+        public_id=public_id,
+        state_dir=state_dir,
+        blocked_by=["full_suite:unknown", "ci:unknown"],
+    )
+
+
+def test_github_result_after_amend_requires_same_id_signoff(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _stub_deslop(monkeypatch)
+    _stub_review(monkeypatch)
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _use_single_step_normal_profile(monkeypatch, state_dir)
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/github-result-amend")
+    _commit_file(repo, "app.txt", "feature\n", "feature")
+
+    _, opened = _run_review(
+        monkeypatch,
+        ["--mode", "normal", "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)],
+    )
+    public_id = str(opened["review"])
+    _run_review(monkeypatch, ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)])
+    amended_head = _amend_file(repo, "app.txt", "feature\nfix before github result\n")
+
+    _, result = _run_review(monkeypatch, ["--id", public_id, "--github-result", "clean", "--state-dir", str(state_dir)])
+
+    assert result["review_ladder"] == "pending"
+    assert result["next_action"] == "continue"
+    assert result["Action"]["cmd"].endswith(f"review.py --id {public_id}")
+    assert "--github-review" not in str(result["Action"]["cmd"])
+    state = _cycle_payload(state_dir, public_id)
+    assert state["review_heads"]["last_fix_head"] == amended_head
+    assert state["github_review"]["status"] == "unknown"
+
+
+@pytest.mark.parametrize("mode", ["normal", "emergency"])
+def test_github_result_after_prior_findings_amend_requires_same_id_signoff(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    mode: str,
+) -> None:
+    _stub_deslop(monkeypatch)
+    _stub_review(monkeypatch, "signoff-round-1", "signoff-round-2")
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _use_single_step_normal_profile(monkeypatch, state_dir)
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/github-findings-amend")
+    _commit_file(repo, "app.txt", "feature\n", "feature")
+
+    _, opened = _run_review(
+        monkeypatch,
+        ["--mode", mode, "--cd", str(repo), "--base", "main", "--state-dir", str(state_dir)],
+    )
+    public_id = str(opened["review"])
+    _run_review(monkeypatch, ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)])
+    _run_review(monkeypatch, ["--id", public_id, "--github-result", "findings", "--state-dir", str(state_dir)])
+    _amend_file(repo, "app.txt", "feature\nfix github finding\n")
+    _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+    _run_review(monkeypatch, ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)])
+    amended_again = _amend_file(repo, "app.txt", "feature\nfix github finding\nlast tweak\n")
+
+    _, result = _run_review(monkeypatch, ["--id", public_id, "--github-result", "clean", "--state-dir", str(state_dir)])
+
+    assert result["review_ladder"] == "pending"
+    assert result["next_action"] == "continue"
+    assert result["Action"]["cmd"].endswith(f"review.py --id {public_id}")
+    state = _cycle_payload(state_dir, public_id)
+    assert state["review_heads"]["last_fix_head"] == amended_again
+    assert state["github_review"]["status"] == "findings"
+
+
 def test_mode_rerun_after_deslop_amend_reuses_existing_cycle_without_rerunning_deslop(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

@@ -67,6 +67,7 @@ from review_suite_core.orchestrator_state import (
     create_cycle,
     mark_deslop_closed,
     mark_fix_detected,
+    mark_latest_profile_step_rerun_needed,
     record_clean_decision,
     record_findings_decision,
     record_followup_clean,
@@ -959,7 +960,7 @@ def _next_action_label(summary: dict[str, Any], action: dict[str, Any] | None) -
     if bool(summary.get("done")):
         return "none"
     if summary.get("review_ladder") == "invalidated":
-        return "rerun_review"
+        return "continue" if _action_recovers_pending_github_head_change(action) else "rerun_review"
     if not action:
         return "none"
     command = str(action.get("cmd") or "")
@@ -972,6 +973,11 @@ def _next_action_label(summary: dict[str, Any], action: dict[str, Any] | None) -
     return "continue"
 
 
+def _action_recovers_pending_github_head_change(action: dict[str, Any] | None) -> bool:
+    note = str(dict(action or {}).get("note") or "")
+    return "before a terminal GitHub result" in note
+
+
 def _add_review_ladder_fields(
     payload: dict[str, Any],
     state: dict[str, Any],
@@ -980,6 +986,8 @@ def _add_review_ladder_fields(
     current_head_value: str | None = None,
 ) -> dict[str, Any]:
     summary = review_ladder_summary(state, current_head=current_head_value or _identity_head(state))
+    if summary.get("review_ladder") == "invalidated" and _action_recovers_pending_github_head_change(action):
+        summary = {**summary, "review_ladder": "pending"}
     payload.update(summary)
     payload["next_action"] = _next_action_label(summary, action)
     if summary.get("review_ladder") == "invalidated":
@@ -1295,6 +1303,20 @@ def _resume_progress(state: dict[str, Any], *, state_dir: Path | None = None) ->
                 return state
             return _auto_record_pending_decision_fix(state, current_head_value=head, state_dir=state_dir)
         return state
+    if stage in {STAGE_REVIEW_GREEN, STAGE_LOCAL_GREEN_HANDOFF}:
+        identity = _github_pending_head_change_identity(state)
+        if not identity:
+            return state
+        head = str(identity.get("head") or "").strip()
+        base_drift = identity.get("base_drift") if isinstance(identity.get("base_drift"), dict) else None
+        next_state = _with_current_identity(
+            state,
+            head=head,
+            merge_base_head=str(identity.get("merge_base") or "").strip(),
+            base_drift=base_drift,
+        )
+        next_state = _with_equivalent_base_drift_review_head(next_state, base_drift)
+        return mark_latest_profile_step_rerun_needed(next_state, head=head)
     if stage != STAGE_FIX_PENDING:
         return state
 
@@ -1963,6 +1985,31 @@ def _github_review_status(state: dict[str, Any]) -> str:
     return str(dict(state.get("github_review") or {}).get("status") or "unknown").strip() or "unknown"
 
 
+def _github_pending_head_change_identity(state: dict[str, Any]) -> dict[str, Any] | None:
+    if state.get("stage") not in {STAGE_REVIEW_GREEN, STAGE_LOCAL_GREEN_HANDOFF}:
+        return None
+    github_status = _github_review_status(state)
+    if (_mode_label(state) == "emergency" and github_status == "unknown") or github_status in {GITHUB_RESULT_CLEAN, GITHUB_RESULT_WAIVED}:
+        return None
+    try:
+        identity = _current_cycle_identity_if_compatible(state)
+    except (OSError, ValueError):
+        return None
+    if not identity:
+        return None
+    if bool(dict(identity.get("base_drift") or {}).get("patch_equivalent")):
+        return None
+    head = str(identity.get("head") or "").strip()
+    summary = review_ladder_summary(state, current_head=head)
+    if summary.get("review_ladder") != "invalidated":
+        return None
+    reviewed_head = str(summary.get("reviewed_head") or "").strip()
+    current_head_value = str(summary.get("current_head") or "").strip()
+    if not reviewed_head or not current_head_value or reviewed_head == current_head_value:
+        return None
+    return identity
+
+
 def _github_terminal_action(state: dict[str, Any], public_id: str, *, state_dir: Path) -> dict[str, Any] | None:
     blockers = _validation_blockers(state)
     if blockers:
@@ -2068,7 +2115,13 @@ def _action_payload(state: dict[str, Any], *, state_dir: Path) -> dict[str, Any]
     if stage in {STAGE_REVIEW_GREEN, STAGE_LOCAL_GREEN_HANDOFF}:
         summary = review_ladder_summary(state, current_head=_identity_head(state))
         if summary.get("review_ladder") == "invalidated":
-            action = None
+            if _github_pending_head_change_identity(state):
+                action = {
+                    "cmd": _review_command(public_id, state_dir=state_dir),
+                    "note": "PR head changed before a terminal GitHub result; rerun local signoff on this review id before GitHub review.",
+                }
+            else:
+                action = None
         elif _github_review_is_terminal(state):
             action = _github_terminal_action(state, public_id, state_dir=state_dir)
         elif _mode_label(state) == "emergency" and _github_review_status(state) == "unknown":
@@ -2273,9 +2326,19 @@ def main() -> int:
                 _render(state, state_dir=state_dir)
                 return 0
             if args.github_review:
+                resumed = _resume_progress(state, state_dir=state_dir)
+                if resumed != state:
+                    saved = save_cycle(state_dir, resumed)
+                    _render(saved, state_dir=state_dir)
+                    return 0
                 saved = save_cycle(state_dir, state)
                 return _run_github_review(saved, state_dir=state_dir, force=bool(args.github_force))
             if args.github_result:
+                resumed = _resume_progress(state, state_dir=state_dir)
+                if resumed != state:
+                    saved = save_cycle(state_dir, resumed)
+                    _render(saved, state_dir=state_dir)
+                    return 0
                 state = _record_github_result(state, args)
                 saved = save_cycle(state_dir, state)
                 _render(saved, state_dir=state_dir)

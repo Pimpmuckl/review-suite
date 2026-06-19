@@ -954,6 +954,23 @@ def _last_completed_profile_round_id(state: dict[str, Any]) -> str | None:
     return None
 
 
+def mark_latest_profile_step_rerun_needed(state: dict[str, Any], *, head: str) -> dict[str, Any]:
+    next_state = _copy_state(state)
+    profile_round_id = _last_completed_profile_round_id(next_state)
+    profile_step = _profile_step_for_round(next_state, profile_round_id) if profile_round_id else None
+    if not profile_step:
+        raise ValueError("cannot rerun review signoff without a completed profile step")
+    review_heads = next_state.setdefault("review_heads", {})
+    review_heads["last_fix_head"] = _required_text(head, field="head")
+    validation = next_state.setdefault("validation", {})
+    for key in ("focused", "full_suite", "ci"):
+        validation[key] = "unknown"
+    action = _rewind_profile_step_action(next_state, profile_step)
+    _set_review_green(next_state, "unknown")
+    _set_stage(next_state, STAGE_CREATED, action)
+    return next_state
+
+
 def _next_github_round_id(state: dict[str, Any]) -> str:
     count = sum(
         1
