@@ -149,6 +149,8 @@ Sync dependencies:
 uv sync
 ```
 
+uv ignores package files uploaded in the last week.
+
 Run tests:
 
 ```powershell

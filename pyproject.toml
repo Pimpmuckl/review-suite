@@ -12,5 +12,8 @@ dev = [
   "pytest-xdist",
 ]
 
+[tool.uv]
+exclude-newer = "1 week"
+
 [tool.pytest.ini_options]
 testpaths = ["plugins/review-suite/tests"]
