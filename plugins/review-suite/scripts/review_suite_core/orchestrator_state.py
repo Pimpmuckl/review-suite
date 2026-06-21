@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .orchestrator_profiles import SUPPORTED_MODES, SUPPORTED_SELECTIONS
-from .paths import normalize_cwd
+from .paths import cwd_path_from_normalized, normalize_cwd
 
 
 ORCHESTRATOR_STATE_SCHEMA_VERSION = 1
@@ -52,6 +52,13 @@ NO_WORK_STAGES = {
 }
 VALIDATION_STATUSES = {"unknown", "pending", "passed", "failed", "waived", "classified"}
 VALIDATION_READY_STATUSES = {"passed", "waived", "classified"}
+HEAD_CHANGED_AFTER_GREEN_REVIEW_LADDER = "head_changed_after_review"
+HEAD_CHANGED_AFTER_GREEN_REVIEW_NOTE = (
+    "Review was green before the current HEAD. If the changes since review are only stale-test "
+    "or validation alignment, keep this review green and finish validation. Rerun review only "
+    "if runtime/source behavior changed."
+)
+CHANGED_SINCE_REVIEW_PATH_LIMIT = 20
 
 
 def _required_text(value: Any, *, field: str) -> str:
@@ -155,6 +162,65 @@ def review_ladder_summary(state: dict[str, Any], *, current_head: str | None = N
     if github_ready and _validation_ready(state) and _deslop_closed_or_untracked(state):
         summary.update({"done": True, "review_ladder": "complete"})
     return summary
+
+
+def _changed_since_review_paths(
+    state: dict[str, Any],
+    *,
+    reviewed_head: str,
+    current_head: str,
+) -> list[str] | None:
+    from .workflow_state import diff_paths_between
+
+    cwd = str(dict(state.get("identity") or {}).get("cwd") or "").strip()
+    if not cwd:
+        return None
+    try:
+        return sorted(diff_paths_between(cwd_path_from_normalized(cwd), reviewed_head, current_head))
+    except (OSError, ValueError):
+        return None
+
+
+def green_review_head_change_summary(
+    state: dict[str, Any],
+    *,
+    current_head: str | None = None,
+    summary: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    base_summary = dict(summary or review_ladder_summary(state, current_head=current_head))
+    if base_summary.get("review_ladder") != "invalidated":
+        return None
+    if str(state.get("stage") or "").strip() not in {STAGE_REVIEW_GREEN, STAGE_LOCAL_GREEN_HANDOFF}:
+        return None
+    if not _deslop_closed_or_untracked(state):
+        return None
+
+    reviewed_head = str(base_summary.get("reviewed_head") or "").strip()
+    current_head_value = str(base_summary.get("current_head") or current_head or "").strip()
+    if not reviewed_head or not current_head_value or reviewed_head == current_head_value:
+        return None
+
+    github_review = dict(state.get("github_review") or {})
+    github_status = str(github_review.get("status") or "unknown").strip() or "unknown"
+    github_reviewed_head = _base_drift_equivalent_head(state, str(github_review.get("reviewed_head") or "").strip())
+    github_ready = github_status in {GITHUB_RESULT_CLEAN, GITHUB_RESULT_WAIVED} and github_reviewed_head == reviewed_head
+    github_optional = _effective_mode(state) == "emergency" and github_status == "unknown"
+    if not (github_ready or github_optional):
+        return None
+
+    changed_summary = {
+        **base_summary,
+        "done": False,
+        "review_ladder": HEAD_CHANGED_AFTER_GREEN_REVIEW_LADDER,
+        "head_changed_after_review": True,
+        "note": HEAD_CHANGED_AFTER_GREEN_REVIEW_NOTE,
+    }
+    paths = _changed_since_review_paths(state, reviewed_head=reviewed_head, current_head=current_head_value)
+    if paths is not None:
+        changed_summary["changed_since_review"] = paths[:CHANGED_SINCE_REVIEW_PATH_LIMIT]
+        if len(paths) > CHANGED_SINCE_REVIEW_PATH_LIMIT:
+            changed_summary["changed_since_review_count"] = len(paths)
+    return changed_summary
 
 
 def _normalize_mode(mode: str, *, field: str) -> str:

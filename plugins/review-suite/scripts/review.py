@@ -75,6 +75,8 @@ from review_suite_core.orchestrator_state import (
     record_github_result,
     record_validation_statuses,
     review_ladder_summary,
+    green_review_head_change_summary,
+    HEAD_CHANGED_AFTER_GREEN_REVIEW_LADDER,
     mark_review_step_retry,
     abort_cycle,
 )
@@ -962,6 +964,8 @@ def _next_action_label(summary: dict[str, Any], action: dict[str, Any] | None) -
     if summary.get("review_ladder") == "invalidated":
         return "continue" if _action_recovers_pending_github_head_change(action) else "rerun_review"
     if not action:
+        if summary.get("review_ladder") == HEAD_CHANGED_AFTER_GREEN_REVIEW_LADDER:
+            return "inspect_changed_since_review"
         return "none"
     command = str(action.get("cmd") or "")
     if "--github-review" in command:
@@ -988,10 +992,14 @@ def _add_review_ladder_fields(
     summary = review_ladder_summary(state, current_head=current_head_value or _identity_head(state))
     if summary.get("review_ladder") == "invalidated" and _action_recovers_pending_github_head_change(action):
         summary = {**summary, "review_ladder": "pending"}
+    else:
+        summary = green_review_head_change_summary(state, summary=summary) or summary
     payload.update(summary)
     payload["next_action"] = _next_action_label(summary, action)
     if summary.get("review_ladder") == "invalidated":
         payload["status"] = "stale"
+    elif summary.get("review_ladder") == HEAD_CHANGED_AFTER_GREEN_REVIEW_LADDER:
+        payload["status"] = HEAD_CHANGED_AFTER_GREEN_REVIEW_LADDER
     elif bool(summary.get("done")):
         payload["status"] = "done"
     return summary
@@ -2140,7 +2148,9 @@ def _action_payload(state: dict[str, Any], *, state_dir: Path) -> dict[str, Any]
     if stage in {STAGE_REVIEW_GREEN, STAGE_LOCAL_GREEN_HANDOFF}:
         summary = review_ladder_summary(state, current_head=_identity_head(state))
         if summary.get("review_ladder") == "invalidated":
-            if _github_pending_head_change_identity(state):
+            if green_review_head_change_summary(state, summary=summary):
+                action = _github_terminal_action(state, public_id, state_dir=state_dir)
+            elif _github_pending_head_change_identity(state):
                 action = {
                     "cmd": _review_command(public_id, state_dir=state_dir),
                     "note": "PR head changed before a terminal GitHub result; rerun local signoff on this review id before GitHub review.",

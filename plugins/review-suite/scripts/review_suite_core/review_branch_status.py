@@ -8,7 +8,11 @@ from pathlib import Path
 from review_suite_core import emit_toon, format_command, inspect_workflow_status, resolve_repo_root
 from review_suite_core.config import default_state_dir
 from review_suite_core.orchestrator_profiles import RESTART_MODE_ORDER
-from review_suite_core.orchestrator_state import review_ladder_summary
+from review_suite_core.orchestrator_state import (
+    HEAD_CHANGED_AFTER_GREEN_REVIEW_LADDER,
+    green_review_head_change_summary,
+    review_ladder_summary,
+)
 from review_gate import gate_signoff_action_payload, gate_signoff_decisions_by_round, load_gate_record, pending_gate_signoff_records
 from review_suite_local import (
     load_round,
@@ -231,6 +235,19 @@ def _public_status_payload(payload: dict[str, object]) -> dict[str, object]:
         note = str(payload.get("note") or "").strip()
         if note:
             public["note"] = note
+
+    if payload.get("head_changed_after_review"):
+        for key in (
+            "head_changed_after_review",
+            "reviewed_head",
+            "current_head",
+            "changed_since_review",
+            "changed_since_review_count",
+            "note",
+        ):
+            value = payload.get(key)
+            if value not in (None, "", [], {}):
+                public[key] = value
 
     action = payload.get("Action")
     if isinstance(action, dict) and action:
@@ -585,7 +602,10 @@ def _orchestrator_action(
     elif stage in {"review-green", "local-green-handoff"}:
         summary = review_ladder_summary(state, current_head=current_head)
         if summary.get("review_ladder") == "invalidated":
-            return None
+            if green_review_head_change_summary(state, current_head=current_head, summary=summary) is None:
+                return None
+            blockers = _orchestrator_validation_blockers(state)
+            return _orchestrator_validation_blocker_action(public_id, blockers) if blockers else None
         if _orchestrator_github_review_is_terminal(state, current_head=current_head):
             blockers = _orchestrator_validation_blockers(state)
             if not blockers:
@@ -625,7 +645,11 @@ def _orchestrator_cycle_is_current(state: dict[str, object], current_payload: di
     if not current_head:
         return True
     summary = review_ladder_summary(state, current_head=current_head)
-    return summary.get("review_ladder") != "invalidated"
+    return summary.get("review_ladder") != "invalidated" or green_review_head_change_summary(
+        state,
+        current_head=current_head,
+        summary=summary,
+    ) is not None
 
 
 def _orchestrator_status_override(
@@ -668,10 +692,14 @@ def _orchestrator_status_override(
     current_head = str(current_payload.get("head") or "").strip()
     action = _orchestrator_action(state, public_id, state_dir=state_dir, current_head=current_head)
     summary = review_ladder_summary(state, current_head=current_head)
+    summary = green_review_head_change_summary(state, current_head=current_head, summary=summary) or summary
     payload.update(summary)
     if summary.get("review_ladder") == "invalidated":
         payload["status"] = "stale"
         payload["next_action"] = "rerun_review"
+    elif summary.get("review_ladder") == HEAD_CHANGED_AFTER_GREEN_REVIEW_LADDER:
+        payload["status"] = HEAD_CHANGED_AFTER_GREEN_REVIEW_LADDER
+        payload["next_action"] = "validation" if action is not None else "inspect_changed_since_review"
     elif bool(summary.get("done")):
         payload["status"] = "done"
         payload["next_action"] = "none"
