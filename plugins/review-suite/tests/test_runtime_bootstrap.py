@@ -155,6 +155,19 @@ def test_runtime_directory_is_created_and_reused(tmp_path: Path) -> None:
     assert list(first_root.parent.glob("*.tmp.*")) == []
 
 
+def test_runtime_reuse_does_not_stage_copy(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    codex_home = tmp_path / "codex"
+    plugin_root = _make_cache_plugin(codex_home)
+    runtime_root = ensure_runtime_copy(plugin_root, codex_home=codex_home)
+
+    def fail_copy(_source_root: Path, _temp_root: Path) -> None:
+        raise AssertionError("reuse should not create a staging copy")
+
+    monkeypatch.setattr(runtime_bootstrap, "_copy_runtime_items", fail_copy)
+
+    assert ensure_runtime_copy(plugin_root, codex_home=codex_home) == runtime_root
+
+
 def test_runtime_cleanup_keeps_current_and_unowned_roots(tmp_path: Path) -> None:
     parent = tmp_path / "codex" / "plugin-runtimes" / "review-suite"
     parent.mkdir(parents=True)
@@ -211,6 +224,7 @@ def test_runtime_key_matches_staged_copy_when_source_changes_during_install(
     original_copy = runtime_bootstrap._copy_runtime_items
 
     def copy_then_mutate_source(source_root: Path, temp_root: Path) -> None:
+        _write(source_root / ".codex-plugin" / "plugin.json", json.dumps({"name": "review-suite", "version": "9.9.9"}))
         original_copy(source_root, temp_root)
         _write(source_root / "scripts" / "review.py", "print('changed after copy')\n")
 
@@ -221,6 +235,8 @@ def test_runtime_key_matches_staged_copy_when_source_changes_during_install(
 
     assert metadata["content_hash"] == content_hash_for_runtime(runtime_root)
     assert metadata["content_hash"] != content_hash_for_runtime(plugin_root)
+    assert metadata["version"] == "9.9.9"
+    assert runtime_root.name.startswith("9.9.9-")
     assert (runtime_root / "scripts" / "review.py").read_text(encoding="utf-8") == "print('review')\n"
 
 

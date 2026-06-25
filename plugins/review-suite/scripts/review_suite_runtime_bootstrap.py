@@ -167,6 +167,14 @@ def ensure_runtime_copy(source_root: Path, *, codex_home: Path | None = None) ->
     resolved_source = source_root.resolve(strict=False)
     parent = (codex_home or _codex_home(os.environ)) / "plugin-runtimes" / PLUGIN_NAME
     parent.mkdir(parents=True, exist_ok=True)
+    manifest = _load_manifest(resolved_source)
+    version = str(manifest.get("version") or "0.0.0").strip() or "0.0.0"
+    source_hash = content_hash_for_runtime(resolved_source)
+    source_runtime_root = parent / f"{_safe_key_part(version)}-{source_hash[:16]}"
+    if source_runtime_root.exists():
+        _cleanup_stale_runtime_roots(parent, keep_root=source_runtime_root)
+        return source_runtime_root
+
     temp_root = parent / f".staging.tmp.{os.getpid()}.{uuid.uuid4().hex}"
     try:
         _copy_runtime_items(resolved_source, temp_root)
