@@ -12,6 +12,7 @@ from hashlib import blake2s
 from pathlib import Path
 from typing import Any
 
+from review_suite_runtime_bootstrap import launcher_script_path
 from review_suite_core import cwd_path_from_normalized
 from review_suite_local import (
     _run_is_finalized,
@@ -1078,7 +1079,7 @@ def refresh_review_cost_report_best_effort(
 
 
 def launch_review_cost_report_refresh_best_effort(*, state_dir: Path, review_cwd: Path | None = None) -> bool:
-    script_path = Path(__file__).with_name("review_suite_arena.py")
+    script_path = launcher_script_path(__file__, "review_suite_arena.py")
     command = [sys.executable, str(script_path), "costs", "--state-dir", str(state_dir)]
     if review_cwd is not None:
         command.extend(["--cd", str(review_cwd)])

@@ -121,9 +121,9 @@ To explicitly replace an existing local review ladder with a stricter one, use t
 ## Runtime Copies
 
 - When launched from an installed Codex plugin cache, long-running entrypoints re-exec from `~/.codex/plugin-runtimes/review-suite/<version-hash>/`.
-- Emitted `Action.cmd` may point at the runtime copy after bootstrap. Follow it; the runtime path is expected and avoids Windows locks on the installed cache.
+- Runtime commands re-exec from the runtime copy, but emitted `Action.cmd` values point back at the installed launcher.
 - Review state remains under `~/.codex/state/review-suite`.
-- Runtime directories are content-addressed and intentionally not aggressively cleaned up while Codex sessions may still be using them.
+- Runtime directories are content-addressed; stale inactive owned directories are removed on bootstrap once old enough and Windows allows it.
 
 ## Notes
 

@@ -12,6 +12,7 @@ from hashlib import blake2s
 from pathlib import Path
 from typing import Any
 
+from review_suite_runtime_bootstrap import launcher_script_path
 from review_suite_core import (
     format_command,
     gate_config,
@@ -345,7 +346,7 @@ def gate_record_status(record: dict[str, Any], decision: dict[str, Any] | None =
 def gate_signoff_action_payload(
     *, round_id: str, state_dir: Path, include_show_cmd: bool = True
 ) -> dict[str, Any]:
-    script = Path(__file__).resolve().with_name("review_suite_arena.py").as_posix()
+    script = launcher_script_path(__file__, "review_suite_arena.py").as_posix()
     base_command = [sys.executable, script]
     payload = {}
     if include_show_cmd:

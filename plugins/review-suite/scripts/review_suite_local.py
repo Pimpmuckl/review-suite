@@ -18,6 +18,7 @@ from hashlib import blake2s
 from pathlib import Path
 from typing import Any, Callable
 
+from review_suite_runtime_bootstrap import launcher_script_path
 from rollout_capture import (
     DEFAULT_SQLITE_STATE_PATH,
     REVIEW_SUBAGENT_SOURCE,
@@ -326,7 +327,7 @@ def _review_status_command(*, review_cwd: Path, base: str) -> str:
     return format_command(
         [
             sys.executable,
-            Path(__file__).resolve().with_name("review.py").as_posix(),
+            launcher_script_path(__file__, "review.py").as_posix(),
             "--status",
             "--cd",
             str(review_cwd),

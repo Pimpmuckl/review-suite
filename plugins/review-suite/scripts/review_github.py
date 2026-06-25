@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from review_suite_runtime_bootstrap import bootstrap_from_installed_cache
+from review_suite_runtime_bootstrap import bootstrap_from_installed_cache, launcher_script_path
 
 bootstrap_from_installed_cache(__file__)
 
@@ -456,7 +456,7 @@ def github_review_scope(*, review_root: Path, base_ref: str | None, head_sha: st
 
 
 def _help_command() -> str:
-    return format_command([sys.executable, str(Path(__file__).resolve()), "run", "--help"])
+    return format_command([sys.executable, str(launcher_script_path(__file__)), "run", "--help"])
 
 
 def inspect_existing_cycle(

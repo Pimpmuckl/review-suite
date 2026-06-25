@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Sequence
@@ -13,7 +14,10 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import review
+import review_gate
+import review_suite_arena
 import review_suite_runtime_bootstrap as runtime_bootstrap
+from review_suite_local import _review_status_command
 from review_suite_runtime_bootstrap import (
     METADATA_FILENAME,
     bootstrap_from_installed_cache,
@@ -84,8 +88,10 @@ def test_windows_cache_launcher_waits_for_runtime_and_returns_child_exit(
     plugin_root = _make_cache_plugin(codex_home)
     execv_calls: list[tuple[str, Sequence[str]]] = []
     run_calls: list[tuple[str, Sequence[str]]] = []
+    launcher_values: list[str | None] = []
 
     def fake_run(executable: str, argv: Sequence[str]) -> int:
+        launcher_values.append(os.environ.get(runtime_bootstrap.LAUNCHER_SCRIPT_ENV))
         run_calls.append((executable, argv))
         return 42
 
@@ -107,6 +113,8 @@ def test_windows_cache_launcher_waits_for_runtime_and_returns_child_exit(
     assert executable == "python"
     assert Path(argv[1]).is_relative_to(codex_home / "plugin-runtimes" / "review-suite")
     assert tuple(argv[2:]) == ("--mode", "emergency", "--base", "main")
+    assert launcher_values == [str(plugin_root / "scripts" / "review.py")]
+    assert os.environ.get(runtime_bootstrap.LAUNCHER_SCRIPT_ENV) is None
 
 
 def test_already_running_from_runtime_does_not_reexec(tmp_path: Path) -> None:
@@ -145,6 +153,42 @@ def test_runtime_directory_is_created_and_reused(tmp_path: Path) -> None:
     assert metadata["content_hash"] == expected_hash
     assert metadata["created_at"]
     assert list(first_root.parent.glob("*.tmp.*")) == []
+
+
+def test_runtime_cleanup_keeps_current_and_unowned_roots(tmp_path: Path) -> None:
+    parent = tmp_path / "codex" / "plugin-runtimes" / "review-suite"
+    parent.mkdir(parents=True)
+
+    def make_runtime(name: str, created_at: str) -> Path:
+        root = parent / name
+        root.mkdir()
+        _write(
+            root / METADATA_FILENAME,
+            json.dumps(
+                {
+                    "plugin": "review-suite",
+                    "runtime_key": name,
+                    "created_at": created_at,
+                }
+            ),
+        )
+        return root
+
+    current = make_runtime("0.1.0-current", "2026-01-05T00:00:00Z")
+    active = make_runtime("0.1.0-active", "2026-01-01T00:00:00Z")
+    _write(active / ".active.123.json", "{}\n")
+    fresh = make_runtime("0.1.0-fresh", "2999-01-01T00:00:00Z")
+    old = make_runtime("0.1.0-old", "2026-01-02T00:00:00Z")
+    no_metadata = parent / "0.1.0-no-metadata"
+    no_metadata.mkdir()
+
+    runtime_bootstrap._cleanup_stale_runtime_roots(parent, keep_root=current)
+
+    assert current.exists()
+    assert active.exists()
+    assert fresh.exists()
+    assert no_metadata.exists()
+    assert not old.exists()
 
 
 def test_runtime_hash_ignores_volatile_state(tmp_path: Path) -> None:
@@ -195,15 +239,41 @@ def test_prepare_runtime_bootstrap_returns_none_outside_installed_cache(tmp_path
     assert plan is None
 
 
-def test_followup_command_uses_runtime_script_path_after_reexec(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_followup_command_uses_launcher_script_path_after_reexec(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     codex_home = tmp_path / "codex"
     plugin_root = _make_cache_plugin(codex_home)
     runtime_root = ensure_runtime_copy(plugin_root, codex_home=codex_home)
     runtime_script = runtime_root / "scripts" / "review.py"
+    launcher_script = plugin_root / "scripts" / "review.py"
 
     monkeypatch.setattr(review, "__file__", str(runtime_script))
+    monkeypatch.setenv(runtime_bootstrap.LAUNCHER_SCRIPT_ENV, str(launcher_script))
 
     command = review._review_command("rvw_123", "--decision", "clean")
 
-    assert str(runtime_script) in command
-    assert str(plugin_root) not in command
+    assert str(launcher_script) in command
+    assert str(runtime_script) not in command
+
+
+def test_action_command_helpers_use_launcher_paths_after_reexec(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    codex_home = tmp_path / "codex"
+    plugin_root = _make_cache_plugin(codex_home)
+    runtime_root = ensure_runtime_copy(plugin_root, codex_home=codex_home)
+    launcher_script = plugin_root / "scripts" / "review.py"
+
+    monkeypatch.setenv(runtime_bootstrap.LAUNCHER_SCRIPT_ENV, str(launcher_script))
+
+    commands = [
+        review_suite_arena._grade_command(round_id="round", state_dir=tmp_path / "state"),
+        review_gate.gate_signoff_action_payload(round_id="round", state_dir=tmp_path / "state")["cmd"],
+        _review_status_command(review_cwd=tmp_path, base="main"),
+    ]
+    command_text = "\n".join(commands).replace("\\", "/")
+
+    assert str(plugin_root / "scripts").replace("\\", "/") in command_text
+    assert str(runtime_root).replace("\\", "/") not in command_text
+    assert "review_suite_arena.py grade" in command_text

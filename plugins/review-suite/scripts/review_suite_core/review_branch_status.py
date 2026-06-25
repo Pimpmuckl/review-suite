@@ -5,6 +5,7 @@ import json
 import sys
 from pathlib import Path
 
+from review_suite_runtime_bootstrap import launcher_script_path
 from review_suite_core import emit_toon, format_command, inspect_workflow_status, resolve_repo_root
 from review_suite_core.config import default_state_dir
 from review_suite_core.orchestrator_profiles import RESTART_MODE_ORDER
@@ -40,7 +41,7 @@ DECISION_COMMANDS = {"clean", "findings"}
 
 
 def _script_path(name: str) -> str:
-    return (Path(__file__).resolve().parents[1] / name).as_posix()
+    return launcher_script_path(Path(__file__).resolve().parents[1] / "review.py", name).as_posix()
 
 
 def _wsl_unc_cd(cd: str | None) -> bool:

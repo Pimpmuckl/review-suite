@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 from typing import Callable
 
-from review_suite_runtime_bootstrap import bootstrap_from_installed_cache
+from review_suite_runtime_bootstrap import bootstrap_from_installed_cache, launcher_script_path
 
 bootstrap_from_installed_cache(__file__)
 
@@ -432,7 +432,7 @@ def _ensure_no_pending_grades(
 
 
 def _script_command() -> str:
-    return format_command([sys.executable, Path(__file__).resolve().as_posix()])
+    return format_command([sys.executable, launcher_script_path(__file__).as_posix()])
 
 
 def _grade_command(
@@ -445,7 +445,7 @@ def _grade_command(
 ) -> str:
     parts = [
         sys.executable,
-        Path(__file__).resolve().as_posix(),
+        launcher_script_path(__file__).as_posix(),
         "grade",
     ]
     if round_id:
@@ -502,7 +502,7 @@ def _show_round_command(*, round_id: str) -> str:
     return format_command(
         [
             sys.executable,
-            Path(__file__).resolve().as_posix(),
+            launcher_script_path(__file__).as_posix(),
             "show-round",
             "--round-id",
             round_id,
@@ -517,7 +517,7 @@ def _dismiss_round_command(
     return format_command(
         [
             sys.executable,
-            Path(__file__).resolve().as_posix(),
+            launcher_script_path(__file__).as_posix(),
             "dismiss-round",
             "--round-id",
             round_id,
@@ -539,7 +539,7 @@ def _reroll_command(
 ) -> str:
     parts = [
         sys.executable,
-        Path(__file__).resolve().as_posix(),
+        launcher_script_path(__file__).as_posix(),
         "reroll-slot",
         "--round-id",
         round_id,

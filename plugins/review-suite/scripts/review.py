@@ -8,7 +8,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-from review_suite_runtime_bootstrap import bootstrap_from_installed_cache
+from review_suite_runtime_bootstrap import bootstrap_from_installed_cache, launcher_script_path
 
 bootstrap_from_installed_cache(__file__)
 
@@ -152,7 +152,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _help_command() -> str:
-    return format_command([sys.executable, str(Path(__file__).resolve()), "--help"])
+    return format_command([sys.executable, str(_launcher_script_path()), "--help"])
+
+
+def _launcher_script_path(name: str = "review.py") -> Path:
+    return launcher_script_path(__file__, name)
 
 
 class NoDecisionPendingError(ValueError):
@@ -166,7 +170,7 @@ def _runtime_uses_wsl(state: dict[str, Any]) -> bool:
 
 
 def _review_command(public_id: str, *extra: str, state_dir: Path | None = None) -> str:
-    command = [sys.executable, str(Path(__file__).resolve()), "--id", public_id, *extra]
+    command = [sys.executable, str(_launcher_script_path()), "--id", public_id, *extra]
     return format_command(command)
 
 
@@ -179,7 +183,7 @@ def _new_review_command(state: dict[str, Any], *, state_dir: Path, fresh_token: 
         raise ValueError("review cycle is missing mode, cwd, or base for a fresh review command")
     command = [
         sys.executable,
-        str(Path(__file__).resolve()),
+        str(_launcher_script_path()),
         "--mode",
         mode,
         "--cd",
@@ -225,7 +229,7 @@ def _arena_grade_command(
     return format_command(
         [
             sys.executable,
-            str(Path(__file__).resolve().with_name("review_suite_arena.py")),
+            str(_launcher_script_path("review_suite_arena.py")),
             "grade",
             "--round-id",
             round_id,
@@ -245,7 +249,7 @@ def _arena_reroll_argv(state: dict[str, Any], *, state_dir: Path, round_id: str,
     identity = dict(state.get("identity") or {})
     command = [
         sys.executable,
-        str(Path(__file__).resolve().with_name("review_suite_arena.py")),
+        str(_launcher_script_path("review_suite_arena.py")),
         "reroll-slot",
         "--round-id",
         round_id,
@@ -270,7 +274,7 @@ def _arena_reroll_argv(state: dict[str, Any], *, state_dir: Path, round_id: str,
 def _arena_dismiss_argv(*, state_dir: Path, round_id: str) -> list[str]:
     return [
         sys.executable,
-        str(Path(__file__).resolve().with_name("review_suite_arena.py")),
+        str(_launcher_script_path("review_suite_arena.py")),
         "dismiss-round",
         "--round-id",
         round_id,
@@ -284,7 +288,7 @@ def _arena_dismiss_argv(*, state_dir: Path, round_id: str) -> list[str]:
 def _arena_resume_argv(*, state_dir: Path, round_id: str) -> list[str]:
     return [
         sys.executable,
-        str(Path(__file__).resolve().with_name("review_suite_arena.py")),
+        str(_launcher_script_path("review_suite_arena.py")),
         "resume-round",
         "--round-id",
         round_id,
@@ -301,7 +305,7 @@ def _arena_run_round_argv(state: dict[str, Any], payload: dict[str, Any], *, sta
     base = str(review_scope.get("base") or identity.get("base") or "").strip()
     command = [
         sys.executable,
-        str(Path(__file__).resolve().with_name("review_suite_arena.py")),
+        str(_launcher_script_path("review_suite_arena.py")),
         "run-round",
         "--round-id",
         round_id,
@@ -2218,7 +2222,7 @@ def _github_review_subprocess_command(state: dict[str, Any], *, state_dir: Path,
         raise ValueError("review cycle is missing cwd for --github-review")
     command = [
         sys.executable,
-        str(Path(__file__).with_name("review_github.py").resolve()),
+        str(_launcher_script_path("review_github.py")),
         "run",
         "--cd",
         str(cwd_path_from_normalized(cwd)),

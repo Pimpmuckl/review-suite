@@ -14,7 +14,7 @@ Use for local code review.
 Path rules:
 - `<review-suite-plugin-root>` is the installed Codex plugin cache root, such as `%USERPROFILE%\.codex\plugins\cache\review-suite\review-suite\0.1.0` for the git marketplace install.
 - Do not run scripts from `%USERPROFILE%\.codex\.tmp\marketplaces\review-suite`; that is Codex's marketplace source clone.
-- Follow emitted `Action.cmd` even when it points at `%USERPROFILE%\.codex\plugin-runtimes\review-suite\<version-hash>\scripts\...`; that runtime path is expected after bootstrap.
+- Follow emitted `Action.cmd`; runtime-backed runs should emit installed-launcher paths for follow-up commands.
 
 Mode:
 - `emergency`: urgent GPT 5.5 medium signoff only; deslop disabled; no more than two local review rounds.

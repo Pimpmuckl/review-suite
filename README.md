@@ -139,7 +139,7 @@ When Review Suite is launched from Codex's installed plugin cache, long-running 
 ~/.codex/plugin-runtimes/review-suite/<version-hash>/
 ```
 
-The installed cache stays a launcher surface. Emitted `Action.cmd` values may point at the runtime copy after bootstrap; that is expected and avoids locking the installed cache on Windows. Existing review state remains under `~/.codex/state/review-suite`, and old runtime directories are not aggressively removed while Codex sessions may still be using them.
+The installed cache stays a launcher surface. Runtime commands re-exec from the runtime copy, but emitted `Action.cmd` values point back at the installed launcher so old inactive runtime directories can be removed when Windows allows it. Existing review state remains under `~/.codex/state/review-suite`.
 
 ## Development
 

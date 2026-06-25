@@ -10,7 +10,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from review_suite_runtime_bootstrap import bootstrap_from_installed_cache
+from review_suite_runtime_bootstrap import bootstrap_from_installed_cache, launcher_script_path
 
 bootstrap_from_installed_cache(__file__)
 
@@ -80,7 +80,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _help_command() -> str:
-    return format_command([sys.executable, str(Path(__file__).resolve()), "--help"])
+    return format_command([sys.executable, str(launcher_script_path(__file__)), "--help"])
 
 
 def normalize_commit_spec(commit_values: list[str] | None) -> tuple[str | None, str | None]:

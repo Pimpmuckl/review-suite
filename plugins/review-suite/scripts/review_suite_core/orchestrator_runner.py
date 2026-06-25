@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+from review_suite_runtime_bootstrap import launcher_script_path
 from review_gate import run_gate_round
 from review_followup import build_followup_prompt
 from review_suite_arena import (
@@ -85,7 +86,7 @@ StatePersister = Callable[[dict[str, Any]], dict[str, Any] | None]
 
 
 def _script_path(name: str) -> Path:
-    return Path(__file__).resolve().parents[1] / name
+    return launcher_script_path(Path(__file__).resolve().parents[1] / "review.py", name)
 
 
 def _identity_text(state: dict[str, Any], key: str) -> str:
