@@ -30,6 +30,7 @@ from review_suite_local import (
     _transport_stalled,
     aggregate_records,
     compact_benchmark_run,
+    compact_round_files,
     cleanup_stale_ungraded_rounds,
     build_reroll_slot_payload,
     classify_review_capture,
@@ -122,6 +123,152 @@ def test_service_tier_is_dormant_when_variant_does_not_set_it() -> None:
     )
 
     assert "service_tier" not in compacted
+
+
+def test_write_round_compacts_finalized_storage(tmp_path: Path) -> None:
+    write_round(
+        tmp_path,
+        {
+            "round_id": "round-1",
+            "task_class": "pr_review",
+            "status": "completed",
+            "grading_required": False,
+            "requested_prompt": "large prompt",
+            "runs": [
+                {
+                    "variant_id": "gpt-5.5-high",
+                    "reviewer_output": "No findings.",
+                    "stderr": "large stderr",
+                    "command": ["codex", "exec"],
+                }
+            ],
+        },
+    )
+
+    payload = json.loads((tmp_path / "rounds" / "round-1.json").read_text(encoding="utf-8"))
+    assert payload["requested_prompt"] == "large prompt"
+    assert payload["runs"][0]["reviewer_output"] == "No findings."
+    assert "stderr" not in payload["runs"][0]
+    assert "command" not in payload["runs"][0]
+
+
+def test_write_round_keeps_prompt_for_blocked_reroll(tmp_path: Path) -> None:
+    write_round(
+        tmp_path,
+        {
+            "round_id": "round-1",
+            "task_class": "pr_review",
+            "status": "completed",
+            "grading_required": False,
+            "requested_prompt": "reroll prompt",
+            "runs": [
+                {
+                    "variant_id": "gpt-5.5-high",
+                    "reviewer_output": "",
+                    "grade_blocked": True,
+                    "stderr": "large stderr",
+                }
+            ],
+        },
+    )
+
+    payload = json.loads((tmp_path / "rounds" / "round-1.json").read_text(encoding="utf-8"))
+    assert payload["requested_prompt"] == "reroll prompt"
+    assert "stderr" not in payload["runs"][0]
+
+
+def test_write_round_preserves_stderr_derived_classification(tmp_path: Path) -> None:
+    write_round(
+        tmp_path,
+        {
+            "round_id": "round-1",
+            "task_class": "pr_review",
+            "status": "completed",
+            "requested_prompt": "prompt",
+            "runs": [
+                {
+                    "variant_id": "gpt-5.5-high",
+                    "review_status": "completed",
+                    "reviewer_output": "",
+                    "stderr": "windows sandbox: setup refresh failed",
+                }
+            ],
+        },
+    )
+
+    run = json.loads((tmp_path / "rounds" / "round-1.json").read_text(encoding="utf-8"))["runs"][0]
+    assert run["grade_blocked"] is True
+    assert run["grade_block_reason"] == "review_tooling_failure"
+    assert "stderr" not in run
+
+
+def test_compact_round_files_cleans_existing_round_state_dirs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    round_path = state_dir / "rounds" / "old.json"
+    orchestrator_path = state_dir / "orchestrator" / "review-rounds" / "rounds" / "old-orc.json"
+    live_path = state_dir / "rounds" / "live.json"
+    for path in (round_path, orchestrator_path, live_path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+    round_path.write_text(
+        json.dumps(
+            {
+                "round_id": "old",
+                "status": "completed",
+                "grading_required": True,
+                "requested_prompt": "keep for reroll",
+                "runs": [{"variant_id": "a", "reviewer_output": "body", "stderr": "raw"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    orchestrator_path.write_text(
+        json.dumps(
+            {
+                "round_id": "old-orc",
+                "status": "completed",
+                "grading_required": False,
+                "requested_prompt": "drop",
+                "runs": [{"variant_id": "a", "reviewer_output": "body", "command": ["raw"]}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    live_path.write_text(
+        json.dumps({"round_id": "live", "status": "running", "runs": [{"variant_id": "a", "stderr": "raw"}]}),
+        encoding="utf-8",
+    )
+
+    dry_run = compact_round_files(state_dir)
+    assert dry_run["checked"] == 3
+    assert dry_run["changed"] == 2
+    assert "stderr" in json.loads(round_path.read_text(encoding="utf-8"))["runs"][0]
+
+    locks: list[str] = []
+
+    class Lock:
+        def __enter__(self) -> None:
+            return None
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+    def fake_state_lock(_state_dir: Path, name: str, **_kwargs: object) -> Lock:
+        locks.append(name)
+        return Lock()
+
+    monkeypatch.setattr("review_suite_local.state_lock", fake_state_lock)
+    applied = compact_round_files(state_dir, apply=True)
+
+    assert applied["changed"] == 2
+    assert "round-old" in locks
+    assert "round-old-orc" in locks
+    compacted = json.loads(round_path.read_text(encoding="utf-8"))
+    assert compacted["requested_prompt"] == "keep for reroll"
+    assert "stderr" not in compacted["runs"][0]
+    compacted_orchestrator = json.loads(orchestrator_path.read_text(encoding="utf-8"))
+    assert compacted_orchestrator["requested_prompt"] == "drop"
+    assert "command" not in compacted_orchestrator["runs"][0]
+    assert "stderr" in json.loads(live_path.read_text(encoding="utf-8"))["runs"][0]
 
 
 def test_normalize_service_tier_rejects_unknown_values() -> None:
@@ -242,6 +389,32 @@ def test_classify_review_result_prefers_valid_output_over_stale_interruption_mar
     assert classification["review_status"] == "completed"
     assert classification["grade_blocked"] is False
     assert classification["grade_block_reason"] is None
+
+
+def test_classify_review_result_prefers_valid_output_over_stale_capacity_marker() -> None:
+    classification = _classify_review_result(
+        reviewer_output="No findings.",
+        stderr_text="selected model is at capacity",
+        session_id="session-123",
+        thread_id="thread-123",
+    )
+
+    assert classification["review_status"] == "completed"
+    assert classification["grade_blocked"] is False
+    assert classification["grade_block_reason"] is None
+
+
+def test_classify_review_result_keeps_capacity_for_interruption_boilerplate() -> None:
+    classification = _classify_review_result(
+        reviewer_output="Review was interrupted before a usable result was captured.",
+        stderr_text="selected model is at capacity",
+        session_id="session-123",
+        thread_id="thread-123",
+    )
+
+    assert classification["review_status"] == "interrupted_capacity"
+    assert classification["grade_blocked"] is True
+    assert classification["grade_block_reason"] == "selected_model_at_capacity"
 
 
 def test_terminal_review_command_requires_final_machine_line() -> None:

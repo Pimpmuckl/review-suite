@@ -64,6 +64,7 @@ ROSTER_FILENAME = "roster.json"
 RUBRIC_FILENAME = "rubric_v2.json"
 OPERATIONAL_STATE_FILENAME = "operational_state.json"
 ROUNDS_DIRNAME = "rounds"
+ORCHESTRATOR_ROUND_STATE_DIR = Path("orchestrator") / "review-rounds"
 GRADE_SCHEMA = "winner_basis_v1"
 LEGACY_GRADE_BASIS = "legacy_score_grade"
 GRADE_BASIS_VALUES = (
@@ -469,6 +470,10 @@ def _atomic_write_text(path: Path, text: str) -> None:
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
     _atomic_write_text(path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
+
+
+def _json_bytes(payload: dict[str, Any]) -> int:
+    return len((json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8"))
 
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -939,6 +944,71 @@ def rounds_dir(state_dir: Path) -> Path:
 
 def round_path(state_dir: Path, round_id: str) -> Path:
     return rounds_dir(state_dir) / f"{round_id}.json"
+
+
+def _round_prompt_is_needed(payload: dict[str, Any]) -> bool:
+    return str(payload.get("status") or "") == "completed"
+
+
+def compact_round_payload_for_storage(payload: dict[str, Any]) -> dict[str, Any]:
+    if str(payload.get("status") or "") not in {"completed", "dismissed"}:
+        return deepcopy(payload)
+    compacted = deepcopy(payload)
+    compacted.pop("_round_file_path", None)
+    if not _round_prompt_is_needed(compacted):
+        compacted.pop("requested_prompt", None)
+    for run in list(compacted.get("runs") or []):
+        if not isinstance(run, dict):
+            continue
+        classification = _classification_for_run(run)
+        run["review_status"] = classification["review_status"]
+        run["status_summary"] = classification["status_summary"]
+        run["grade_blocked"] = classification["grade_blocked"]
+        run["grade_block_reason"] = classification["grade_block_reason"]
+        for key in ("command", "stdout", "stderr", "stdout_path", "stderr_path", "final_message_path", "stderr_progress_offset"):
+            run.pop(key, None)
+    return compacted
+
+
+def _compact_round_file(path: Path, *, apply: bool) -> tuple[int, int, bool] | None:
+    try:
+        before = path.stat().st_size
+        payload = read_json(path)
+    except Exception:
+        return None
+    compacted = compact_round_payload_for_storage(payload)
+    changed = compacted != payload
+    after = _json_bytes(compacted) if changed else before
+    if changed and apply:
+        write_json(path, compacted)
+    return before, after, changed
+
+
+def compact_round_files(state_dir: Path, *, apply: bool = False) -> dict[str, Any]:
+    dirs = unique_round_state_dirs([state_dir, state_dir / ORCHESTRATOR_ROUND_STATE_DIR])
+    result = {"checked": 0, "changed": 0, "before_b": 0, "after_b": 0}
+    for round_state_dir in dirs:
+        directory = rounds_dir(round_state_dir)
+        if not directory.exists():
+            continue
+        with state_lock(round_state_dir, "compact-rounds"):
+            for path in sorted(directory.glob("*.json")):
+                if apply:
+                    with state_lock(round_state_dir, f"round-{path.stem}"):
+                        stats = _compact_round_file(path, apply=True)
+                else:
+                    stats = _compact_round_file(path, apply=False)
+                if stats is None:
+                    continue
+                before, after, changed = stats
+                result["checked"] += 1
+                result["before_b"] += before
+                result["after_b"] += after
+                if not changed:
+                    continue
+                result["changed"] += 1
+    result["saved_b"] = result["before_b"] - result["after_b"]
+    return result
 
 
 def normalize_review_cwd_value(review_cwd: Path | str | None) -> str | None:
@@ -2393,7 +2463,7 @@ def build_reroll_slot_payload(
 def write_round(state_dir: Path, payload: dict[str, Any]) -> Path:
     path = round_path(state_dir, payload["round_id"])
     with state_lock(state_dir, f"round-{payload['round_id']}"):
-        write_json(path, payload)
+        write_json(path, compact_round_payload_for_storage(payload))
     return path
 
 
@@ -2527,7 +2597,7 @@ def _classify_review_result(
     output = (reviewer_output or "").strip()
     capacity = _capacity_interruption_detected(stderr_text=stderr_text, reviewer_output=output)
     interrupted = _review_interrupted_detected(stderr_text=stderr_text, reviewer_output=output)
-    if capacity:
+    if capacity and (not output or interrupted or "selected model is at capacity" in output.lower()):
         return {
             "review_status": "interrupted_capacity",
             "status_summary": "selected_model_at_capacity",

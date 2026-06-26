@@ -41,6 +41,7 @@ from review_suite_local import (
     build_record_from_grade,
     build_reroll_slot_payload,
     compact_benchmark_record,
+    compact_round_files,
     collect_round_results,
     default_roster_path,
     default_rubric_path,
@@ -288,6 +289,10 @@ def build_parser() -> argparse.ArgumentParser:
     compact.add_argument("--state-dir", default=str(default_state_dir()))
     compact.add_argument("--backup-suffix", default=".bak")
     compact.add_argument("--apply", action="store_true")
+
+    compact_rounds = sub.add_parser("compact-rounds")
+    compact_rounds.add_argument("--state-dir", default=str(default_state_dir()))
+    compact_rounds.add_argument("--apply", action="store_true")
 
     reroll = sub.add_parser("reroll-slot")
     reroll.add_argument("--round-id", required=True)
@@ -2474,6 +2479,19 @@ def cmd_compact_runs(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_compact_rounds(args: argparse.Namespace) -> int:
+    result = compact_round_files(Path(args.state_dir), apply=bool(args.apply))
+    result.update(
+        {
+            "status": "ok",
+            "applied": bool(args.apply),
+            "reduction_pct": round((result["saved_b"] / result["before_b"]) * 100.0, 3) if result["before_b"] else 0.0,
+        }
+    )
+    emit_toon(result)
+    return 0
+
+
 def main() -> int:
     parser = build_parser()
     try:
@@ -2508,6 +2526,8 @@ def main() -> int:
             return cmd_promote(args)
         if args.command == "compact-runs":
             return cmd_compact_runs(args)
+        if args.command == "compact-rounds":
+            return cmd_compact_rounds(args)
     except BlockingRoundError as exc:
         return emit_error(
             str(exc),
