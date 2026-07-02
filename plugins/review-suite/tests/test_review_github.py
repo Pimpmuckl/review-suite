@@ -709,6 +709,7 @@ def test_cmd_run_does_not_record_workflow_anchor_for_acknowledged_without_body(m
         },
     )
     monkeypatch.setattr(review_github, "record_review_anchor", lambda **kwargs: recorded.append(kwargs) or {})
+    monkeypatch.setattr(review_github, "refresh_review_cost_report_best_effort", lambda **kwargs: None)
     monkeypatch.setattr(review_github, "emit_toon", lambda payload: emitted.append(payload))
 
     exit_code = cmd_run(
@@ -758,6 +759,7 @@ def test_cmd_run_does_not_record_workflow_anchor_for_existing_completed_cycle(mo
         },
     )
     monkeypatch.setattr(review_github, "record_review_anchor", lambda **kwargs: recorded.append(kwargs) or {})
+    monkeypatch.setattr(review_github, "refresh_review_cost_report_best_effort", lambda **kwargs: None)
     monkeypatch.setattr(review_github, "emit_toon", lambda payload: emitted.append(payload))
 
     exit_code = cmd_run(
