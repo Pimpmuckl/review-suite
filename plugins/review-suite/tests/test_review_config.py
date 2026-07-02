@@ -21,14 +21,29 @@ def test_default_public_config_loads(tmp_path: Path) -> None:
     assert config["privacy"]["arena_external_publish_enabled"] is False
     assert config["arena"]["enabled"] is False
     assert lens_model_config("review-plan", state_dir=state_dir).model == "gpt-5.5"
-    assert lens_model_config("review-plan", state_dir=state_dir).reasoning_effort == "medium"
-    assert gate_config("phase_gate", state_dir=state_dir).discovery_variant_id == "gpt-5.4-medium"
+    assert (
+        lens_model_config("review-plan", state_dir=state_dir).reasoning_effort
+        == "medium"
+    )
+    assert (
+        gate_config("phase_gate", state_dir=state_dir).discovery_variant_id
+        == "gpt-5.4-medium"
+    )
     assert gate_config("phase_gate", state_dir=state_dir).discovery_reviewer_count == 4
-    assert gate_config("phase_gate", state_dir=state_dir).signoff_variant_id == "gpt-5.5-medium"
+    assert (
+        gate_config("phase_gate", state_dir=state_dir).signoff_variant_id
+        == "gpt-5.5-medium"
+    )
     assert gate_config("phase_gate", state_dir=state_dir).signoff_reviewer_count == 2
     assert gate_config("phase_gate", state_dir=state_dir).discovery_loops == 1
-    assert gate_config("pr_gate", state_dir=state_dir).discovery_variant_id == "gpt-5.4-xhigh"
-    assert gate_config("pr_gate", state_dir=state_dir).signoff_variant_id == "gpt-5.5-xhigh"
+    assert (
+        gate_config("pr_gate", state_dir=state_dir).discovery_variant_id
+        == "gpt-5.4-xhigh"
+    )
+    assert (
+        gate_config("pr_gate", state_dir=state_dir).signoff_variant_id
+        == "gpt-5.5-xhigh"
+    )
     assert config["orchestrator"]["selection"] == "auto"
     assert config["orchestrator"]["stable_defaults"] == {
         "discovery_brief_model": "gpt-5.4-medium",
@@ -83,8 +98,14 @@ def test_user_config_overrides_defaults(tmp_path: Path) -> None:
     assert phase_gate.signoff_variant_id == "gpt-5.4-high"
     assert phase_gate.discovery_loops == 2
     assert pr_gate.signoff_variant_id == "gpt-5.5-xhigh"
-    assert config["orchestrator"]["stable_defaults"]["discovery_brief_model"] == "gpt-5.4-medium"
-    assert config["orchestrator"]["stable_defaults"]["signoff_brief_model"] == "gpt-5.4-high"
+    assert (
+        config["orchestrator"]["stable_defaults"]["discovery_brief_model"]
+        == "gpt-5.4-medium"
+    )
+    assert (
+        config["orchestrator"]["stable_defaults"]["signoff_brief_model"]
+        == "gpt-5.4-high"
+    )
 
 
 def test_public_config_rejects_external_arena_publish(tmp_path: Path) -> None:

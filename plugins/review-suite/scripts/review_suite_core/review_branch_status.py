@@ -6,7 +6,12 @@ import sys
 from pathlib import Path
 
 from review_suite_runtime_bootstrap import launcher_script_path
-from review_suite_core import emit_toon, format_command, inspect_workflow_status, resolve_repo_root
+from review_suite_core import (
+    emit_toon,
+    format_command,
+    inspect_workflow_status,
+    resolve_repo_root,
+)
 from review_suite_core.config import default_state_dir
 from review_suite_core.orchestrator_profiles import RESTART_MODE_ORDER
 from review_suite_core.orchestrator_state import (
@@ -14,7 +19,12 @@ from review_suite_core.orchestrator_state import (
     green_review_head_change_summary,
     review_ladder_summary,
 )
-from review_gate import gate_signoff_action_payload, gate_signoff_decisions_by_round, load_gate_record, pending_gate_signoff_records
+from review_gate import (
+    gate_signoff_action_payload,
+    gate_signoff_decisions_by_round,
+    load_gate_record,
+    pending_gate_signoff_records,
+)
 from review_suite_local import (
     load_round,
     normalize_record_review_cwd_value,
@@ -41,7 +51,9 @@ DECISION_COMMANDS = {"clean", "findings"}
 
 
 def _script_path(name: str) -> str:
-    return launcher_script_path(Path(__file__).resolve().parents[1] / "review.py", name).as_posix()
+    return launcher_script_path(
+        Path(__file__).resolve().parents[1] / "review.py", name
+    ).as_posix()
 
 
 def _wsl_unc_cd(cd: str | None) -> bool:
@@ -116,9 +128,16 @@ def _gate_signoff_override(
     round_id = str(latest.get("round_id") or "").strip()
     task_class = str(latest.get("task_class") or "").strip()
     scope = dict(latest.get("review_scope") or {})
-    reviewed_head = str(scope.get("reviewed_head") or scope.get("commit_end") or scope.get("commit") or "").strip()
+    reviewed_head = str(
+        scope.get("reviewed_head")
+        or scope.get("commit_end")
+        or scope.get("commit")
+        or ""
+    ).strip()
     current_head = str(current_payload.get("head") or "").strip()
-    head_matches_current = bool(reviewed_head and current_head and reviewed_head == current_head)
+    head_matches_current = bool(
+        reviewed_head and current_head and reviewed_head == current_head
+    )
     note = "View the round, then close the gate as clean or findings."
     if reviewed_head and current_head and reviewed_head != current_head:
         note = "Reviewed head moved since this gate ran. View the round, close the gate for that head, then rerun review.py --status."
@@ -164,7 +183,10 @@ def _gate_findings_rerun_override(
         if record_cwd != normalized_cwd:
             continue
         scope = dict(record.get("review_scope") or {})
-        if str(base or "").strip() and str(scope.get("base") or "").strip() != str(base or "").strip():
+        if (
+            str(base or "").strip()
+            and str(scope.get("base") or "").strip() != str(base or "").strip()
+        ):
             continue
         task_id = str(record.get("task_id") or "").strip()
         if branch and branch != "HEAD" and task_id and task_id != branch:
@@ -172,15 +194,32 @@ def _gate_findings_rerun_override(
         round_id = str(record.get("round_id") or "").strip()
         decision = decisions.get(round_id) or {}
         verdict = str(decision.get("verdict") or "").strip()
-        record_head = str(scope.get("reviewed_head") or scope.get("commit_end") or scope.get("commit") or "").strip()
+        record_head = str(
+            scope.get("reviewed_head")
+            or scope.get("commit_end")
+            or scope.get("commit")
+            or ""
+        ).strip()
         if verdict == "clean" and record_head == head:
             clean_current_head = True
-        relevant.append({**dict(record), "_lane": lane, "_verdict": verdict, "_record_head": record_head})
+        relevant.append(
+            {
+                **dict(record),
+                "_lane": lane,
+                "_verdict": verdict,
+                "_record_head": record_head,
+            }
+        )
     if clean_current_head or not relevant:
         return None
     latest = sorted(
         relevant,
-        key=lambda item: str(item.get("review_completed_at") or item.get("recorded_at") or item.get("round_id") or ""),
+        key=lambda item: str(
+            item.get("review_completed_at")
+            or item.get("recorded_at")
+            or item.get("round_id")
+            or ""
+        ),
     )[-1]
     if str(latest.get("_verdict") or "") != "findings":
         return None
@@ -207,7 +246,9 @@ def _gate_findings_rerun_override(
     }
 
 
-def _with_action_context(action: dict[str, object], *, review_cwd: Path, round_id: str | None = None) -> dict[str, object]:
+def _with_action_context(
+    action: dict[str, object], *, review_cwd: Path, round_id: str | None = None
+) -> dict[str, object]:
     action["cwd"] = str(review_cwd)
     if round_id:
         action["round_id"] = round_id
@@ -216,12 +257,25 @@ def _with_action_context(action: dict[str, object], *, review_cwd: Path, round_i
 
 def _public_status_action(action: dict[str, object]) -> dict[str, object]:
     hidden = {"lane", "round_id", "source_gate_round_id"}
-    return {key: value for key, value in action.items() if key not in hidden and value not in (None, "", [], {})}
+    return {
+        key: value
+        for key, value in action.items()
+        if key not in hidden and value not in (None, "", [], {})
+    }
 
 
 def _public_status_payload(payload: dict[str, object]) -> dict[str, object]:
     public: dict[str, object] = {}
-    for key in ("review", "status", "done", "review_ladder", "next_action", "recommendation", "reason", "progress"):
+    for key in (
+        "review",
+        "status",
+        "done",
+        "review_ladder",
+        "next_action",
+        "recommendation",
+        "reason",
+        "progress",
+    ):
         value = payload.get(key)
         if value not in (None, "", [], {}):
             public[key] = value
@@ -281,7 +335,9 @@ def _orchestrator_validation_blockers(state: dict[str, object]) -> list[str]:
     return blockers
 
 
-def _orchestrator_validation_status_command(public_id: str, blockers: list[str], status: str) -> str:
+def _orchestrator_validation_status_command(
+    public_id: str, blockers: list[str], status: str
+) -> str:
     args: list[str] = []
     for blocker in blockers:
         key = blocker.split(":", 1)[0]
@@ -292,7 +348,9 @@ def _orchestrator_validation_status_command(public_id: str, blockers: list[str],
     return _review_command(public_id, extra=tuple(args))
 
 
-def _orchestrator_validation_blocker_action(public_id: str, blockers: list[str]) -> dict[str, object]:
+def _orchestrator_validation_blocker_action(
+    public_id: str, blockers: list[str]
+) -> dict[str, object]:
     return {
         "cmd": _orchestrator_validation_status_command(public_id, blockers, "passed"),
         "alt": _orchestrator_validation_status_command(public_id, blockers, "waived"),
@@ -301,15 +359,28 @@ def _orchestrator_validation_blocker_action(public_id: str, blockers: list[str])
     }
 
 
-def _restart_deep_action(state: dict[str, object], public_id: str) -> dict[str, object] | None:
+def _restart_deep_action(
+    state: dict[str, object], public_id: str
+) -> dict[str, object] | None:
     stage = str(state.get("stage") or "").strip()
-    if stage in ORCHESTRATOR_HIDDEN_STAGES or isinstance(state.get("superseded_by"), dict):
+    if stage in ORCHESTRATOR_HIDDEN_STAGES or isinstance(
+        state.get("superseded_by"), dict
+    ):
         return None
-    mode = str(dict(state.get("mode") or {}).get("effective") or dict(state.get("mode") or {}).get("requested") or "").strip()
-    if mode not in RESTART_MODE_ORDER or RESTART_MODE_ORDER[mode] >= RESTART_MODE_ORDER["deep"]:
+    mode = str(
+        dict(state.get("mode") or {}).get("effective")
+        or dict(state.get("mode") or {}).get("requested")
+        or ""
+    ).strip()
+    if (
+        mode not in RESTART_MODE_ORDER
+        or RESTART_MODE_ORDER[mode] >= RESTART_MODE_ORDER["deep"]
+    ):
         return None
     return {
-        "cmd": _review_command(public_id, extra=("--restart-mode", "deep", "--reason", "REASON")),
+        "cmd": _review_command(
+            public_id, extra=("--restart-mode", "deep", "--reason", "REASON")
+        ),
         "mode": "deep",
         "note": "Use only for explicit escalation; replace REASON.",
     }
@@ -331,8 +402,14 @@ def _orchestrator_cycles(state_dir: Path) -> list[dict[str, object]]:
     return cycles
 
 
-def _review_step_position(state: dict[str, object], step_index: int) -> tuple[int | None, int | None]:
-    steps = [item for item in list(dict(state.get("review_plan") or {}).get("steps") or []) if isinstance(item, dict)]
+def _review_step_position(
+    state: dict[str, object], step_index: int
+) -> tuple[int | None, int | None]:
+    steps = [
+        item
+        for item in list(dict(state.get("review_plan") or {}).get("steps") or [])
+        if isinstance(item, dict)
+    ]
     review_indices = [
         index
         for index, item in enumerate(steps)
@@ -348,12 +425,18 @@ def _orchestrator_progress_label(state: dict[str, object]) -> str | None:
     pending = dict(state.get("pending_action") or {})
     if pending:
         candidates.append(pending)
-    current_step = dict(dict(state.get("review_progress") or {}).get("current_step") or {})
+    current_step = dict(
+        dict(state.get("review_progress") or {}).get("current_step") or {}
+    )
     if current_step:
         candidates.append(current_step)
     for item in candidates:
         try:
-            step_index = int(item.get("step_index") if item.get("step_index") is not None else item.get("index"))
+            step_index = int(
+                item.get("step_index")
+                if item.get("step_index") is not None
+                else item.get("index")
+            )
         except (TypeError, ValueError):
             continue
         step_name = str(item.get("step") or item.get("name") or "").strip()
@@ -377,7 +460,9 @@ def _orchestrator_review_state_dir(state_dir: Path) -> Path:
     return state_dir / "orchestrator" / "review-rounds"
 
 
-def _round_state_dir_candidates(state_dir: Path, round_record: dict[str, object]) -> list[Path]:
+def _round_state_dir_candidates(
+    state_dir: Path, round_record: dict[str, object]
+) -> list[Path]:
     candidates: list[Path] = []
     round_state_dir = str(round_record.get("round_state_dir") or "").strip()
     if round_state_dir:
@@ -393,18 +478,29 @@ def _fallback_round_payload(round_record: dict[str, object]) -> dict[str, object
         if not isinstance(raw_run, dict):
             continue
         run = dict(raw_run)
-        if not str(run.get("review_status") or "").strip() and str(run.get("status") or "").strip():
+        if (
+            not str(run.get("review_status") or "").strip()
+            and str(run.get("status") or "").strip()
+        ):
             run["review_status"] = run.get("status")
-        if not str(run.get("reviewer_output") or "").strip() and str(run.get("summary") or "").strip():
+        if (
+            not str(run.get("reviewer_output") or "").strip()
+            and str(run.get("summary") or "").strip()
+        ):
             run["reviewer_output"] = run.get("summary")
-        if not str(run.get("reviewer_output_ref") or "").strip() and str(run.get("ref") or "").strip():
+        if (
+            not str(run.get("reviewer_output_ref") or "").strip()
+            and str(run.get("ref") or "").strip()
+        ):
             run["reviewer_output_ref"] = run.get("ref")
         runs.append(run)
     payload["runs"] = runs
     return payload
 
 
-def _load_output_round_payload(state_dir: Path, round_record: dict[str, object]) -> dict[str, object]:
+def _load_output_round_payload(
+    state_dir: Path, round_record: dict[str, object]
+) -> dict[str, object]:
     round_id = str(round_record.get("round_id") or "").strip()
     if not round_id:
         return _fallback_round_payload(round_record)
@@ -421,7 +517,9 @@ def _load_output_round_payload(state_dir: Path, round_record: dict[str, object])
     return _fallback_round_payload(round_record)
 
 
-def _pending_grade_payload(state: dict[str, object], *, state_dir: Path) -> dict[str, object] | None:
+def _pending_grade_payload(
+    state: dict[str, object], *, state_dir: Path
+) -> dict[str, object] | None:
     pending = dict(state.get("pending_action") or {})
     round_id = str(pending.get("round_id") or "").strip()
     if str(pending.get("kind") or "") != "decision" or not round_id:
@@ -450,7 +548,11 @@ def _arena_grade_command(
     round_id = str(pending_payload.get("round_id") or "").strip()
     task_id = str(pending_payload.get("task_id_hint") or "").strip()
     if not task_id:
-        task_id = str(dict(state.get("identity") or {}).get("branch") or state.get("public_id") or "").strip()
+        task_id = str(
+            dict(state.get("identity") or {}).get("branch")
+            or state.get("public_id")
+            or ""
+        ).strip()
     grade_state_dir = Path(str(pending_payload.get("_round_state_dir") or state_dir))
     return format_command(
         [
@@ -483,7 +585,11 @@ def _round_blocked(round_record: dict[str, object]) -> bool:
 
 
 def _round_terminal_command(round_record: dict[str, object]) -> str | None:
-    if bool(round_record.get("grading_required")) and bool(round_record.get("needs_grade")) and not bool(round_record.get("graded")):
+    if (
+        bool(round_record.get("grading_required"))
+        and bool(round_record.get("needs_grade"))
+        and not bool(round_record.get("graded"))
+    ):
         return None
     commands: list[str] = []
     for run in list(round_record.get("runs") or []):
@@ -527,29 +633,47 @@ def _orchestrator_mode_label(state: dict[str, object]) -> str:
 
 
 def _orchestrator_github_review_status(state: dict[str, object]) -> str:
-    return str(dict(state.get("github_review") or {}).get("status") or "unknown").strip() or "unknown"
+    return (
+        str(dict(state.get("github_review") or {}).get("status") or "unknown").strip()
+        or "unknown"
+    )
 
 
 def _orchestrator_terminal_review_head(state: dict[str, object]) -> str:
     review_heads = dict(state.get("review_heads") or {})
-    for key in ("last_reviewed_head", "last_followup_head", "last_gate_clean_head", "last_fix_head", "head"):
+    for key in (
+        "last_reviewed_head",
+        "last_followup_head",
+        "last_gate_clean_head",
+        "last_fix_head",
+        "head",
+    ):
         value = str(review_heads.get(key) or "").strip()
         if value:
             return value
     return str(dict(state.get("identity") or {}).get("head") or "").strip()
 
 
-def _orchestrator_github_review_is_terminal(state: dict[str, object], *, current_head: str | None = None) -> bool:
+def _orchestrator_github_review_is_terminal(
+    state: dict[str, object], *, current_head: str | None = None
+) -> bool:
     github_review = dict(state.get("github_review") or {})
     if str(github_review.get("status") or "").strip() not in {"clean", "waived"}:
         return False
     reviewed_head = str(github_review.get("reviewed_head") or "").strip()
     drift = dict(state.get("base_drift") or {})
-    if bool(drift.get("patch_equivalent")) and reviewed_head == str(drift.get("reviewed_head") or "").strip():
-        reviewed_head = str(drift.get("equivalent_reviewed_head") or "").strip() or reviewed_head
+    if (
+        bool(drift.get("patch_equivalent"))
+        and reviewed_head == str(drift.get("reviewed_head") or "").strip()
+    ):
+        reviewed_head = (
+            str(drift.get("equivalent_reviewed_head") or "").strip() or reviewed_head
+        )
     if not reviewed_head:
         return False
-    comparison_head = str(current_head or "").strip() or _orchestrator_terminal_review_head(state)
+    comparison_head = str(
+        current_head or ""
+    ).strip() or _orchestrator_terminal_review_head(state)
     return bool(comparison_head) and reviewed_head == comparison_head
 
 
@@ -572,7 +696,9 @@ def _orchestrator_action(
     if stage == "decision-pending":
         grade = _arena_grade_command(state, state_dir=state_dir)
         if grade:
-            tie_clean = _arena_grade_command(state, state_dir=state_dir, winner="tie", basis="tie_clean")
+            tie_clean = _arena_grade_command(
+                state, state_dir=state_dir, winner="tie", basis="tie_clean"
+            )
             action = {
                 "cmd": grade,
                 "tie_clean": tie_clean,
@@ -586,8 +712,12 @@ def _orchestrator_action(
                     "cmd": _review_command(public_id),
                     "note": f"Structured {auto_decision} verdict is ready; rerun this review id to record it and continue.",
                     "override": {
-                        "clean": _review_command(public_id, extra=("--decision", "clean")),
-                        "findings": _review_command(public_id, extra=("--decision", "findings")),
+                        "clean": _review_command(
+                            public_id, extra=("--decision", "clean")
+                        ),
+                        "findings": _review_command(
+                            public_id, extra=("--decision", "findings")
+                        ),
                     },
                 }
             else:
@@ -603,16 +733,28 @@ def _orchestrator_action(
     elif stage in {"review-green", "local-green-handoff"}:
         summary = review_ladder_summary(state, current_head=current_head)
         if summary.get("review_ladder") == "invalidated":
-            if green_review_head_change_summary(state, current_head=current_head, summary=summary) is None:
+            if (
+                green_review_head_change_summary(
+                    state, current_head=current_head, summary=summary
+                )
+                is None
+            ):
                 return None
             blockers = _orchestrator_validation_blockers(state)
-            return _orchestrator_validation_blocker_action(public_id, blockers) if blockers else None
+            return (
+                _orchestrator_validation_blocker_action(public_id, blockers)
+                if blockers
+                else None
+            )
         if _orchestrator_github_review_is_terminal(state, current_head=current_head):
             blockers = _orchestrator_validation_blockers(state)
             if not blockers:
                 return None
             action = _orchestrator_validation_blocker_action(public_id, blockers)
-        elif _orchestrator_mode_label(state) == "emergency" and _orchestrator_github_review_status(state) == "unknown":
+        elif (
+            _orchestrator_mode_label(state) == "emergency"
+            and _orchestrator_github_review_status(state) == "unknown"
+        ):
             return None
         else:
             action = {
@@ -632,25 +774,37 @@ def _orchestrator_action(
 
 def _orchestrator_review_head(state: dict[str, object]) -> str:
     review_heads = dict(state.get("review_heads") or {})
-    for key in ("last_gate_clean_head", "last_followup_head", "last_reviewed_head", "last_fix_head", "head"):
+    for key in (
+        "last_gate_clean_head",
+        "last_followup_head",
+        "last_reviewed_head",
+        "last_fix_head",
+        "head",
+    ):
         value = str(review_heads.get(key) or "").strip()
         if value:
             return value
     return str(dict(state.get("identity") or {}).get("head") or "").strip()
 
 
-def _orchestrator_cycle_is_current(state: dict[str, object], current_payload: dict[str, object]) -> bool:
+def _orchestrator_cycle_is_current(
+    state: dict[str, object], current_payload: dict[str, object]
+) -> bool:
     if str(state.get("stage") or "") not in ORCHESTRATOR_HEAD_CURRENT_STAGES:
         return True
     current_head = str(current_payload.get("head") or "").strip()
     if not current_head:
         return True
     summary = review_ladder_summary(state, current_head=current_head)
-    return summary.get("review_ladder") != "invalidated" or green_review_head_change_summary(
-        state,
-        current_head=current_head,
-        summary=summary,
-    ) is not None
+    return (
+        summary.get("review_ladder") != "invalidated"
+        or green_review_head_change_summary(
+            state,
+            current_head=current_head,
+            summary=summary,
+        )
+        is not None
+    )
 
 
 def _orchestrator_status_override(
@@ -685,22 +839,36 @@ def _orchestrator_status_override(
         candidates,
         key=lambda item: (
             float(item.get("_state_file_mtime") or 0.0),
-            str(item.get("updated_at") or item.get("created_at") or item.get("public_id") or ""),
+            str(
+                item.get("updated_at")
+                or item.get("created_at")
+                or item.get("public_id")
+                or ""
+            ),
         ),
     )[-1]
     public_id = str(state.get("public_id") or "").strip()
     payload: dict[str, object] = {"review": public_id}
     current_head = str(current_payload.get("head") or "").strip()
-    action = _orchestrator_action(state, public_id, state_dir=state_dir, current_head=current_head)
+    action = _orchestrator_action(
+        state, public_id, state_dir=state_dir, current_head=current_head
+    )
     summary = review_ladder_summary(state, current_head=current_head)
-    summary = green_review_head_change_summary(state, current_head=current_head, summary=summary) or summary
+    summary = (
+        green_review_head_change_summary(
+            state, current_head=current_head, summary=summary
+        )
+        or summary
+    )
     payload.update(summary)
     if summary.get("review_ladder") == "invalidated":
         payload["status"] = "stale"
         payload["next_action"] = "rerun_review"
     elif summary.get("review_ladder") == HEAD_CHANGED_AFTER_GREEN_REVIEW_LADDER:
         payload["status"] = HEAD_CHANGED_AFTER_GREEN_REVIEW_LADDER
-        payload["next_action"] = "validation" if action is not None else "inspect_changed_since_review"
+        payload["next_action"] = (
+            "validation" if action is not None else "inspect_changed_since_review"
+        )
     elif bool(summary.get("done")):
         payload["status"] = "done"
         payload["next_action"] = "none"
@@ -723,13 +891,19 @@ def _orchestrator_status_override(
     return payload
 
 
-def _status_action(payload: dict[str, object], *, review_cwd: Path, base: str, state_dir: Path) -> dict[str, object] | None:
+def _status_action(
+    payload: dict[str, object], *, review_cwd: Path, base: str, state_dir: Path
+) -> dict[str, object] | None:
     recommendation = str(payload.get("recommendation") or "")
     if recommendation == "signoff-decision":
         round_id = str(payload.get("pending_round_id") or "").strip()
         if not round_id:
             return None
-        return _with_action_context(gate_signoff_action_payload(round_id=round_id, state_dir=state_dir), review_cwd=review_cwd, round_id=round_id)
+        return _with_action_context(
+            gate_signoff_action_payload(round_id=round_id, state_dir=state_dir),
+            review_cwd=review_cwd,
+            round_id=round_id,
+        )
     if recommendation == "fix-gate-findings":
         round_id = str(payload.get("last_gate_findings_round_id") or "").strip()
         if not round_id:
@@ -776,7 +950,9 @@ def _status_action(payload: dict[str, object], *, review_cwd: Path, base: str, s
             "lane": "review-followup",
             "cmd": format_command(command),
         }
-        source_gate_round_id = str(payload.get("last_gate_findings_round_id") or "").strip()
+        source_gate_round_id = str(
+            payload.get("last_gate_findings_round_id") or ""
+        ).strip()
         if source_gate_round_id:
             action["source_gate_round_id"] = source_gate_round_id
         return _with_action_context(action, review_cwd=review_cwd)
@@ -790,7 +966,11 @@ def _status_action(payload: dict[str, object], *, review_cwd: Path, base: str, s
         return _with_action_context(
             {
                 "lane": recommended_lane,
-                "cmd": _start_review_command(review_cwd=review_cwd, base=base, mode=_review_mode_for_lane(recommended_lane)),
+                "cmd": _start_review_command(
+                    review_cwd=review_cwd,
+                    base=base,
+                    mode=_review_mode_for_lane(recommended_lane),
+                ),
             },
             review_cwd=review_cwd,
         )
@@ -798,7 +978,9 @@ def _status_action(payload: dict[str, object], *, review_cwd: Path, base: str, s
         return _with_action_context(
             {
                 "lane": "coherence-review",
-                "cmd": _start_review_command(review_cwd=review_cwd, base=base, mode="normal"),
+                "cmd": _start_review_command(
+                    review_cwd=review_cwd, base=base, mode="normal"
+                ),
             },
             review_cwd=review_cwd,
         )
@@ -806,7 +988,9 @@ def _status_action(payload: dict[str, object], *, review_cwd: Path, base: str, s
         return _with_action_context(
             {
                 "lane": "full-review",
-                "cmd": _start_review_command(review_cwd=review_cwd, base=base, mode="normal"),
+                "cmd": _start_review_command(
+                    review_cwd=review_cwd, base=base, mode="normal"
+                ),
             },
             review_cwd=review_cwd,
         )
@@ -849,7 +1033,9 @@ def cmd_status(args: argparse.Namespace) -> int:
             )
             if gate_findings_override is not None:
                 payload.update(gate_findings_override)
-    action = _status_action(payload, review_cwd=review_cwd, base=base, state_dir=state_dir)
+    action = _status_action(
+        payload, review_cwd=review_cwd, base=base, state_dir=state_dir
+    )
     if action is not None:
         payload["Action"] = action
     emit_toon(payload if bool(args.verbose) else _public_status_payload(payload))

@@ -24,7 +24,12 @@ import review_t3
 import review_t4
 import review_suite_local
 
-from review_suite_local import build_local_review_request, build_phase_instructions, build_pr_instructions, load_custom_instructions
+from review_suite_local import (
+    build_local_review_request,
+    build_phase_instructions,
+    build_pr_instructions,
+    load_custom_instructions,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -34,9 +39,17 @@ def default_effective_base(monkeypatch: pytest.MonkeyPatch) -> None:
         "effective_base_ref",
         lambda review_cwd, base: {"base": base, "requested_base": base},
     )
-    monkeypatch.setattr(review_suite_local, "merge_base", lambda review_cwd, base, right_ref="HEAD": "merge-base-sha")
-    monkeypatch.setattr(review_suite_local, "current_head", lambda review_cwd: "head-sha")
-    monkeypatch.setattr(review_suite_local, "ensure_clean_git_worktree", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        review_suite_local,
+        "merge_base",
+        lambda review_cwd, base, right_ref="HEAD": "merge-base-sha",
+    )
+    monkeypatch.setattr(
+        review_suite_local, "current_head", lambda review_cwd: "head-sha"
+    )
+    monkeypatch.setattr(
+        review_suite_local, "ensure_clean_git_worktree", lambda *args, **kwargs: None
+    )
 
 
 def _subparser_help(parser: argparse.ArgumentParser, name: str) -> str:
@@ -47,8 +60,12 @@ def _subparser_help(parser: argparse.ArgumentParser, name: str) -> str:
 
 
 def test_load_custom_instructions_rejects_conflicting_sources() -> None:
-    with pytest.raises(ValueError, match="use either --instructions or --instructions-file"):
-        load_custom_instructions(instructions="focus on correctness", instructions_file="instructions.txt")
+    with pytest.raises(
+        ValueError, match="use either --instructions or --instructions-file"
+    ):
+        load_custom_instructions(
+            instructions="focus on correctness", instructions_file="instructions.txt"
+        )
 
 
 @pytest.mark.parametrize(
@@ -70,13 +87,18 @@ def test_load_custom_instructions_rejects_empty_content(
         instructions_file = str(path)
 
     with pytest.raises(ValueError, match="custom instructions must not be empty"):
-        load_custom_instructions(instructions=instructions, instructions_file=instructions_file)
+        load_custom_instructions(
+            instructions=instructions, instructions_file=instructions_file
+        )
 
 
 def test_standard_review_contract_includes_current_codex_review_dimensions() -> None:
     prompt = build_phase_instructions("commit `abc123`")
 
-    assert "Reviewer output is advisory risk input, not authoritative product direction" in prompt
+    assert (
+        "Reviewer output is advisory risk input, not authoritative product direction"
+        in prompt
+    )
     assert "do not stop after the first issue" in prompt
     assert "line number when available" in prompt
     assert "A finding is only valid" in prompt
@@ -88,11 +110,18 @@ def test_standard_review_contract_includes_current_codex_review_dimensions() -> 
     assert "unbounded agent-context injection" in prompt
     assert "Do not assume backwards compatibility" in prompt
     assert "Scope questions / suggestions (non-findings)" in prompt
-    assert "Do not recommend code changes that reverse explicit product intent" in prompt
-    assert "focused review-relevant checks can be enough to launch the next review round" in prompt
+    assert (
+        "Do not recommend code changes that reverse explicit product intent" in prompt
+    )
+    assert (
+        "focused review-relevant checks can be enough to launch the next review round"
+        in prompt
+    )
     assert "full-suite/CI remains a merge-readiness requirement" in prompt
     assert "pending, passed, failed, or intentionally waived/classified" in prompt
-    assert "do not call a PR final or merge-ready while that status is unknown" in prompt
+    assert (
+        "do not call a PR final or merge-ready while that status is unknown" in prompt
+    )
     assert "No findings." in prompt
     assert "Review result: clean" in prompt
     assert "Review result: findings" in prompt
@@ -121,9 +150,13 @@ def test_build_local_review_request_keeps_terminal_contract_after_custom_block(
     assert calls == []
     assert request.review_scope["commit"] == "abc123"
     assert "base" not in request.review_scope
-    assert request.prompt.index("The review target is commit `abc123`.") < request.prompt.index("Additional review instructions:")
+    assert request.prompt.index(
+        "The review target is commit `abc123`."
+    ) < request.prompt.index("Additional review instructions:")
     assert "Do not spend time on backwards compatibility concerns." in request.prompt
-    assert request.prompt.index("Additional review instructions:") < request.prompt.rindex("Review result:")
+    assert request.prompt.index(
+        "Additional review instructions:"
+    ) < request.prompt.rindex("Review result:")
     assert request.prompt.rstrip().endswith(
         "`Review result: findings` if you reported one or more valid findings."
     )
@@ -167,9 +200,13 @@ def test_build_local_review_request_rejects_non_linear_commit_range(
     tmp_path: Path,
 ) -> None:
     def reject_range(*args, **kwargs):
-        raise ValueError("native commit-range review requires the range start to be an ancestor of the range end")
+        raise ValueError(
+            "native commit-range review requires the range start to be an ancestor of the range end"
+        )
 
-    monkeypatch.setattr(review_suite_local, "validated_linear_review_range", reject_range)
+    monkeypatch.setattr(
+        review_suite_local, "validated_linear_review_range", reject_range
+    )
 
     with pytest.raises(ValueError, match="range start to be an ancestor"):
         build_local_review_request(
@@ -192,7 +229,9 @@ def test_build_local_review_request_pr_base_without_custom_instructions_includes
         if args[:2] == ["git", "diff"]:
             if "--quiet" in args:
                 return subprocess.CompletedProcess(args, 1, stdout="", stderr="")
-            return subprocess.CompletedProcess(args, 0, stdout="diff --git a/app.py b/app.py\n", stderr="")
+            return subprocess.CompletedProcess(
+                args, 0, stdout="diff --git a/app.py b/app.py\n", stderr=""
+            )
         raise AssertionError(args)
 
     monkeypatch.setattr(review_suite_local.subprocess, "run", fake_run)
@@ -209,7 +248,10 @@ def test_build_local_review_request_pr_base_without_custom_instructions_includes
     assert request.review_scope["base"] == "main"
     assert request.review_scope["merge_base"] == "merge-base-sha"
     assert request.review_scope["reviewed_head"] == "head-sha"
-    assert "Review this PR-ready branch diff for correctness and regression risk." in request.prompt
+    assert (
+        "Review this PR-ready branch diff for correctness and regression risk."
+        in request.prompt
+    )
     assert "Review result: clean" in request.prompt
     assert "Additional review instructions:" not in request.prompt
 
@@ -240,7 +282,11 @@ def test_build_local_review_request_uses_effective_upstream_base(
         raise AssertionError(args)
 
     monkeypatch.setattr(review_suite_local.subprocess, "run", fake_run)
-    monkeypatch.setattr(review_suite_local, "merge_base", lambda review_cwd, base, right_ref="HEAD": "upstream-merge-base")
+    monkeypatch.setattr(
+        review_suite_local,
+        "merge_base",
+        lambda review_cwd, base, right_ref="HEAD": "upstream-merge-base",
+    )
 
     request = build_local_review_request(
         review_cwd=tmp_path,
@@ -268,7 +314,9 @@ def test_build_local_review_request_pr_base_with_custom_instructions_stays_nativ
         if args[:2] == ["git", "diff"]:
             if "--quiet" in args:
                 return subprocess.CompletedProcess(args, 1, stdout="", stderr="")
-            return subprocess.CompletedProcess(args, 0, stdout="diff --git a/x b/x\n", stderr="")
+            return subprocess.CompletedProcess(
+                args, 0, stdout="diff --git a/x b/x\n", stderr=""
+            )
         raise AssertionError(args)
 
     monkeypatch.setattr(review_suite_local.subprocess, "run", fake_run)
@@ -286,10 +334,15 @@ def test_build_local_review_request_pr_base_with_custom_instructions_stays_nativ
     assert request.review_scope["base"] == "main"
     assert request.review_scope["merge_base"] == "merge-base-sha"
     assert request.review_scope["reviewed_head"] == "head-sha"
-    assert "Review this PR-ready branch diff for correctness and regression risk." in request.prompt
+    assert (
+        "Review this PR-ready branch diff for correctness and regression risk."
+        in request.prompt
+    )
     assert "Additional review instructions:" in request.prompt
     assert "base `main`" in request.prompt
-    assert request.prompt.index("Additional review instructions:") < request.prompt.rindex("Review result:")
+    assert request.prompt.index(
+        "Additional review instructions:"
+    ) < request.prompt.rindex("Review result:")
     assert request.prompt.rstrip().endswith(
         "`Review result: findings` if you reported one or more valid findings."
     )
@@ -308,7 +361,11 @@ def test_build_local_review_request_blank_custom_instructions_still_requires_cle
         raise AssertionError(args)
 
     monkeypatch.setattr(review_suite_local.subprocess, "run", fake_run)
-    monkeypatch.setattr(review_suite_local, "ensure_clean_git_worktree", lambda review_cwd: clean_checks.append(review_cwd))
+    monkeypatch.setattr(
+        review_suite_local,
+        "ensure_clean_git_worktree",
+        lambda review_cwd: clean_checks.append(review_cwd),
+    )
 
     request = build_local_review_request(
         review_cwd=tmp_path,
@@ -319,7 +376,10 @@ def test_build_local_review_request_blank_custom_instructions_still_requires_cle
     )
 
     assert clean_checks == [tmp_path]
-    assert "Review this PR-ready branch diff for correctness and regression risk." in request.prompt
+    assert (
+        "Review this PR-ready branch diff for correctness and regression risk."
+        in request.prompt
+    )
     assert "Additional review instructions:" not in request.prompt
     assert "=== BEGIN DIFF ===" not in request.prompt
 
@@ -337,8 +397,14 @@ def test_build_local_review_request_pr_base_with_empty_committed_diff_reports_di
         raise AssertionError(args)
 
     monkeypatch.setattr(review_suite_local.subprocess, "run", fake_run)
-    monkeypatch.setattr(review_suite_local, "merge_base", lambda review_cwd, base, right_ref="HEAD": "head-sha")
-    monkeypatch.setattr(review_suite_local, "has_worktree_changes", lambda review_cwd: True)
+    monkeypatch.setattr(
+        review_suite_local,
+        "merge_base",
+        lambda review_cwd, base, right_ref="HEAD": "head-sha",
+    )
+    monkeypatch.setattr(
+        review_suite_local, "has_worktree_changes", lambda review_cwd: True
+    )
 
     with pytest.raises(ValueError, match="no committed diff"):
         build_local_review_request(
@@ -366,7 +432,9 @@ def test_build_local_review_request_native_pr_base_with_empty_committed_diff_rep
         raise AssertionError(args)
 
     monkeypatch.setattr(review_suite_local.subprocess, "run", fake_run)
-    monkeypatch.setattr(review_suite_local, "has_worktree_changes", lambda review_cwd: True)
+    monkeypatch.setattr(
+        review_suite_local, "has_worktree_changes", lambda review_cwd: True
+    )
 
     with pytest.raises(ValueError, match="no committed diff"):
         build_local_review_request(
@@ -387,20 +455,26 @@ def test_build_local_review_request_pr_base_without_custom_instructions_requires
     def fake_run(args, **kwargs):
         calls.append(list(args))
         if args[:2] == ["git", "merge-base"]:
-            return subprocess.CompletedProcess(args, 0, stdout="merge-base-sha\n", stderr="")
+            return subprocess.CompletedProcess(
+                args, 0, stdout="merge-base-sha\n", stderr=""
+            )
         if args[:3] == ["git", "rev-parse", "HEAD"]:
             return subprocess.CompletedProcess(args, 0, stdout="head-sha\n", stderr="")
         if args[:2] == ["git", "diff"]:
             if "--quiet" in args:
                 return subprocess.CompletedProcess(args, 1, stdout="", stderr="")
-            return subprocess.CompletedProcess(args, 0, stdout="diff --git a/app.py b/app.py\n", stderr="")
+            return subprocess.CompletedProcess(
+                args, 0, stdout="diff --git a/app.py b/app.py\n", stderr=""
+            )
         raise AssertionError(args)
 
     monkeypatch.setattr(review_suite_local.subprocess, "run", fake_run)
     monkeypatch.setattr(
         review_suite_local,
         "ensure_clean_git_worktree",
-        lambda review_cwd: (_ for _ in ()).throw(ValueError("review-suite requires a clean worktree.")),
+        lambda review_cwd: (_ for _ in ()).throw(
+            ValueError("review-suite requires a clean worktree.")
+        ),
     )
 
     with pytest.raises(ValueError, match="clean worktree"):
@@ -422,7 +496,9 @@ def test_build_local_review_request_with_custom_instructions_does_not_build_patc
     def fake_run(args, **kwargs):
         calls.append(list(args))
         if args[:2] == ["git", "merge-base"]:
-            return subprocess.CompletedProcess(args, 0, stdout="merge-base-sha\n", stderr="")
+            return subprocess.CompletedProcess(
+                args, 0, stdout="merge-base-sha\n", stderr=""
+            )
         if args[:3] == ["git", "rev-parse", "HEAD"]:
             return subprocess.CompletedProcess(args, 0, stdout="head-sha\n", stderr="")
         if args[:2] == ["git", "diff"]:
@@ -510,7 +586,9 @@ def test_primary_wrappers_hide_operator_state_knobs_from_help() -> None:
 
 
 @pytest.mark.parametrize("module", [review_t1, review_t2, review_t3, review_t4])
-def test_legacy_tier_wrappers_point_to_review_py(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], module) -> None:
+def test_legacy_tier_wrappers_point_to_review_py(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], module
+) -> None:
     monkeypatch.setattr(sys, "argv", [f"{module.__name__}.py", "--base", "main"])
 
     exit_code = module.main()
@@ -561,7 +639,16 @@ def test_legacy_tier_wrapper_targeting_flags_do_not_emit_action(
     monkeypatch.setattr(
         sys,
         "argv",
-        ["review_t1.py", "--cd", str(tmp_path), "--base", "feature/base", "--state-dir", str(state_dir), "--wsl"],
+        [
+            "review_t1.py",
+            "--cd",
+            str(tmp_path),
+            "--base",
+            "feature/base",
+            "--state-dir",
+            str(state_dir),
+            "--wsl",
+        ],
     )
 
     exit_code = review_t1.main()
@@ -575,7 +662,10 @@ def test_legacy_tier_wrapper_targeting_flags_do_not_emit_action(
 def test_legacy_tier_wrappers_own_installed_cache_bootstrap() -> None:
     for module in (review_t1, review_t2, review_t3, review_t4):
         wrapper_source = Path(module.__file__).read_text(encoding="utf-8")
-        assert "from review_suite_runtime_bootstrap import bootstrap_from_installed_cache" in wrapper_source
+        assert (
+            "from review_suite_runtime_bootstrap import bootstrap_from_installed_cache"
+            in wrapper_source
+        )
         assert "bootstrap_from_installed_cache(__file__)" in wrapper_source
 
 
@@ -630,7 +720,9 @@ def test_guard_branch_signoff_lane_rejects_followup_drift_for_current_branch_gat
         )
 
 
-def test_guard_branch_signoff_lane_allows_stage_reset_lane(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_guard_branch_signoff_lane_allows_stage_reset_lane(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.setattr(
         review_suite_local,
         "inspect_workflow_status",
@@ -650,11 +742,15 @@ def test_guard_branch_signoff_lane_allows_stage_reset_lane(monkeypatch: pytest.M
     )
 
 
-def test_guard_branch_signoff_lane_skips_commit_scope(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_guard_branch_signoff_lane_skips_commit_scope(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.setattr(
         review_suite_local,
         "inspect_workflow_status",
-        lambda **kwargs: (_ for _ in ()).throw(AssertionError("commit scope should not inspect branch workflow state")),
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("commit scope should not inspect branch workflow state")
+        ),
     )
 
     review_suite_local.guard_branch_signoff_lane(

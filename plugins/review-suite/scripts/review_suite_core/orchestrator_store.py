@@ -49,7 +49,9 @@ def _read_json(path: Path) -> dict[str, Any]:
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    tmp_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     os.replace(tmp_path, path)
 
 
@@ -66,7 +68,9 @@ def load_index(state_dir: Path) -> dict[str, Any]:
     if not raw:
         return _empty_index()
     ids = raw.get("ids") if isinstance(raw.get("ids"), dict) else {}
-    cycle_keys = raw.get("cycle_keys") if isinstance(raw.get("cycle_keys"), dict) else {}
+    cycle_keys = (
+        raw.get("cycle_keys") if isinstance(raw.get("cycle_keys"), dict) else {}
+    )
     return {
         "schema_version": ORCHESTRATOR_INDEX_SCHEMA_VERSION,
         "ids": {str(key): str(value) for key, value in ids.items()},

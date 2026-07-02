@@ -63,7 +63,11 @@ def _git_text(review_cwd: Path, args: list[str], *, default_error: str) -> str:
 
 
 def current_head(review_cwd: Path) -> str:
-    return _git_text(review_cwd, ["git", "rev-parse", "HEAD"], default_error="git rev-parse HEAD failed").strip()
+    return _git_text(
+        review_cwd,
+        ["git", "rev-parse", "HEAD"],
+        default_error="git rev-parse HEAD failed",
+    ).strip()
 
 
 def current_branch(review_cwd: Path) -> str | None:
@@ -78,7 +82,11 @@ def current_branch(review_cwd: Path) -> str | None:
 
 
 def resolve_ref(review_cwd: Path, ref: str) -> str:
-    return _git_text(review_cwd, ["git", "rev-parse", ref], default_error=f"git rev-parse {ref} failed").strip()
+    return _git_text(
+        review_cwd,
+        ["git", "rev-parse", ref],
+        default_error=f"git rev-parse {ref} failed",
+    ).strip()
 
 
 def _optional_git_text(review_cwd: Path, args: list[str]) -> str | None:
@@ -103,12 +111,20 @@ def upstream_ref(review_cwd: Path, ref: str) -> str | None:
         return None
     upstream = _optional_git_text(
         review_cwd,
-        ["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", f"{base}@{{upstream}}"],
+        [
+            "git",
+            "rev-parse",
+            "--abbrev-ref",
+            "--symbolic-full-name",
+            f"{base}@{{upstream}}",
+        ],
     )
     if upstream:
         return upstream
     remote = _optional_git_text(review_cwd, ["git", "config", f"branch.{base}.remote"])
-    merge_ref = _optional_git_text(review_cwd, ["git", "config", f"branch.{base}.merge"])
+    merge_ref = _optional_git_text(
+        review_cwd, ["git", "config", f"branch.{base}.merge"]
+    )
     if not remote or not merge_ref:
         return None
     branch_name = merge_ref.removeprefix("refs/heads/").strip()
@@ -165,7 +181,9 @@ def merge_base(review_cwd: Path, left_ref: str, right_ref: str = "HEAD") -> str:
     ).strip()
 
 
-def is_ancestor(review_cwd: Path, ancestor_ref: str, descendant_ref: str = "HEAD") -> bool:
+def is_ancestor(
+    review_cwd: Path, ancestor_ref: str, descendant_ref: str = "HEAD"
+) -> bool:
     proc = subprocess.run(
         ["git", "merge-base", "--is-ancestor", ancestor_ref, descendant_ref],
         cwd=str(review_cwd),
@@ -179,7 +197,10 @@ def is_ancestor(review_cwd: Path, ancestor_ref: str, descendant_ref: str = "HEAD
         return True
     if proc.returncode == 1:
         return False
-    raise ValueError((proc.stderr or proc.stdout or "").strip() or f"git merge-base --is-ancestor {ancestor_ref} {descendant_ref} failed")
+    raise ValueError(
+        (proc.stderr or proc.stdout or "").strip()
+        or f"git merge-base --is-ancestor {ancestor_ref} {descendant_ref} failed"
+    )
 
 
 def validated_linear_review_range(
@@ -229,10 +250,15 @@ def has_committed_diff(review_cwd: Path, start_ref: str, end_ref: str = "HEAD") 
         return False
     if proc.returncode == 1:
         return True
-    raise ValueError((proc.stderr or proc.stdout or "").strip() or f"git diff --quiet {start_ref}..{end_ref} failed")
+    raise ValueError(
+        (proc.stderr or proc.stdout or "").strip()
+        or f"git diff --quiet {start_ref}..{end_ref} failed"
+    )
 
 
-def resolve_reviewed_head(review_cwd: Path, review_scope: dict[str, Any] | None = None) -> str:
+def resolve_reviewed_head(
+    review_cwd: Path, review_scope: dict[str, Any] | None = None
+) -> str:
     scope = dict(review_scope or {})
     scoped_head = str(scope.get("reviewed_head") or "").strip()
     if scoped_head:
@@ -268,7 +294,14 @@ def anchor_updates_branch_state(
 def diff_artifact(review_cwd: Path, start_ref: str, end_ref: str = "HEAD") -> str:
     return _git_text(
         review_cwd,
-        ["git", "diff", "--find-renames", "--stat", "--patch", f"{start_ref}..{end_ref}"],
+        [
+            "git",
+            "diff",
+            "--find-renames",
+            "--stat",
+            "--patch",
+            f"{start_ref}..{end_ref}",
+        ],
         default_error=f"git diff {start_ref}..{end_ref} failed",
     )
 
@@ -313,8 +346,12 @@ def has_worktree_changes(review_cwd: Path) -> bool:
     return bool(meaningful_worktree_status_entries(review_cwd))
 
 
-def branch_diff_paths(review_cwd: Path, base: str, merge_base_ref: str | None = None) -> set[str]:
-    resolved_merge_base = str(merge_base_ref or "").strip() or merge_base(review_cwd, base, "HEAD")
+def branch_diff_paths(
+    review_cwd: Path, base: str, merge_base_ref: str | None = None
+) -> set[str]:
+    resolved_merge_base = str(merge_base_ref or "").strip() or merge_base(
+        review_cwd, base, "HEAD"
+    )
     return diff_paths_between(review_cwd, resolved_merge_base, "HEAD")
 
 
@@ -323,7 +360,13 @@ def diff_paths_between(review_cwd: Path, left_ref: str, right_ref: str) -> set[s
         line.strip()
         for line in _git_text(
             review_cwd,
-            ["git", "diff", "--name-only", "--find-renames", f"{left_ref}..{right_ref}"],
+            [
+                "git",
+                "diff",
+                "--name-only",
+                "--find-renames",
+                f"{left_ref}..{right_ref}",
+            ],
             default_error=f"git diff --name-only {left_ref}..{right_ref} failed",
         ).splitlines()
         if line.strip()
@@ -346,9 +389,15 @@ def merge_base_drift_scope(
     reviewed_head: str,
     current_head: str = "HEAD",
 ) -> dict[str, Any]:
-    base_changed_paths = diff_paths_between(review_cwd, recorded_merge_base, current_merge_base)
-    recorded_branch_paths = diff_paths_between(review_cwd, recorded_merge_base, reviewed_head)
-    current_branch_paths = diff_paths_between(review_cwd, current_merge_base, current_head)
+    base_changed_paths = diff_paths_between(
+        review_cwd, recorded_merge_base, current_merge_base
+    )
+    recorded_branch_paths = diff_paths_between(
+        review_cwd, recorded_merge_base, reviewed_head
+    )
+    current_branch_paths = diff_paths_between(
+        review_cwd, current_merge_base, current_head
+    )
     branch_paths = recorded_branch_paths | current_branch_paths
     overlapping_paths = sorted(base_changed_paths & branch_paths)
     return {
@@ -356,12 +405,16 @@ def merge_base_drift_scope(
         "recorded_branch_paths": sorted(recorded_branch_paths),
         "current_branch_paths": sorted(current_branch_paths),
         "overlapping_paths": overlapping_paths,
-        "patch_equivalent": diff_patch_between(review_cwd, recorded_merge_base, reviewed_head)
+        "patch_equivalent": diff_patch_between(
+            review_cwd, recorded_merge_base, reviewed_head
+        )
         == diff_patch_between(review_cwd, current_merge_base, current_head),
     }
 
 
-def dirty_worktree_scope(review_cwd: Path, base: str, merge_base_ref: str | None = None) -> dict[str, Any]:
+def dirty_worktree_scope(
+    review_cwd: Path, base: str, merge_base_ref: str | None = None
+) -> dict[str, Any]:
     dirty_paths = sorted(
         {
             str(item.get("path") or "").strip()
@@ -376,14 +429,21 @@ def dirty_worktree_scope(review_cwd: Path, base: str, merge_base_ref: str | None
             "unrelated_dirty_paths": [],
             "all_dirty_paths_outside_branch_diff": False,
         }
-    committed_branch_paths = branch_diff_paths(review_cwd, base, merge_base_ref=merge_base_ref)
-    related_dirty_paths = [path for path in dirty_paths if path in committed_branch_paths]
-    unrelated_dirty_paths = [path for path in dirty_paths if path not in committed_branch_paths]
+    committed_branch_paths = branch_diff_paths(
+        review_cwd, base, merge_base_ref=merge_base_ref
+    )
+    related_dirty_paths = [
+        path for path in dirty_paths if path in committed_branch_paths
+    ]
+    unrelated_dirty_paths = [
+        path for path in dirty_paths if path not in committed_branch_paths
+    ]
     return {
         "dirty_paths": dirty_paths,
         "related_dirty_paths": related_dirty_paths,
         "unrelated_dirty_paths": unrelated_dirty_paths,
-        "all_dirty_paths_outside_branch_diff": bool(dirty_paths) and not related_dirty_paths,
+        "all_dirty_paths_outside_branch_diff": bool(dirty_paths)
+        and not related_dirty_paths,
     }
 
 
@@ -403,7 +463,12 @@ def worktree_diff_artifact(review_cwd: Path, anchor_ref: str = "HEAD") -> str:
     prefix = tracked_diff.rstrip()
     if prefix:
         prefix += "\n\n"
-    return prefix + "=== UNTRACKED FILES (content not embedded) ===\n" + "\n".join(untracked_paths) + "\n"
+    return (
+        prefix
+        + "=== UNTRACKED FILES (content not embedded) ===\n"
+        + "\n".join(untracked_paths)
+        + "\n"
+    )
 
 
 def _slugify(value: str) -> str:
@@ -440,20 +505,30 @@ def workflow_state_path(
 ) -> Path:
     resolved_head = head or current_head(review_cwd)
     resolved_branch = current_branch(review_cwd) if branch is None else branch
-    return state_dir / "workflow" / repo_token(review_cwd) / f"{branch_token(resolved_branch, resolved_head)}.json"
+    return (
+        state_dir
+        / "workflow"
+        / repo_token(review_cwd)
+        / f"{branch_token(resolved_branch, resolved_head)}.json"
+    )
 
 
 def _workflow_repo_dir(*, state_dir: Path, review_cwd: Path) -> Path:
     return state_dir / "workflow" / repo_token(review_cwd)
 
 
-def _detached_fallback_state(*, state_dir: Path, review_cwd: Path, head: str) -> dict[str, Any] | None:
+def _detached_fallback_state(
+    *, state_dir: Path, review_cwd: Path, head: str
+) -> dict[str, Any] | None:
     repo_dir = _workflow_repo_dir(state_dir=state_dir, review_cwd=review_cwd)
     if not repo_dir.exists():
         return None
     best_state: dict[str, Any] | None = None
     best_distance: int | None = None
-    for candidate in [repo_dir / "detached.json", *sorted(repo_dir.glob("detached-*.json"))]:
+    for candidate in [
+        repo_dir / "detached.json",
+        *sorted(repo_dir.glob("detached-*.json")),
+    ]:
         if not candidate.exists():
             continue
         try:
@@ -519,10 +594,17 @@ def load_workflow_state(
 ) -> dict[str, Any] | None:
     resolved_head = head or current_head(review_cwd)
     resolved_branch = current_branch(review_cwd) if branch is None else branch
-    path = workflow_state_path(state_dir=state_dir, review_cwd=review_cwd, branch=resolved_branch, head=resolved_head)
+    path = workflow_state_path(
+        state_dir=state_dir,
+        review_cwd=review_cwd,
+        branch=resolved_branch,
+        head=resolved_head,
+    )
     if not path.exists():
         if resolved_branch is None:
-            return _detached_fallback_state(state_dir=state_dir, review_cwd=review_cwd, head=resolved_head)
+            return _detached_fallback_state(
+                state_dir=state_dir, review_cwd=review_cwd, head=resolved_head
+            )
         return None
     return json.loads(path.read_text(encoding="utf-8"))
 
@@ -556,7 +638,9 @@ def _gate_signoff_decisions_by_round(state_dir: Path) -> dict[str, dict[str, Any
 
 
 def _gate_record_cwd(record: dict[str, Any]) -> str:
-    value = str(record.get("review_cwd_normalized") or record.get("review_cwd") or "").strip()
+    value = str(
+        record.get("review_cwd_normalized") or record.get("review_cwd") or ""
+    ).strip()
     if not value:
         return ""
     try:
@@ -567,7 +651,12 @@ def _gate_record_cwd(record: dict[str, Any]) -> str:
 
 def _gate_record_reviewed_head(record: dict[str, Any]) -> str:
     scope = dict(record.get("review_scope") or {})
-    return str(scope.get("reviewed_head") or scope.get("commit_end") or scope.get("commit") or "").strip()
+    return str(
+        scope.get("reviewed_head")
+        or scope.get("commit_end")
+        or scope.get("commit")
+        or ""
+    ).strip()
 
 
 def _gate_record_base(record: dict[str, Any]) -> str:
@@ -580,7 +669,9 @@ def _gate_record_has_blocked_runs(record: dict[str, Any]) -> bool:
     return bool(runs) and any(bool(run.get("grade_blocked")) for run in runs)
 
 
-def _gate_record_advances_stage(record: dict[str, Any], decision: dict[str, Any] | None = None) -> bool:
+def _gate_record_advances_stage(
+    record: dict[str, Any], decision: dict[str, Any] | None = None
+) -> bool:
     runs = [run for run in list(record.get("runs") or []) if isinstance(run, dict)]
     if not runs or _gate_record_has_blocked_runs(record):
         return False
@@ -589,7 +680,9 @@ def _gate_record_advances_stage(record: dict[str, Any], decision: dict[str, Any]
         return True
     if str(record.get("signoff_status") or "").strip() == "pending":
         return True
-    return all(str(run.get("review_status") or "").strip() == "completed" for run in runs)
+    return all(
+        str(run.get("review_status") or "").strip() == "completed" for run in runs
+    )
 
 
 def _latest_current_head_followup_after(
@@ -606,7 +699,9 @@ def _latest_current_head_followup_after(
     source_gate_round_id = str(source_gate_round_id or "").strip()
     source_reviewed_head = str(source_reviewed_head or "").strip()
     candidates: list[dict[str, Any]] = []
-    for anchor in [item for item in list(state.get("anchors") or []) if isinstance(item, dict)]:
+    for anchor in [
+        item for item in list(state.get("anchors") or []) if isinstance(item, dict)
+    ]:
         if str(anchor.get("lane") or "") != "review-followup":
             continue
         recorded_at = str(anchor.get("recorded_at") or "").strip()
@@ -614,7 +709,11 @@ def _latest_current_head_followup_after(
             continue
         scope = dict(anchor.get("review_scope") or {})
         anchor_source_round_id = str(scope.get("source_gate_round_id") or "").strip()
-        if source_gate_round_id and anchor_source_round_id and anchor_source_round_id != source_gate_round_id:
+        if (
+            source_gate_round_id
+            and anchor_source_round_id
+            and anchor_source_round_id != source_gate_round_id
+        ):
             continue
         if source_gate_round_id and not anchor_source_round_id and source_reviewed_head:
             source_head = str(scope.get("commit") or "").strip()
@@ -624,7 +723,9 @@ def _latest_current_head_followup_after(
                         continue
                 except ValueError:
                     continue
-        reviewed_head = str(anchor.get("reviewed_head") or anchor.get("current_head_at_record") or "").strip()
+        reviewed_head = str(
+            anchor.get("reviewed_head") or anchor.get("current_head_at_record") or ""
+        ).strip()
         if not reviewed_head:
             continue
         try:
@@ -637,7 +738,9 @@ def _latest_current_head_followup_after(
     return sorted(candidates, key=lambda item: str(item.get("recorded_at") or ""))[-1]
 
 
-def _gate_record_order_key(record: dict[str, Any], decision: dict[str, Any] | None = None) -> str:
+def _gate_record_order_key(
+    record: dict[str, Any], decision: dict[str, Any] | None = None
+) -> str:
     decision = decision or {}
     return str(
         decision.get("recorded_at")
@@ -714,15 +817,21 @@ def latest_unresolved_gate_findings_candidate(
                 "round_id": round_id,
                 "reviewed_head": resolved_head,
                 "reviewed_head_raw": reviewed_head,
-                "recorded_at": str(record.get("review_completed_at") or record.get("recorded_at") or "").strip(),
+                "recorded_at": str(
+                    record.get("review_completed_at") or record.get("recorded_at") or ""
+                ).strip(),
                 "decision_recorded_at": decision_at,
                 "order_key": _gate_record_order_key(record, decision),
                 "followup_anchor": followup_anchor,
             }
         )
-    for finding in sorted(findings, key=lambda item: str(item.get("order_key") or ""), reverse=True):
+    for finding in sorted(
+        findings, key=lambda item: str(item.get("order_key") or ""), reverse=True
+    ):
         finding_order = str(finding.get("order_key") or "")
-        if any(str(clean.get("order_key") or "") > finding_order for clean in clean_records):
+        if any(
+            str(clean.get("order_key") or "") > finding_order for clean in clean_records
+        ):
             continue
         return finding
     return None
@@ -731,7 +840,9 @@ def latest_unresolved_gate_findings_candidate(
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    tmp_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     os.replace(tmp_path, path)
 
 
@@ -774,7 +885,9 @@ def compact_workflow_anchor(anchor: dict[str, Any]) -> dict[str, Any]:
         for key in allowed
         if key in anchor and anchor[key] not in (None, "", [], {})
     }
-    compacted["review_scope"] = compact_review_scope(dict(anchor.get("review_scope") or {}))
+    compacted["review_scope"] = compact_review_scope(
+        dict(anchor.get("review_scope") or {})
+    )
     return compacted
 
 
@@ -794,10 +907,21 @@ def record_review_anchor(
 ) -> dict[str, Any]:
     branch = current_branch(review_cwd)
     head = current_head(review_cwd)
-    with workflow_state_lock(state_dir=state_dir, review_cwd=review_cwd, branch=branch, head=head):
-        path = workflow_state_path(state_dir=state_dir, review_cwd=review_cwd, branch=branch, head=head)
-        existing = load_workflow_state(state_dir=state_dir, review_cwd=review_cwd, branch=branch, head=head) or {}
-        resolved_reviewed_head = reviewed_head or resolve_reviewed_head(review_cwd, review_scope)
+    with workflow_state_lock(
+        state_dir=state_dir, review_cwd=review_cwd, branch=branch, head=head
+    ):
+        path = workflow_state_path(
+            state_dir=state_dir, review_cwd=review_cwd, branch=branch, head=head
+        )
+        existing = (
+            load_workflow_state(
+                state_dir=state_dir, review_cwd=review_cwd, branch=branch, head=head
+            )
+            or {}
+        )
+        resolved_reviewed_head = reviewed_head or resolve_reviewed_head(
+            review_cwd, review_scope
+        )
         updates_branch_state = anchor_updates_branch_state(
             lane=lane,
             review_scope=review_scope,
@@ -805,15 +929,17 @@ def record_review_anchor(
             current_head=head,
         )
         recorded_at = utc_now_iso()
-        anchor = compact_workflow_anchor({
-            "recorded_at": recorded_at,
-            "lane": lane,
-            "base": base,
-            "reviewed_head": resolved_reviewed_head,
-            "current_head_at_record": head,
-            "review_scope": dict(review_scope or {}),
-            "updates_branch_state": updates_branch_state,
-        })
+        anchor = compact_workflow_anchor(
+            {
+                "recorded_at": recorded_at,
+                "lane": lane,
+                "base": base,
+                "reviewed_head": resolved_reviewed_head,
+                "current_head_at_record": head,
+                "review_scope": dict(review_scope or {}),
+                "updates_branch_state": updates_branch_state,
+            }
+        )
         if round_id:
             anchor["round_id"] = round_id
         if task_id:
@@ -863,7 +989,9 @@ def _parse_numstat_row(line: str) -> dict[str, Any] | None:
     }
 
 
-def diff_stats(review_cwd: Path, start_ref: str, end_ref: str = "HEAD") -> dict[str, Any]:
+def diff_stats(
+    review_cwd: Path, start_ref: str, end_ref: str = "HEAD"
+) -> dict[str, Any]:
     commit_count_text = _git_text(
         review_cwd,
         ["git", "rev-list", "--count", f"{start_ref}..{end_ref}"],
@@ -875,13 +1003,21 @@ def diff_stats(review_cwd: Path, start_ref: str, end_ref: str = "HEAD") -> dict[
             _parse_numstat_row(line)
             for line in _git_text(
                 review_cwd,
-                ["git", "diff", "--numstat", "--find-renames", f"{start_ref}..{end_ref}"],
+                [
+                    "git",
+                    "diff",
+                    "--numstat",
+                    "--find-renames",
+                    f"{start_ref}..{end_ref}",
+                ],
                 default_error=f"git diff --numstat {start_ref}..{end_ref} failed",
             ).splitlines()
         )
         if row is not None
     ]
-    top_paths = sorted(rows, key=lambda item: (-int(item["lines_changed"]), str(item["path"])))[:TOP_PATH_LIMIT]
+    top_paths = sorted(
+        rows, key=lambda item: (-int(item["lines_changed"]), str(item["path"]))
+    )[:TOP_PATH_LIMIT]
     return {
         "commits_since_anchor": int(commit_count_text or 0),
         "files_changed": len(rows),
@@ -920,7 +1056,9 @@ def worktree_diff_stats(review_cwd: Path, anchor_ref: str = "HEAD") -> dict[str,
                 "lines_changed": 0,
             }
         )
-    top_paths = sorted(rows, key=lambda item: (-int(item["lines_changed"]), str(item["path"])))[:TOP_PATH_LIMIT]
+    top_paths = sorted(
+        rows, key=lambda item: (-int(item["lines_changed"]), str(item["path"]))
+    )[:TOP_PATH_LIMIT]
     return {
         "commits_since_anchor": 0,
         "files_changed": len(rows),
@@ -932,7 +1070,10 @@ def worktree_diff_stats(review_cwd: Path, anchor_ref: str = "HEAD") -> dict[str,
 
 
 def classify_delta_recommendation(delta: dict[str, Any]) -> dict[str, str]:
-    if int(delta["files_changed"]) > COHERENCE_MAX_FILES or int(delta["lines_changed"]) > COHERENCE_MAX_LINES:
+    if (
+        int(delta["files_changed"]) > COHERENCE_MAX_FILES
+        or int(delta["lines_changed"]) > COHERENCE_MAX_LINES
+    ):
         return {
             "recommendation": "coherence-review",
             "reason": "diff_churn_exceeded",
@@ -954,7 +1095,9 @@ def classify_delta_recommendation(delta: dict[str, Any]) -> dict[str, str]:
 def latest_anchor(state: dict[str, Any] | None) -> dict[str, Any] | None:
     if not state:
         return None
-    anchors = [item for item in list(state.get("anchors") or []) if isinstance(item, dict)]
+    anchors = [
+        item for item in list(state.get("anchors") or []) if isinstance(item, dict)
+    ]
     if not anchors:
         return None
     return anchors[-1]
@@ -963,7 +1106,9 @@ def latest_anchor(state: dict[str, Any] | None) -> dict[str, Any] | None:
 def latest_branch_anchor(state: dict[str, Any] | None) -> dict[str, Any] | None:
     if not state:
         return None
-    anchors = [item for item in list(state.get("anchors") or []) if isinstance(item, dict)]
+    anchors = [
+        item for item in list(state.get("anchors") or []) if isinstance(item, dict)
+    ]
     for anchor in reversed(anchors):
         if "updates_branch_state" in anchor:
             if bool(anchor.get("updates_branch_state")):
@@ -973,7 +1118,11 @@ def latest_branch_anchor(state: dict[str, Any] | None) -> dict[str, Any] | None:
             lane=str(anchor.get("lane") or ""),
             review_scope=dict(anchor.get("review_scope") or {}),
             reviewed_head=str(anchor.get("reviewed_head") or ""),
-            current_head=str(anchor.get("current_head_at_record") or anchor.get("reviewed_head") or ""),
+            current_head=str(
+                anchor.get("current_head_at_record")
+                or anchor.get("reviewed_head")
+                or ""
+            ),
         ):
             return anchor
     return None
@@ -982,19 +1131,31 @@ def latest_branch_anchor(state: dict[str, Any] | None) -> dict[str, Any] | None:
 def latest_full_review_anchor(state: dict[str, Any] | None) -> dict[str, Any] | None:
     if not state:
         return None
-    anchors = [item for item in list(state.get("anchors") or []) if isinstance(item, dict)]
+    anchors = [
+        item for item in list(state.get("anchors") or []) if isinstance(item, dict)
+    ]
     for anchor in reversed(anchors):
         if str(anchor.get("lane") or "") in {"review_t1", "review_t3"}:
             return anchor
     return None
 
 
-def latest_followup_pressure_checkpoint_anchor(state: dict[str, Any] | None) -> dict[str, Any] | None:
+def latest_followup_pressure_checkpoint_anchor(
+    state: dict[str, Any] | None,
+) -> dict[str, Any] | None:
     if not state:
         return None
-    anchors = [item for item in list(state.get("anchors") or []) if isinstance(item, dict)]
+    anchors = [
+        item for item in list(state.get("anchors") or []) if isinstance(item, dict)
+    ]
     for anchor in reversed(anchors):
-        if str(anchor.get("lane") or "") in {"review_t1", "review_t2", "review_t3", "review_t4", "review-github"}:
+        if str(anchor.get("lane") or "") in {
+            "review_t1",
+            "review_t2",
+            "review_t3",
+            "review_t4",
+            "review-github",
+        }:
             return anchor
     return None
 
@@ -1006,11 +1167,18 @@ def latest_base_review_context_anchor(
 ) -> dict[str, Any] | None:
     if not state:
         return None
-    anchors = [item for item in list(state.get("anchors") or []) if isinstance(item, dict)]
+    anchors = [
+        item for item in list(state.get("anchors") or []) if isinstance(item, dict)
+    ]
     requested = str(requested_base or "").strip()
     fallback: dict[str, Any] | None = None
     for anchor in reversed(anchors):
-        if str(anchor.get("lane") or "") not in {"review_t1", "review_t2", "review_t3", "review_t4"}:
+        if str(anchor.get("lane") or "") not in {
+            "review_t1",
+            "review_t2",
+            "review_t3",
+            "review_t4",
+        }:
             continue
         scope = dict(anchor.get("review_scope") or {})
         if scope.get("commit") or scope.get("commit_end"):
@@ -1022,7 +1190,11 @@ def latest_base_review_context_anchor(
             continue
         anchor_requested_base = str(scope.get("requested_base") or "").strip()
         anchor_branch_base = str(scope.get("branch_base") or "").strip()
-        if requested and requested in {anchor_base, anchor_requested_base, anchor_branch_base}:
+        if requested and requested in {
+            anchor_base,
+            anchor_requested_base,
+            anchor_branch_base,
+        }:
             return anchor
         if fallback is None:
             fallback = anchor
@@ -1054,7 +1226,11 @@ def current_stage_full_review_lane(
     branch: str | None = None,
 ) -> str | None:
     candidates: list[str] = []
-    anchors = [item for item in list((state or {}).get("anchors") or []) if isinstance(item, dict)]
+    anchors = [
+        item
+        for item in list((state or {}).get("anchors") or [])
+        if isinstance(item, dict)
+    ]
     for anchor in anchors:
         lane = str(anchor.get("lane") or "")
         if lane in LANE_STAGE_RANK:
@@ -1066,7 +1242,9 @@ def current_stage_full_review_lane(
             round_id = str(record.get("round_id") or "").strip()
             if not _gate_record_advances_stage(record, decisions.get(round_id)):
                 continue
-            record_cwd = str(record.get("review_cwd_normalized") or record.get("review_cwd") or "").strip()
+            record_cwd = str(
+                record.get("review_cwd_normalized") or record.get("review_cwd") or ""
+            ).strip()
             if record_cwd:
                 try:
                     record_cwd = normalize_cwd(record_cwd)
@@ -1092,12 +1270,18 @@ def same_tier_review_pressure(
     review_cwd: Path,
     branch: str | None,
 ) -> dict[str, Any] | None:
-    lane = current_stage_full_review_lane(state, state_dir=state_dir, review_cwd=review_cwd, branch=branch)
+    lane = current_stage_full_review_lane(
+        state, state_dir=state_dir, review_cwd=review_cwd, branch=branch
+    )
     if lane is None:
         return None
     count = 0
     seen_round_ids: set[str] = set()
-    for anchor in [item for item in list((state or {}).get("anchors") or []) if isinstance(item, dict)]:
+    for anchor in [
+        item
+        for item in list((state or {}).get("anchors") or [])
+        if isinstance(item, dict)
+    ]:
         if str(anchor.get("lane") or "") != lane:
             continue
         round_id = str(anchor.get("round_id") or "").strip()
@@ -1113,7 +1297,9 @@ def same_tier_review_pressure(
             round_id = str(record.get("round_id") or "").strip()
             if not _gate_record_advances_stage(record, decisions.get(round_id)):
                 continue
-            record_cwd = str(record.get("review_cwd_normalized") or record.get("review_cwd") or "").strip()
+            record_cwd = str(
+                record.get("review_cwd_normalized") or record.get("review_cwd") or ""
+            ).strip()
             if record_cwd:
                 try:
                     record_cwd = normalize_cwd(record_cwd)
@@ -1131,7 +1317,11 @@ def same_tier_review_pressure(
             count += 1
     if count < SAME_TIER_REVIEW_CAUTION_THRESHOLD:
         return None
-    status = "high_pressure" if count >= SAME_TIER_REVIEW_HIGH_PRESSURE_THRESHOLD else "caution"
+    status = (
+        "high_pressure"
+        if count >= SAME_TIER_REVIEW_HIGH_PRESSURE_THRESHOLD
+        else "caution"
+    )
     instruction = (
         "Before another same-tier review, check the full diff. If findings are not converging or product decisions are unclear, pause and discuss."
         if status == "high_pressure"
@@ -1156,9 +1346,14 @@ def add_stage_full_review_lane(
     review_cwd: Path | None = None,
     branch: str | None = None,
 ) -> dict[str, Any]:
-    if str(decision.get("recommendation") or "") not in {"coherence-review", "full-review"}:
+    if str(decision.get("recommendation") or "") not in {
+        "coherence-review",
+        "full-review",
+    }:
         return decision
-    lane = current_stage_full_review_lane(state, state_dir=state_dir, review_cwd=review_cwd, branch=branch)
+    lane = current_stage_full_review_lane(
+        state, state_dir=state_dir, review_cwd=review_cwd, branch=branch
+    )
     if lane is None:
         return decision
     enriched = dict(decision)
@@ -1169,7 +1364,9 @@ def add_stage_full_review_lane(
             "for the current review stage before more follow-up. If that full-diff pass shows the branch is no longer coherent, split or checkpoint the next logical slice."
         )
     elif str(decision.get("recommendation") or "") == "full-review":
-        enriched["note"] = f"Run {lane} as the fresh full-diff lane for the current review stage."
+        enriched["note"] = (
+            f"Run {lane} as the fresh full-diff lane for the current review stage."
+        )
     return enriched
 
 
@@ -1186,13 +1383,21 @@ def followup_cycle_pressure(*, state: dict[str, Any] | None) -> dict[str, Any] |
     checkpoint = latest_followup_pressure_checkpoint_anchor(state)
     if checkpoint is None:
         return None
-    anchors = [item for item in list(state.get("anchors") or []) if isinstance(item, dict)]
+    anchors = [
+        item for item in list(state.get("anchors") or []) if isinstance(item, dict)
+    ]
     checkpoint_index = anchors.index(checkpoint)
     trailing = anchors[checkpoint_index + 1 :]
-    followup_anchor_count = sum(1 for item in trailing if str(item.get("lane") or "") == "review-followup")
+    followup_anchor_count = sum(
+        1 for item in trailing if str(item.get("lane") or "") == "review-followup"
+    )
     if followup_anchor_count <= FOLLOWUP_CYCLE_LIMIT:
         return None
-    signoff_anchor_count = sum(1 for item in trailing if str(item.get("lane") or "") in {"review_t2", "review_t4"})
+    signoff_anchor_count = sum(
+        1
+        for item in trailing
+        if str(item.get("lane") or "") in {"review_t2", "review_t4"}
+    )
     return {
         "last_full_review_lane": str(checkpoint.get("lane") or ""),
         "last_full_review_head": str(checkpoint.get("reviewed_head") or ""),
@@ -1217,15 +1422,29 @@ def branch_review_pressure(
 ) -> dict[str, Any] | None:
     if not state or not str(base or "").strip():
         return None
-    anchors = [item for item in list(state.get("anchors") or []) if isinstance(item, dict)]
+    anchors = [
+        item for item in list(state.get("anchors") or []) if isinstance(item, dict)
+    ]
     if not anchors:
         return None
-    resolved_merge_base = str(merge_base_ref or "").strip() or merge_base(review_cwd, str(base), "HEAD")
+    resolved_merge_base = str(merge_base_ref or "").strip() or merge_base(
+        review_cwd, str(base), "HEAD"
+    )
     commits_since_base = commit_distance(review_cwd, resolved_merge_base, "HEAD")
     recorded_anchor_count = len(anchors)
-    followup_anchor_count = sum(1 for item in anchors if str(item.get("lane") or "") == "review-followup")
-    full_review_anchor_count = sum(1 for item in anchors if str(item.get("lane") or "") in {"review_t1", "review_t3"})
-    signoff_anchor_count = sum(1 for item in anchors if str(item.get("lane") or "") in {"review_t2", "review_t4"})
+    followup_anchor_count = sum(
+        1 for item in anchors if str(item.get("lane") or "") == "review-followup"
+    )
+    full_review_anchor_count = sum(
+        1
+        for item in anchors
+        if str(item.get("lane") or "") in {"review_t1", "review_t3"}
+    )
+    signoff_anchor_count = sum(
+        1
+        for item in anchors
+        if str(item.get("lane") or "") in {"review_t2", "review_t4"}
+    )
     if commits_since_base < BRANCH_PRESSURE_MAX_COMMITS:
         return None
     if recorded_anchor_count < BRANCH_PRESSURE_MAX_RECORDED_ANCHORS:
@@ -1252,10 +1471,14 @@ def branch_review_pressure(
     }
 
 
-def best_followup_anchor(*, state: dict[str, Any] | None, review_cwd: Path, head: str) -> dict[str, Any] | None:
+def best_followup_anchor(
+    *, state: dict[str, Any] | None, review_cwd: Path, head: str
+) -> dict[str, Any] | None:
     if not state:
         return None
-    anchors = [item for item in list(state.get("anchors") or []) if isinstance(item, dict)]
+    anchors = [
+        item for item in list(state.get("anchors") or []) if isinstance(item, dict)
+    ]
     best_anchor: dict[str, Any] | None = None
     best_distance: int | None = None
     best_index = -1
@@ -1270,7 +1493,11 @@ def best_followup_anchor(*, state: dict[str, Any] | None, review_cwd: Path, head
         if not is_ancestor(review_cwd, resolved_head, head):
             continue
         distance = commit_distance(review_cwd, resolved_head, head)
-        if best_distance is None or distance < best_distance or (distance == best_distance and index > best_index):
+        if (
+            best_distance is None
+            or distance < best_distance
+            or (distance == best_distance and index > best_index)
+        ):
             best_anchor = dict(raw_anchor)
             best_anchor["reviewed_head"] = resolved_head
             best_distance = distance
@@ -1278,7 +1505,9 @@ def best_followup_anchor(*, state: dict[str, Any] | None, review_cwd: Path, head
     return best_anchor
 
 
-def inspect_workflow_status(*, state_dir: Path, review_cwd: Path, base: str) -> dict[str, Any]:
+def inspect_workflow_status(
+    *, state_dir: Path, review_cwd: Path, base: str
+) -> dict[str, Any]:
     branch = current_branch(review_cwd)
     head = current_head(review_cwd)
     payload: dict[str, Any] = {
@@ -1287,7 +1516,9 @@ def inspect_workflow_status(*, state_dir: Path, review_cwd: Path, base: str) -> 
         "branch": branch or "HEAD",
         "head": head,
     }
-    state = load_workflow_state(state_dir=state_dir, review_cwd=review_cwd, branch=branch, head=head)
+    state = load_workflow_state(
+        state_dir=state_dir, review_cwd=review_cwd, branch=branch, head=head
+    )
     current_stage_lane = current_stage_full_review_lane(
         state,
         state_dir=state_dir,
@@ -1331,15 +1562,23 @@ def inspect_workflow_status(*, state_dir: Path, review_cwd: Path, base: str) -> 
         reviewed_head = str(gate_findings_anchor.get("reviewed_head") or "").strip()
         gate_lane = str(gate_findings_anchor.get("lane") or "")
         gate_round_id = str(gate_findings_anchor.get("round_id") or "")
-        followup_anchor = gate_findings_anchor.get("followup_anchor") if isinstance(gate_findings_anchor.get("followup_anchor"), dict) else None
+        followup_anchor = (
+            gate_findings_anchor.get("followup_anchor")
+            if isinstance(gate_findings_anchor.get("followup_anchor"), dict)
+            else None
+        )
         payload["last_reviewed_head"] = reviewed_head
         payload["last_reviewed_lane"] = gate_lane
         payload["last_reviewed_at"] = str(
-            gate_findings_anchor.get("decision_recorded_at") or gate_findings_anchor.get("recorded_at") or ""
+            gate_findings_anchor.get("decision_recorded_at")
+            or gate_findings_anchor.get("recorded_at")
+            or ""
         )
         payload["last_gate_findings_round_id"] = gate_round_id
         try:
-            payload["gate_findings_anchor_not_ancestor"] = not is_ancestor(review_cwd, reviewed_head, head)
+            payload["gate_findings_anchor_not_ancestor"] = not is_ancestor(
+                review_cwd, reviewed_head, head
+            )
         except ValueError:
             payload["gate_findings_anchor_not_ancestor"] = True
 
@@ -1431,7 +1670,9 @@ def inspect_workflow_status(*, state_dir: Path, review_cwd: Path, base: str) -> 
 
     anchor = best_followup_anchor(state=state, review_cwd=review_cwd, head=head)
     if anchor is None:
-        latest_reviewed_head = str(latest.get("reviewed_head") or state.get("last_reviewed_head") or "").strip()
+        latest_reviewed_head = str(
+            latest.get("reviewed_head") or state.get("last_reviewed_head") or ""
+        ).strip()
         if not latest_reviewed_head:
             payload.update(
                 stage_decision(
@@ -1479,9 +1720,12 @@ def inspect_workflow_status(*, state_dir: Path, review_cwd: Path, base: str) -> 
         return finalize()
     reviewed_head = str(anchor.get("reviewed_head") or "").strip()
     payload["last_reviewed_head"] = reviewed_head
-    payload["last_reviewed_lane"] = str(anchor.get("lane") or state.get("last_reviewed_lane") or "")
-    payload["last_reviewed_at"] = str(anchor.get("recorded_at") or state.get("last_reviewed_at") or "")
-    review_scope = dict(anchor.get("review_scope") or {})
+    payload["last_reviewed_lane"] = str(
+        anchor.get("lane") or state.get("last_reviewed_lane") or ""
+    )
+    payload["last_reviewed_at"] = str(
+        anchor.get("recorded_at") or state.get("last_reviewed_at") or ""
+    )
     if not reviewed_head:
         payload.update(
             stage_decision(
@@ -1507,10 +1751,17 @@ def inspect_workflow_status(*, state_dir: Path, review_cwd: Path, base: str) -> 
             )
         )
         return finalize()
-    base_context_anchor = latest_base_review_context_anchor(state, requested_base=base) or anchor
+    base_context_anchor = (
+        latest_base_review_context_anchor(state, requested_base=base) or anchor
+    )
     base_context_scope = dict(base_context_anchor.get("review_scope") or {})
     recorded_merge_base = str(base_context_scope.get("merge_base") or "").strip()
-    stored_anchor_base = str(base_context_scope.get("base") or base_context_anchor.get("base") or state.get("base") or "").strip()
+    stored_anchor_base = str(
+        base_context_scope.get("base")
+        or base_context_anchor.get("base")
+        or state.get("base")
+        or ""
+    ).strip()
     stored_branch_base = str(base_context_scope.get("branch_base") or "").strip()
     stored_requested_base = str(base_context_scope.get("requested_base") or "").strip()
     requested_status_base = str(base or "").strip()
@@ -1519,7 +1770,10 @@ def inspect_workflow_status(*, state_dir: Path, review_cwd: Path, base: str) -> 
         review_scope=base_context_scope,
         requested_base=base,
     ):
-        if stored_branch_base and requested_status_base in {stored_branch_base, stored_requested_base}:
+        if stored_branch_base and requested_status_base in {
+            stored_branch_base,
+            stored_requested_base,
+        }:
             anchor_base = stored_branch_base
         else:
             anchor_base = stored_anchor_base or requested_status_base
@@ -1552,9 +1806,15 @@ def inspect_workflow_status(*, state_dir: Path, review_cwd: Path, base: str) -> 
                 current_merge_base=current_merge_base,
                 reviewed_head=reviewed_head,
             )
-            payload["base_drift_changed_path_count"] = len(drift_scope["base_changed_paths"])
-            payload["base_drift_overlap_paths"] = drift_scope["overlapping_paths"][:TOP_PATH_LIMIT]
-            payload["base_drift_patch_equivalent"] = bool(drift_scope["patch_equivalent"])
+            payload["base_drift_changed_path_count"] = len(
+                drift_scope["base_changed_paths"]
+            )
+            payload["base_drift_overlap_paths"] = drift_scope["overlapping_paths"][
+                :TOP_PATH_LIMIT
+            ]
+            payload["base_drift_patch_equivalent"] = bool(
+                drift_scope["patch_equivalent"]
+            )
             if drift_scope["overlapping_paths"] or not drift_scope["patch_equivalent"]:
                 payload.update(
                     stage_decision(
@@ -1582,7 +1842,9 @@ def inspect_workflow_status(*, state_dir: Path, review_cwd: Path, base: str) -> 
             review_cwd=review_cwd,
             base=anchor_base,
         )
-    if not base_drift_patch_equivalent and not is_ancestor(review_cwd, reviewed_head, head):
+    if not base_drift_patch_equivalent and not is_ancestor(
+        review_cwd, reviewed_head, head
+    ):
         payload.update(
             stage_decision(
                 {
@@ -1602,7 +1864,9 @@ def inspect_workflow_status(*, state_dir: Path, review_cwd: Path, base: str) -> 
                     merge_base_ref=current_merge_base,
                 )
                 if bool(dirty_scope.get("all_dirty_paths_outside_branch_diff")):
-                    unrelated_paths = list(dirty_scope.get("unrelated_dirty_paths") or [])
+                    unrelated_paths = list(
+                        dirty_scope.get("unrelated_dirty_paths") or []
+                    )
                     payload.update(
                         {
                             "worktree_dirty": True,

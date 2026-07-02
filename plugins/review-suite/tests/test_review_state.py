@@ -47,7 +47,9 @@ def _git(repo: Path, *args: str) -> str:
         env=_GIT_ENV,
     )
     if proc.returncode != 0:
-        raise AssertionError(proc.stderr or proc.stdout or f"git {' '.join(args)} failed")
+        raise AssertionError(
+            proc.stderr or proc.stdout or f"git {' '.join(args)} failed"
+        )
     return proc.stdout.strip()
 
 
@@ -79,7 +81,9 @@ def _write_gate_signoff(state_dir: Path, payload: dict[str, object]) -> None:
         handle.write(json.dumps(payload) + "\n")
 
 
-def _write_orchestrator_cycle(state_dir: Path, name: str, payload: dict[str, object]) -> None:
+def _write_orchestrator_cycle(
+    state_dir: Path, name: str, payload: dict[str, object]
+) -> None:
     path = state_dir / "orchestrator" / "cycles" / name
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload), encoding="utf-8")
@@ -89,8 +93,12 @@ def _use_default_state_dir(monkeypatch, state_dir: Path) -> None:
     monkeypatch.setattr(review_state, "default_state_dir", lambda: state_dir)
 
 
-def test_review_state_status_rejects_state_dir(monkeypatch, tmp_path: Path, capsys) -> None:
-    monkeypatch.setattr(sys, "argv", ["review.py", "--status", "--state-dir", str(tmp_path / "state")])
+def test_review_state_status_rejects_state_dir(
+    monkeypatch, tmp_path: Path, capsys
+) -> None:
+    monkeypatch.setattr(
+        sys, "argv", ["review.py", "--status", "--state-dir", str(tmp_path / "state")]
+    )
 
     assert review.main() == 2
     rendered = capsys.readouterr().out
@@ -98,7 +106,9 @@ def test_review_state_status_rejects_state_dir(monkeypatch, tmp_path: Path, caps
     assert "unrecognized arguments: --state-dir" in rendered
 
 
-def test_effective_base_ref_prefers_configured_upstream_and_marks_stale(tmp_path: Path) -> None:
+def test_effective_base_ref_prefers_configured_upstream_and_marks_stale(
+    tmp_path: Path,
+) -> None:
     repo = tmp_path / "repo"
     _init_repo(repo)
     old_main = _commit_file(repo, "app.txt", "old\n", "old main")
@@ -122,7 +132,9 @@ def test_effective_base_ref_prefers_configured_upstream_and_marks_stale(tmp_path
     assert payload["base_ref_relation"] == "behind"
 
 
-def test_effective_base_ref_keeps_requested_base_when_local_branch_is_ahead(tmp_path: Path) -> None:
+def test_effective_base_ref_keeps_requested_base_when_local_branch_is_ahead(
+    tmp_path: Path,
+) -> None:
     repo = tmp_path / "repo"
     _init_repo(repo)
     old_main = _commit_file(repo, "app.txt", "old\n", "old main")
@@ -145,7 +157,9 @@ def test_effective_base_ref_keeps_requested_base_when_local_branch_is_ahead(tmp_
     assert payload["base_ref_relation"] == "ahead"
 
 
-def test_effective_base_ref_keeps_requested_base_when_upstream_is_unresolved(tmp_path: Path) -> None:
+def test_effective_base_ref_keeps_requested_base_when_upstream_is_unresolved(
+    tmp_path: Path,
+) -> None:
     repo = tmp_path / "repo"
     _init_repo(repo)
     main_head = _commit_file(repo, "app.txt", "main\n", "main")
@@ -163,7 +177,9 @@ def test_effective_base_ref_keeps_requested_base_when_upstream_is_unresolved(tmp
     assert _git(repo, "rev-parse", "main") == main_head
 
 
-def test_inspect_workflow_status_without_anchor_recommends_full_review(tmp_path: Path) -> None:
+def test_inspect_workflow_status_without_anchor_recommends_full_review(
+    tmp_path: Path,
+) -> None:
     repo = tmp_path / "repo"
     _init_repo(repo)
     _commit_file(repo, "app.txt", "one\n", "initial")
@@ -218,7 +234,9 @@ def test_review_state_status_stays_on_existing_gate_stage_without_anchor(
     )
 
     _use_default_state_dir(monkeypatch, state_dir)
-    monkeypatch.setattr(review_state, "emit_toon", lambda payload: emitted.append(payload))
+    monkeypatch.setattr(
+        review_state, "emit_toon", lambda payload: emitted.append(payload)
+    )
     monkeypatch.setattr(
         sys,
         "argv",
@@ -272,7 +290,9 @@ def test_review_state_status_ignores_blocked_gate_for_monotonic_stage_without_an
     )
 
     _use_default_state_dir(monkeypatch, state_dir)
-    monkeypatch.setattr(review_state, "emit_toon", lambda payload: emitted.append(payload))
+    monkeypatch.setattr(
+        review_state, "emit_toon", lambda payload: emitted.append(payload)
+    )
     monkeypatch.setattr(
         sys,
         "argv",
@@ -297,11 +317,15 @@ def test_review_state_status_ignores_blocked_gate_for_monotonic_stage_without_an
     assert emitted[0]["Action"]["cwd"] == str(repo)
 
 
-def test_review_state_status_verbose_keeps_router_details(monkeypatch, tmp_path: Path) -> None:
+def test_review_state_status_verbose_keeps_router_details(
+    monkeypatch, tmp_path: Path
+) -> None:
     emitted: list[dict[str, object]] = []
 
     monkeypatch.setattr(review_state, "resolve_repo_root", lambda cd: tmp_path)
-    monkeypatch.setattr(review_state, "pending_gate_signoff_records", lambda **kwargs: [])
+    monkeypatch.setattr(
+        review_state, "pending_gate_signoff_records", lambda **kwargs: []
+    )
     monkeypatch.setattr(
         review_state,
         "inspect_workflow_status",
@@ -314,7 +338,9 @@ def test_review_state_status_verbose_keeps_router_details(monkeypatch, tmp_path:
         },
     )
     _use_default_state_dir(monkeypatch, tmp_path / "state")
-    monkeypatch.setattr(review_state, "emit_toon", lambda payload: emitted.append(payload))
+    monkeypatch.setattr(
+        review_state, "emit_toon", lambda payload: emitted.append(payload)
+    )
     monkeypatch.setattr(
         sys,
         "argv",
@@ -330,7 +356,9 @@ def test_review_state_status_verbose_keeps_router_details(monkeypatch, tmp_path:
     assert emitted[0]["Action"]["round_id"] == "gate-findings-1"
 
 
-def test_review_state_status_surfaces_orchestrator_progress(monkeypatch, tmp_path: Path) -> None:
+def test_review_state_status_surfaces_orchestrator_progress(
+    monkeypatch, tmp_path: Path
+) -> None:
     emitted: list[dict[str, object]] = []
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
@@ -374,7 +402,9 @@ def test_review_state_status_surfaces_orchestrator_progress(monkeypatch, tmp_pat
         },
     )
     _use_default_state_dir(monkeypatch, state_dir)
-    monkeypatch.setattr(review_state, "emit_toon", lambda payload: emitted.append(payload))
+    monkeypatch.setattr(
+        review_state, "emit_toon", lambda payload: emitted.append(payload)
+    )
     monkeypatch.setattr(
         sys,
         "argv",
@@ -390,7 +420,9 @@ def test_review_state_status_surfaces_orchestrator_progress(monkeypatch, tmp_pat
     assert "reason" not in emitted[0]
     assert "--id rvw_progress --decision clean" in str(emitted[0]["Action"]["cmd"])
     assert "--id rvw_progress --decision findings" in str(emitted[0]["Action"]["alt"])
-    assert "--id rvw_progress --restart-mode deep --reason REASON" in str(emitted[0]["Action"]["restart"]["cmd"])
+    assert "--id rvw_progress --restart-mode deep --reason REASON" in str(
+        emitted[0]["Action"]["restart"]["cmd"]
+    )
     assert emitted[0]["Action"]["restart"]["mode"] == "deep"
     assert "--state-dir" not in str(emitted[0]["Action"]["cmd"])
     assert "--state-dir" not in str(emitted[0]["Action"]["alt"])
@@ -399,7 +431,9 @@ def test_review_state_status_surfaces_orchestrator_progress(monkeypatch, tmp_pat
     assert "review_t1.py" not in str(emitted[0]["Action"])
 
 
-def test_review_state_status_marks_terminal_orchestrator_cycle_done(monkeypatch, tmp_path: Path) -> None:
+def test_review_state_status_marks_terminal_orchestrator_cycle_done(
+    monkeypatch, tmp_path: Path
+) -> None:
     emitted: list[dict[str, object]] = []
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
@@ -425,7 +459,9 @@ def test_review_state_status_marks_terminal_orchestrator_cycle_done(monkeypatch,
         },
     )
     monkeypatch.setattr(review_state, "resolve_repo_root", lambda cd: repo)
-    monkeypatch.setattr(review_state, "pending_gate_signoff_records", lambda **kwargs: [])
+    monkeypatch.setattr(
+        review_state, "pending_gate_signoff_records", lambda **kwargs: []
+    )
     monkeypatch.setattr(
         review_state,
         "inspect_workflow_status",
@@ -437,7 +473,9 @@ def test_review_state_status_marks_terminal_orchestrator_cycle_done(monkeypatch,
         },
     )
     _use_default_state_dir(monkeypatch, state_dir)
-    monkeypatch.setattr(review_state, "emit_toon", lambda payload: emitted.append(payload))
+    monkeypatch.setattr(
+        review_state, "emit_toon", lambda payload: emitted.append(payload)
+    )
     monkeypatch.setattr(sys, "argv", ["review.py", "--status", "--base", "main"])
 
     assert review.main() == 0
@@ -450,7 +488,9 @@ def test_review_state_status_marks_terminal_orchestrator_cycle_done(monkeypatch,
     assert "Action" not in emitted[0]
 
 
-def test_review_state_status_keeps_patch_equivalent_base_drift_done(monkeypatch, tmp_path: Path) -> None:
+def test_review_state_status_keeps_patch_equivalent_base_drift_done(
+    monkeypatch, tmp_path: Path
+) -> None:
     emitted: list[dict[str, object]] = []
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
@@ -482,7 +522,9 @@ def test_review_state_status_keeps_patch_equivalent_base_drift_done(monkeypatch,
         },
     )
     monkeypatch.setattr(review_state, "resolve_repo_root", lambda cd: repo)
-    monkeypatch.setattr(review_state, "pending_gate_signoff_records", lambda **kwargs: [])
+    monkeypatch.setattr(
+        review_state, "pending_gate_signoff_records", lambda **kwargs: []
+    )
     monkeypatch.setattr(
         review_state,
         "inspect_workflow_status",
@@ -494,7 +536,9 @@ def test_review_state_status_keeps_patch_equivalent_base_drift_done(monkeypatch,
         },
     )
     _use_default_state_dir(monkeypatch, state_dir)
-    monkeypatch.setattr(review_state, "emit_toon", lambda payload: emitted.append(payload))
+    monkeypatch.setattr(
+        review_state, "emit_toon", lambda payload: emitted.append(payload)
+    )
     monkeypatch.setattr(sys, "argv", ["review.py", "--status", "--base", "main"])
 
     assert review.main() == 0
@@ -505,7 +549,9 @@ def test_review_state_status_keeps_patch_equivalent_base_drift_done(monkeypatch,
     assert "Action" not in emitted[0]
 
 
-def test_review_state_status_uses_bare_id_for_structured_verdict(tmp_path: Path) -> None:
+def test_review_state_status_uses_bare_id_for_structured_verdict(
+    tmp_path: Path,
+) -> None:
     state_dir = tmp_path / "state"
     round_state_dir = state_dir / "orchestrator" / "review-rounds"
     rounds_dir = round_state_dir / "rounds"
@@ -531,7 +577,11 @@ def test_review_state_status_uses_bare_id_for_structured_verdict(tmp_path: Path)
     action = review_state._orchestrator_action(
         {
             "stage": "decision-pending",
-            "pending_action": {"kind": "decision", "round_id": "round-1", "lane": "review_t1"},
+            "pending_action": {
+                "kind": "decision",
+                "round_id": "round-1",
+                "lane": "review_t1",
+            },
             "rounds": [
                 {
                     "round_id": "round-1",
@@ -557,10 +607,14 @@ def test_review_state_status_uses_bare_id_for_structured_verdict(tmp_path: Path)
     assert "--id rvw_progress" in str(action["cmd"])
     assert "--decision" not in str(action["cmd"])
     assert "--id rvw_progress --decision clean" in str(action["override"]["clean"])
-    assert "--id rvw_progress --decision findings" in str(action["override"]["findings"])
+    assert "--id rvw_progress --decision findings" in str(
+        action["override"]["findings"]
+    )
 
 
-def test_review_state_status_surfaces_grade_before_structured_verdict(tmp_path: Path) -> None:
+def test_review_state_status_surfaces_grade_before_structured_verdict(
+    tmp_path: Path,
+) -> None:
     state_dir = tmp_path / "state"
     round_state_dir = state_dir / "orchestrator" / "review-rounds"
     rounds_dir = round_state_dir / "rounds"
@@ -589,7 +643,11 @@ def test_review_state_status_surfaces_grade_before_structured_verdict(tmp_path: 
         {
             "public_id": "rvw_progress",
             "stage": "decision-pending",
-            "pending_action": {"kind": "decision", "round_id": "arena-round-1", "lane": "review_t1"},
+            "pending_action": {
+                "kind": "decision",
+                "round_id": "arena-round-1",
+                "lane": "review_t1",
+            },
             "identity": {"branch": "feature/arena"},
             "rounds": [
                 {
@@ -628,7 +686,9 @@ def test_orchestrator_action_routes_superseded_reviews(tmp_path: Path) -> None:
     assert "restart" not in action
 
 
-def test_orchestrator_action_omits_initial_emergency_github_handoff(tmp_path: Path) -> None:
+def test_orchestrator_action_omits_initial_emergency_github_handoff(
+    tmp_path: Path,
+) -> None:
     action = review_state._orchestrator_action(
         {
             "stage": "review-green",
@@ -642,13 +702,18 @@ def test_orchestrator_action_omits_initial_emergency_github_handoff(tmp_path: Pa
     assert action is None
 
 
-def test_orchestrator_action_routes_terminal_github_result_to_validation(tmp_path: Path) -> None:
+def test_orchestrator_action_routes_terminal_github_result_to_validation(
+    tmp_path: Path,
+) -> None:
     action = review_state._orchestrator_action(
         {
             "stage": "review-green",
             "mode": {"effective": "emergency"},
             "identity": {"head": "old-head"},
-            "review_heads": {"last_gate_clean_head": "gate-head", "last_reviewed_head": "head-1"},
+            "review_heads": {
+                "last_gate_clean_head": "gate-head",
+                "last_reviewed_head": "head-1",
+            },
             "github_review": {"status": "clean", "reviewed_head": "head-1"},
             "validation": {"full_suite": "unknown", "ci": "unknown"},
         },
@@ -663,13 +728,18 @@ def test_orchestrator_action_routes_terminal_github_result_to_validation(tmp_pat
     assert "--github-review" not in str(action["cmd"])
 
 
-def test_orchestrator_action_suppresses_stale_terminal_github_result(tmp_path: Path) -> None:
+def test_orchestrator_action_suppresses_stale_terminal_github_result(
+    tmp_path: Path,
+) -> None:
     action = review_state._orchestrator_action(
         {
             "stage": "review-green",
             "mode": {"effective": "normal"},
             "identity": {"head": "old-head"},
-            "review_heads": {"last_reviewed_head": "old-head", "last_followup_head": "fixed-head"},
+            "review_heads": {
+                "last_reviewed_head": "old-head",
+                "last_followup_head": "fixed-head",
+            },
             "github_review": {"status": "clean", "reviewed_head": "old-head"},
             "validation": {"full_suite": "passed", "ci": "passed"},
         },
@@ -681,12 +751,17 @@ def test_orchestrator_action_suppresses_stale_terminal_github_result(tmp_path: P
     assert action is None
 
 
-def test_orchestrator_action_uses_clean_followup_head_for_freshness(tmp_path: Path) -> None:
+def test_orchestrator_action_uses_clean_followup_head_for_freshness(
+    tmp_path: Path,
+) -> None:
     action = review_state._orchestrator_action(
         {
             "stage": "review-green",
             "mode": {"effective": "normal"},
-            "review_heads": {"last_reviewed_head": "old-head", "last_followup_head": "fixed-head"},
+            "review_heads": {
+                "last_reviewed_head": "old-head",
+                "last_followup_head": "fixed-head",
+            },
             "github_review": {"status": "unknown"},
             "validation": {"full_suite": "passed", "ci": "passed"},
         },
@@ -699,7 +774,9 @@ def test_orchestrator_action_uses_clean_followup_head_for_freshness(tmp_path: Pa
     assert "--github-review" in str(action["cmd"])
 
 
-def test_review_state_status_ignores_stale_green_orchestrator_cycle(monkeypatch, tmp_path: Path) -> None:
+def test_review_state_status_ignores_stale_green_orchestrator_cycle(
+    monkeypatch, tmp_path: Path
+) -> None:
     emitted: list[dict[str, object]] = []
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
@@ -720,7 +797,9 @@ def test_review_state_status_ignores_stale_green_orchestrator_cycle(monkeypatch,
         },
     )
     monkeypatch.setattr(review_state, "resolve_repo_root", lambda cd: repo)
-    monkeypatch.setattr(review_state, "pending_gate_signoff_records", lambda **kwargs: [])
+    monkeypatch.setattr(
+        review_state, "pending_gate_signoff_records", lambda **kwargs: []
+    )
     monkeypatch.setattr(
         review_state,
         "inspect_workflow_status",
@@ -733,7 +812,9 @@ def test_review_state_status_ignores_stale_green_orchestrator_cycle(monkeypatch,
         },
     )
     _use_default_state_dir(monkeypatch, state_dir)
-    monkeypatch.setattr(review_state, "emit_toon", lambda payload: emitted.append(payload))
+    monkeypatch.setattr(
+        review_state, "emit_toon", lambda payload: emitted.append(payload)
+    )
     monkeypatch.setattr(
         sys,
         "argv",
@@ -751,7 +832,9 @@ def test_review_state_status_ignores_stale_green_orchestrator_cycle(monkeypatch,
     assert "review_t1.py" not in str(emitted[0]["Action"])
 
 
-def test_inspect_workflow_status_recommends_followup_after_t4_findings_amended_head(tmp_path: Path) -> None:
+def test_inspect_workflow_status_recommends_followup_after_t4_findings_amended_head(
+    tmp_path: Path,
+) -> None:
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
     _init_repo(repo)
@@ -764,7 +847,11 @@ def test_inspect_workflow_status_recommends_followup_after_t4_findings_amended_h
         review_cwd=repo,
         lane="review_t3",
         base="main",
-        review_scope={"base": "main", "merge_base": merge_base, "reviewed_head": reviewed_head},
+        review_scope={
+            "base": "main",
+            "merge_base": merge_base,
+            "reviewed_head": reviewed_head,
+        },
         reviewed_head=reviewed_head,
     )
     _write_gate_run(
@@ -780,7 +867,9 @@ def test_inspect_workflow_status_recommends_followup_after_t4_findings_amended_h
             "review_scope": {"base": "main", "reviewed_head": reviewed_head},
             "signoff_status": "pending",
             "signoff_required": True,
-            "runs": [{"slot": "alpha", "review_status": "completed", "grade_blocked": False}],
+            "runs": [
+                {"slot": "alpha", "review_status": "completed", "grade_blocked": False}
+            ],
         },
     )
     _write_gate_signoff(
@@ -814,7 +903,9 @@ def test_inspect_workflow_status_recommends_followup_after_t4_findings_amended_h
     assert payload["gate_findings_anchor_not_ancestor"] is True
 
 
-def test_inspect_workflow_status_reports_current_head_gate_findings_as_unresolved(tmp_path: Path) -> None:
+def test_inspect_workflow_status_reports_current_head_gate_findings_as_unresolved(
+    tmp_path: Path,
+) -> None:
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
     _init_repo(repo)
@@ -827,7 +918,11 @@ def test_inspect_workflow_status_reports_current_head_gate_findings_as_unresolve
         review_cwd=repo,
         lane="review_t3",
         base="main",
-        review_scope={"base": "main", "merge_base": merge_base, "reviewed_head": reviewed_head},
+        review_scope={
+            "base": "main",
+            "merge_base": merge_base,
+            "reviewed_head": reviewed_head,
+        },
         reviewed_head=reviewed_head,
     )
     _write_gate_run(
@@ -843,7 +938,9 @@ def test_inspect_workflow_status_reports_current_head_gate_findings_as_unresolve
             "review_scope": {"base": "main", "reviewed_head": reviewed_head},
             "signoff_status": "pending",
             "signoff_required": True,
-            "runs": [{"slot": "alpha", "review_status": "completed", "grade_blocked": False}],
+            "runs": [
+                {"slot": "alpha", "review_status": "completed", "grade_blocked": False}
+            ],
         },
     )
     _write_gate_signoff(
@@ -872,7 +969,9 @@ def test_inspect_workflow_status_reports_current_head_gate_findings_as_unresolve
     assert payload["last_reviewed_head"] == reviewed_head
 
 
-def test_inspect_workflow_status_routes_dirty_fix_after_current_gate_findings_to_followup(tmp_path: Path) -> None:
+def test_inspect_workflow_status_routes_dirty_fix_after_current_gate_findings_to_followup(
+    tmp_path: Path,
+) -> None:
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
     _init_repo(repo)
@@ -885,7 +984,11 @@ def test_inspect_workflow_status_routes_dirty_fix_after_current_gate_findings_to
         review_cwd=repo,
         lane="review_t3",
         base="main",
-        review_scope={"base": "main", "merge_base": merge_base, "reviewed_head": reviewed_head},
+        review_scope={
+            "base": "main",
+            "merge_base": merge_base,
+            "reviewed_head": reviewed_head,
+        },
         reviewed_head=reviewed_head,
     )
     _write_gate_run(
@@ -901,7 +1004,9 @@ def test_inspect_workflow_status_routes_dirty_fix_after_current_gate_findings_to
             "review_scope": {"base": "main", "reviewed_head": reviewed_head},
             "signoff_status": "pending",
             "signoff_required": True,
-            "runs": [{"slot": "alpha", "review_status": "completed", "grade_blocked": False}],
+            "runs": [
+                {"slot": "alpha", "review_status": "completed", "grade_blocked": False}
+            ],
         },
     )
     _write_gate_signoff(
@@ -930,7 +1035,9 @@ def test_inspect_workflow_status_routes_dirty_fix_after_current_gate_findings_to
     assert payload["last_gate_findings_round_id"] == "t4-dirty-findings"
 
 
-def test_inspect_workflow_status_routes_clean_followup_after_gate_findings_back_to_same_gate(tmp_path: Path) -> None:
+def test_inspect_workflow_status_routes_clean_followup_after_gate_findings_back_to_same_gate(
+    tmp_path: Path,
+) -> None:
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
     _init_repo(repo)
@@ -943,7 +1050,11 @@ def test_inspect_workflow_status_routes_clean_followup_after_gate_findings_back_
         review_cwd=repo,
         lane="review_t3",
         base="main",
-        review_scope={"base": "main", "merge_base": merge_base, "reviewed_head": reviewed_head},
+        review_scope={
+            "base": "main",
+            "merge_base": merge_base,
+            "reviewed_head": reviewed_head,
+        },
         reviewed_head=reviewed_head,
     )
     _write_gate_run(
@@ -959,7 +1070,9 @@ def test_inspect_workflow_status_routes_clean_followup_after_gate_findings_back_
             "review_scope": {"base": "main", "reviewed_head": reviewed_head},
             "signoff_status": "pending",
             "signoff_required": True,
-            "runs": [{"slot": "alpha", "review_status": "completed", "grade_blocked": False}],
+            "runs": [
+                {"slot": "alpha", "review_status": "completed", "grade_blocked": False}
+            ],
         },
     )
     _write_gate_signoff(
@@ -1014,9 +1127,15 @@ def test_review_state_status_rejects_windows_wsl_unc_before_git(
     monkeypatch.setattr(
         review_state,
         "resolve_repo_root",
-        lambda cd: (_ for _ in ()).throw(AssertionError("UNC WSL path should fail before git")),
+        lambda cd: (_ for _ in ()).throw(
+            AssertionError("UNC WSL path should fail before git")
+        ),
     )
-    monkeypatch.setattr(review, "emit_error", lambda message, **kwargs: captured_errors.append(message) or 2)
+    monkeypatch.setattr(
+        review,
+        "emit_error",
+        lambda message, **kwargs: captured_errors.append(message) or 2,
+    )
     monkeypatch.setattr(
         sys,
         "argv",
@@ -1042,13 +1161,23 @@ def test_review_state_status_rejects_windows_wsl_cwd_before_git(monkeypatch) -> 
     captured_errors: list[str] = []
 
     monkeypatch.setattr(review_state.sys, "platform", "win32")
-    monkeypatch.setattr(review_state, "_status_path_for_wsl_check", lambda cd: "//wsl.localhost/Ubuntu/home/alice/code/repo")
+    monkeypatch.setattr(
+        review_state,
+        "_status_path_for_wsl_check",
+        lambda cd: "//wsl.localhost/Ubuntu/home/alice/code/repo",
+    )
     monkeypatch.setattr(
         review_state,
         "resolve_repo_root",
-        lambda cd: (_ for _ in ()).throw(AssertionError("UNC WSL cwd should fail before git")),
+        lambda cd: (_ for _ in ()).throw(
+            AssertionError("UNC WSL cwd should fail before git")
+        ),
     )
-    monkeypatch.setattr(review, "emit_error", lambda message, **kwargs: captured_errors.append(message) or 2)
+    monkeypatch.setattr(
+        review,
+        "emit_error",
+        lambda message, **kwargs: captured_errors.append(message) or 2,
+    )
     monkeypatch.setattr(sys, "argv", ["review.py", "--status", "--base", "main"])
 
     exit_code = review.main()
@@ -1057,7 +1186,9 @@ def test_review_state_status_rejects_windows_wsl_cwd_before_git(monkeypatch) -> 
     assert "Run review.py --status from native WSL" in captured_errors[0]
 
 
-def test_inspect_workflow_status_warns_after_six_same_tier_runs_without_counting_followups(tmp_path: Path) -> None:
+def test_inspect_workflow_status_warns_after_six_same_tier_runs_without_counting_followups(
+    tmp_path: Path,
+) -> None:
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
     _init_repo(repo)
@@ -1073,7 +1204,11 @@ def test_inspect_workflow_status_warns_after_six_same_tier_runs_without_counting
             lane="review_t3",
             base="main",
             reviewed_head=reviewed_head,
-            review_scope={"base": "main", "reviewed_head": reviewed_head, "merge_base": merge_base},
+            review_scope={
+                "base": "main",
+                "reviewed_head": reviewed_head,
+                "merge_base": merge_base,
+            },
             round_id=f"t3-{index}",
         )
     for index in range(4):
@@ -1097,7 +1232,9 @@ def test_inspect_workflow_status_warns_after_six_same_tier_runs_without_counting
     assert "converging and patch-sized" in payload["convergence"]["instruction"]
 
 
-def test_inspect_workflow_status_high_pressure_after_ten_same_tier_runs(tmp_path: Path) -> None:
+def test_inspect_workflow_status_high_pressure_after_ten_same_tier_runs(
+    tmp_path: Path,
+) -> None:
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
     _init_repo(repo)
@@ -1113,7 +1250,11 @@ def test_inspect_workflow_status_high_pressure_after_ten_same_tier_runs(tmp_path
             lane="review_t3",
             base="main",
             reviewed_head=reviewed_head,
-            review_scope={"base": "main", "reviewed_head": reviewed_head, "merge_base": merge_base},
+            review_scope={
+                "base": "main",
+                "reviewed_head": reviewed_head,
+                "merge_base": merge_base,
+            },
             round_id=f"t3-{index}",
         )
 
@@ -1183,10 +1324,15 @@ def test_latest_base_review_context_anchor_matches_branch_base_metadata() -> Non
         },
     }
 
-    assert latest_base_review_context_anchor({"anchors": [anchor]}, requested_base="main") is anchor
+    assert (
+        latest_base_review_context_anchor({"anchors": [anchor]}, requested_base="main")
+        is anchor
+    )
 
 
-def test_inspect_workflow_status_recommends_followup_for_small_delta(tmp_path: Path) -> None:
+def test_inspect_workflow_status_recommends_followup_for_small_delta(
+    tmp_path: Path,
+) -> None:
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
     _init_repo(repo)
@@ -1212,7 +1358,9 @@ def test_inspect_workflow_status_recommends_followup_for_small_delta(tmp_path: P
     assert payload["commits_since_anchor"] == 1
 
 
-def test_inspect_workflow_status_recommends_coherence_for_large_delta(tmp_path: Path) -> None:
+def test_inspect_workflow_status_recommends_coherence_for_large_delta(
+    tmp_path: Path,
+) -> None:
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
     _init_repo(repo)
@@ -1247,11 +1395,15 @@ def test_inspect_workflow_status_escalates_small_delta_when_branch_review_pressu
     _commit_file(repo, "base.txt", "base\n", "initial")
     _git(repo, "checkout", "-b", "feature/pressure")
 
-    latest_reviewed_head = _commit_file(repo, "app.txt", "reviewed\n", "latest reviewed")
+    latest_reviewed_head = _commit_file(
+        repo, "app.txt", "reviewed\n", "latest reviewed"
+    )
     merge_base = _git(repo, "merge-base", "main", "HEAD")
     real_commit_distance = workflow_state_module.commit_distance
 
-    def fake_commit_distance(review_cwd: Path, start_ref: str, end_ref: str = "HEAD") -> int:
+    def fake_commit_distance(
+        review_cwd: Path, start_ref: str, end_ref: str = "HEAD"
+    ) -> int:
         if start_ref == merge_base and end_ref == "HEAD":
             return 25
         return real_commit_distance(review_cwd, start_ref, end_ref)
@@ -1287,7 +1439,9 @@ def test_inspect_workflow_status_escalates_small_delta_when_branch_review_pressu
     assert payload["followup_anchor_count"] >= 5
 
 
-def test_inspect_workflow_status_escalates_after_too_many_followups_since_full_checkpoint(tmp_path: Path) -> None:
+def test_inspect_workflow_status_escalates_after_too_many_followups_since_full_checkpoint(
+    tmp_path: Path,
+) -> None:
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
     _init_repo(repo)
@@ -1301,12 +1455,18 @@ def test_inspect_workflow_status_escalates_after_too_many_followups_since_full_c
         lane="review_t3",
         base="main",
         reviewed_head=checkpoint_head,
-        review_scope={"base": "main", "reviewed_head": checkpoint_head, "merge_base": merge_base_at_checkpoint},
+        review_scope={
+            "base": "main",
+            "reviewed_head": checkpoint_head,
+            "merge_base": merge_base_at_checkpoint,
+        },
     )
 
     previous_head = checkpoint_head
     for index in range(1, 4):
-        next_head = _commit_file(repo, "app.txt", f"followup {index}\n", f"followup {index}")
+        next_head = _commit_file(
+            repo, "app.txt", f"followup {index}\n", f"followup {index}"
+        )
         record_review_anchor(
             state_dir=state_dir,
             review_cwd=repo,
@@ -1336,7 +1496,9 @@ def test_inspect_workflow_status_escalates_after_too_many_followups_since_full_c
     assert payload["last_full_review_lane"] == "review_t3"
 
 
-def test_inspect_workflow_status_clean_t4_resets_followup_cycle_pressure(tmp_path: Path) -> None:
+def test_inspect_workflow_status_clean_t4_resets_followup_cycle_pressure(
+    tmp_path: Path,
+) -> None:
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
     _init_repo(repo)
@@ -1350,12 +1512,18 @@ def test_inspect_workflow_status_clean_t4_resets_followup_cycle_pressure(tmp_pat
         lane="review_t3",
         base="main",
         reviewed_head=checkpoint_head,
-        review_scope={"base": "main", "reviewed_head": checkpoint_head, "merge_base": merge_base_at_checkpoint},
+        review_scope={
+            "base": "main",
+            "reviewed_head": checkpoint_head,
+            "merge_base": merge_base_at_checkpoint,
+        },
     )
 
     previous_head = checkpoint_head
     for index in range(1, 3):
-        next_head = _commit_file(repo, "app.txt", f"followup {index}\n", f"followup {index}")
+        next_head = _commit_file(
+            repo, "app.txt", f"followup {index}\n", f"followup {index}"
+        )
         record_review_anchor(
             state_dir=state_dir,
             review_cwd=repo,
@@ -1375,7 +1543,11 @@ def test_inspect_workflow_status_clean_t4_resets_followup_cycle_pressure(tmp_pat
         lane="review_t4",
         base="main",
         reviewed_head=previous_head,
-        review_scope={"base": "main", "reviewed_head": previous_head, "merge_base": merge_base_at_checkpoint},
+        review_scope={
+            "base": "main",
+            "reviewed_head": previous_head,
+            "merge_base": merge_base_at_checkpoint,
+        },
     )
     next_head = _commit_file(repo, "app.txt", "followup 3\n", "followup 3")
     record_review_anchor(
@@ -1403,7 +1575,9 @@ def test_inspect_workflow_status_clean_t4_resets_followup_cycle_pressure(tmp_pat
     assert "followup_anchor_count_since_full_review" not in payload
 
 
-def test_inspect_workflow_status_github_review_resets_followup_cycle_pressure(tmp_path: Path) -> None:
+def test_inspect_workflow_status_github_review_resets_followup_cycle_pressure(
+    tmp_path: Path,
+) -> None:
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
     _init_repo(repo)
@@ -1417,12 +1591,18 @@ def test_inspect_workflow_status_github_review_resets_followup_cycle_pressure(tm
         lane="review_t4",
         base="main",
         reviewed_head=checkpoint_head,
-        review_scope={"base": "main", "reviewed_head": checkpoint_head, "merge_base": merge_base_at_checkpoint},
+        review_scope={
+            "base": "main",
+            "reviewed_head": checkpoint_head,
+            "merge_base": merge_base_at_checkpoint,
+        },
     )
 
     previous_head = checkpoint_head
     for index in range(1, 4):
-        next_head = _commit_file(repo, "app.txt", f"followup {index}\n", f"followup {index}")
+        next_head = _commit_file(
+            repo, "app.txt", f"followup {index}\n", f"followup {index}"
+        )
         record_review_anchor(
             state_dir=state_dir,
             review_cwd=repo,
@@ -1442,7 +1622,11 @@ def test_inspect_workflow_status_github_review_resets_followup_cycle_pressure(tm
         lane="review-github",
         base="main",
         reviewed_head=previous_head,
-        review_scope={"base": "main", "reviewed_head": previous_head, "merge_base": merge_base_at_checkpoint},
+        review_scope={
+            "base": "main",
+            "reviewed_head": previous_head,
+            "merge_base": merge_base_at_checkpoint,
+        },
     )
     _commit_file(repo, "app.txt", "github fix\n", "fix github finding")
 
@@ -1457,7 +1641,9 @@ def test_inspect_workflow_status_github_review_resets_followup_cycle_pressure(tm
     assert "followup_anchor_count_since_full_review" not in payload
 
 
-def test_inspect_workflow_status_routes_post_t4_findings_back_to_t4(tmp_path: Path) -> None:
+def test_inspect_workflow_status_routes_post_t4_findings_back_to_t4(
+    tmp_path: Path,
+) -> None:
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
     _init_repo(repo)
@@ -1471,7 +1657,11 @@ def test_inspect_workflow_status_routes_post_t4_findings_back_to_t4(tmp_path: Pa
         lane="review_t3",
         base="main",
         reviewed_head=checkpoint_head,
-        review_scope={"base": "main", "reviewed_head": checkpoint_head, "merge_base": merge_base_at_checkpoint},
+        review_scope={
+            "base": "main",
+            "reviewed_head": checkpoint_head,
+            "merge_base": merge_base_at_checkpoint,
+        },
     )
     _write_gate_run(
         state_dir,
@@ -1481,7 +1671,11 @@ def test_inspect_workflow_status_routes_post_t4_findings_back_to_t4(tmp_path: Pa
             "task_id": "feature/post-gate-findings",
             "review_cwd": str(repo),
             "review_cwd_normalized": workflow_state_module.normalize_cwd(str(repo)),
-            "review_scope": {"base": "main", "reviewed_head": checkpoint_head, "merge_base": merge_base_at_checkpoint},
+            "review_scope": {
+                "base": "main",
+                "reviewed_head": checkpoint_head,
+                "merge_base": merge_base_at_checkpoint,
+            },
             "signoff_status": "pending",
             "runs": [{"review_status": "completed"}],
         },
@@ -1489,7 +1683,9 @@ def test_inspect_workflow_status_routes_post_t4_findings_back_to_t4(tmp_path: Pa
 
     previous_head = checkpoint_head
     for index in range(1, 4):
-        next_head = _commit_file(repo, "app.txt", f"followup {index}\n", f"followup {index}")
+        next_head = _commit_file(
+            repo, "app.txt", f"followup {index}\n", f"followup {index}"
+        )
         record_review_anchor(
             state_dir=state_dir,
             review_cwd=repo,
@@ -1517,7 +1713,9 @@ def test_inspect_workflow_status_routes_post_t4_findings_back_to_t4(tmp_path: Pa
     assert "Run review_t4 as the fresh full-diff lane" in payload["note"]
 
 
-def test_inspect_workflow_status_recommends_full_review_when_anchor_is_not_ancestor(tmp_path: Path) -> None:
+def test_inspect_workflow_status_recommends_full_review_when_anchor_is_not_ancestor(
+    tmp_path: Path,
+) -> None:
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
     _init_repo(repo)
@@ -1544,7 +1742,9 @@ def test_inspect_workflow_status_recommends_full_review_when_anchor_is_not_ances
     assert payload["reason"] == "review_anchor_not_ancestor"
 
 
-def test_inspect_workflow_status_keeps_t4_stage_when_anchor_is_rewritten(tmp_path: Path) -> None:
+def test_inspect_workflow_status_keeps_t4_stage_when_anchor_is_rewritten(
+    tmp_path: Path,
+) -> None:
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
     _init_repo(repo)
@@ -1586,7 +1786,9 @@ def test_inspect_workflow_status_keeps_t4_stage_when_anchor_is_rewritten(tmp_pat
     assert payload["current_stage_lane"] == "review_t4"
 
 
-def test_inspect_workflow_status_accepts_non_overlapping_equivalent_merge_base_drift(tmp_path: Path) -> None:
+def test_inspect_workflow_status_accepts_non_overlapping_equivalent_merge_base_drift(
+    tmp_path: Path,
+) -> None:
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
     _init_repo(repo)
@@ -1599,7 +1801,11 @@ def test_inspect_workflow_status_accepts_non_overlapping_equivalent_merge_base_d
         lane="review_t3",
         base="main",
         reviewed_head=reviewed_head,
-        review_scope={"base": "main", "reviewed_head": reviewed_head, "merge_base": base_at_review},
+        review_scope={
+            "base": "main",
+            "reviewed_head": reviewed_head,
+            "merge_base": base_at_review,
+        },
     )
     _git(repo, "checkout", "main")
     _commit_file(repo, "base.txt", "one\ntwo\n", "main moves")
@@ -1618,7 +1824,9 @@ def test_inspect_workflow_status_accepts_non_overlapping_equivalent_merge_base_d
     assert payload["base_drift_overlap_paths"] == []
 
 
-def test_inspect_workflow_status_recommends_full_review_when_merge_base_drift_overlaps_branch_paths(tmp_path: Path) -> None:
+def test_inspect_workflow_status_recommends_full_review_when_merge_base_drift_overlaps_branch_paths(
+    tmp_path: Path,
+) -> None:
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
     _init_repo(repo)
@@ -1631,7 +1839,11 @@ def test_inspect_workflow_status_recommends_full_review_when_merge_base_drift_ov
         lane="review_t3",
         base="main",
         reviewed_head=reviewed_head,
-        review_scope={"base": "main", "reviewed_head": reviewed_head, "merge_base": base_at_review},
+        review_scope={
+            "base": "main",
+            "reviewed_head": reviewed_head,
+            "merge_base": base_at_review,
+        },
     )
     _git(repo, "checkout", "main")
     _commit_file(repo, "app.txt", "one\nmain\n", "main moves")
@@ -1649,7 +1861,9 @@ def test_inspect_workflow_status_recommends_full_review_when_merge_base_drift_ov
     assert payload["base_drift_overlap_paths"] == ["app.txt"]
 
 
-def test_inspect_workflow_status_uses_latest_base_review_context_after_followup(tmp_path: Path) -> None:
+def test_inspect_workflow_status_uses_latest_base_review_context_after_followup(
+    tmp_path: Path,
+) -> None:
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
     _init_repo(repo)
@@ -1664,7 +1878,11 @@ def test_inspect_workflow_status_uses_latest_base_review_context_after_followup(
         lane="review_t1",
         base="main",
         reviewed_head=reviewed_head,
-        review_scope={"base": "main", "reviewed_head": reviewed_head, "merge_base": current_base},
+        review_scope={
+            "base": "main",
+            "reviewed_head": reviewed_head,
+            "merge_base": current_base,
+        },
     )
     final_head = _commit_file(repo, "feature.txt", "feat\nfix\n", "followup fix")
     record_review_anchor(
@@ -1691,7 +1909,9 @@ def test_inspect_workflow_status_uses_latest_base_review_context_after_followup(
     assert payload["recorded_merge_base"] == current_base
 
 
-def test_commit_only_review_anchor_does_not_advance_branch_review_state(tmp_path: Path) -> None:
+def test_commit_only_review_anchor_does_not_advance_branch_review_state(
+    tmp_path: Path,
+) -> None:
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
     _init_repo(repo)
@@ -1725,7 +1945,9 @@ def test_commit_only_review_anchor_does_not_advance_branch_review_state(tmp_path
     assert payload["last_reviewed_head"] == reviewed_head
 
 
-def test_inspect_workflow_status_falls_back_to_older_valid_branch_anchor(tmp_path: Path) -> None:
+def test_inspect_workflow_status_falls_back_to_older_valid_branch_anchor(
+    tmp_path: Path,
+) -> None:
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
     _init_repo(repo)
@@ -1762,7 +1984,9 @@ def test_inspect_workflow_status_falls_back_to_older_valid_branch_anchor(tmp_pat
     assert payload["last_reviewed_head"] == reviewed_head
 
 
-def test_commit_only_review_anchor_overrides_older_branch_anchor_when_it_is_closer_to_head(tmp_path: Path) -> None:
+def test_commit_only_review_anchor_overrides_older_branch_anchor_when_it_is_closer_to_head(
+    tmp_path: Path,
+) -> None:
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
     _init_repo(repo)
@@ -1796,7 +2020,9 @@ def test_commit_only_review_anchor_overrides_older_branch_anchor_when_it_is_clos
     assert payload["last_reviewed_lane"] == "review_t1"
 
 
-def test_commit_only_review_anchor_bootstraps_when_no_branch_anchor_exists(tmp_path: Path) -> None:
+def test_commit_only_review_anchor_bootstraps_when_no_branch_anchor_exists(
+    tmp_path: Path,
+) -> None:
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
     _init_repo(repo)
@@ -1820,7 +2046,9 @@ def test_commit_only_review_anchor_bootstraps_when_no_branch_anchor_exists(tmp_p
     assert payload["last_reviewed_head"] == reviewed_head
 
 
-def test_inspect_workflow_status_recommends_followup_for_dirty_same_head(tmp_path: Path) -> None:
+def test_inspect_workflow_status_recommends_followup_for_dirty_same_head(
+    tmp_path: Path,
+) -> None:
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
     _init_repo(repo)
@@ -1850,7 +2078,9 @@ def test_inspect_workflow_status_recommends_followup_for_dirty_same_head(tmp_pat
     assert payload["last_reviewed_head"] == reviewed_head
 
 
-def test_inspect_workflow_status_ignores_dirty_paths_outside_branch_diff_on_same_head(tmp_path: Path) -> None:
+def test_inspect_workflow_status_ignores_dirty_paths_outside_branch_diff_on_same_head(
+    tmp_path: Path,
+) -> None:
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
     _init_repo(repo)
@@ -1863,7 +2093,11 @@ def test_inspect_workflow_status_ignores_dirty_paths_outside_branch_diff_on_same
         lane="review_t3",
         base="main",
         reviewed_head=reviewed_head,
-        review_scope={"base": "main", "reviewed_head": reviewed_head, "merge_base": _git(repo, "merge-base", "main", "HEAD")},
+        review_scope={
+            "base": "main",
+            "reviewed_head": reviewed_head,
+            "merge_base": _git(repo, "merge-base", "main", "HEAD"),
+        },
     )
     (repo / "docs.md").write_text("notes\n", encoding="utf-8")
 
@@ -1880,7 +2114,9 @@ def test_inspect_workflow_status_ignores_dirty_paths_outside_branch_diff_on_same
     assert payload["ignored_dirty_paths"] == ["docs.md"]
 
 
-def test_inspect_workflow_status_keeps_quoted_dirty_branch_paths_related(tmp_path: Path) -> None:
+def test_inspect_workflow_status_keeps_quoted_dirty_branch_paths_related(
+    tmp_path: Path,
+) -> None:
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
     _init_repo(repo)
@@ -1893,7 +2129,11 @@ def test_inspect_workflow_status_keeps_quoted_dirty_branch_paths_related(tmp_pat
         lane="review_t3",
         base="main",
         reviewed_head=reviewed_head,
-        review_scope={"base": "main", "reviewed_head": reviewed_head, "merge_base": _git(repo, "merge-base", "main", "HEAD")},
+        review_scope={
+            "base": "main",
+            "reviewed_head": reviewed_head,
+            "merge_base": _git(repo, "merge-base", "main", "HEAD"),
+        },
     )
     (repo / "src" / "a b.txt").write_text("feature\ndirty\n", encoding="utf-8")
 
@@ -1908,7 +2148,9 @@ def test_inspect_workflow_status_keeps_quoted_dirty_branch_paths_related(tmp_pat
     assert payload["top_paths"][0].startswith("src/a b.txt ")
 
 
-def test_inspect_workflow_status_recommends_full_review_when_merge_base_is_unresolvable(tmp_path: Path) -> None:
+def test_inspect_workflow_status_recommends_full_review_when_merge_base_is_unresolvable(
+    tmp_path: Path,
+) -> None:
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
     _init_repo(repo)
@@ -1919,7 +2161,11 @@ def test_inspect_workflow_status_recommends_full_review_when_merge_base_is_unres
         lane="review_t3",
         base="missing-base",
         reviewed_head=reviewed_head,
-        review_scope={"base": "missing-base", "reviewed_head": reviewed_head, "merge_base": reviewed_head},
+        review_scope={
+            "base": "missing-base",
+            "reviewed_head": reviewed_head,
+            "merge_base": reviewed_head,
+        },
     )
 
     payload = inspect_workflow_status(
@@ -1932,7 +2178,9 @@ def test_inspect_workflow_status_recommends_full_review_when_merge_base_is_unres
     assert payload["reason"] == "base_merge_base_unresolvable"
 
 
-def test_inspect_workflow_status_honors_requested_base_over_stored_base(tmp_path: Path) -> None:
+def test_inspect_workflow_status_honors_requested_base_over_stored_base(
+    tmp_path: Path,
+) -> None:
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
     _init_repo(repo)
@@ -1945,7 +2193,11 @@ def test_inspect_workflow_status_honors_requested_base_over_stored_base(tmp_path
         lane="review_t3",
         base="main",
         reviewed_head=reviewed_head,
-        review_scope={"base": "main", "reviewed_head": reviewed_head, "merge_base": base_at_review},
+        review_scope={
+            "base": "main",
+            "reviewed_head": reviewed_head,
+            "merge_base": base_at_review,
+        },
     )
     _git(repo, "checkout", "-b", "release/x")
     _git(repo, "checkout", "feature/test")
@@ -1960,7 +2212,9 @@ def test_inspect_workflow_status_honors_requested_base_over_stored_base(tmp_path
     assert payload["reason"] == "base_merge_base_changed"
 
 
-def test_inspect_workflow_status_uses_effective_base_when_requested_base_matches_metadata(tmp_path: Path) -> None:
+def test_inspect_workflow_status_uses_effective_base_when_requested_base_matches_metadata(
+    tmp_path: Path,
+) -> None:
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
     _init_repo(repo)
@@ -1994,7 +2248,9 @@ def test_inspect_workflow_status_uses_effective_base_when_requested_base_matches
     assert payload["current_merge_base"] == new_main
 
 
-def test_inspect_workflow_status_uses_branch_base_for_followup_anchor_context(tmp_path: Path) -> None:
+def test_inspect_workflow_status_uses_branch_base_for_followup_anchor_context(
+    tmp_path: Path,
+) -> None:
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
     _init_repo(repo)
@@ -2027,7 +2283,9 @@ def test_inspect_workflow_status_uses_branch_base_for_followup_anchor_context(tm
     assert payload["current_merge_base"] == branch_base
 
 
-def test_workflow_state_path_disambiguates_slug_colliding_branch_names(tmp_path: Path) -> None:
+def test_workflow_state_path_disambiguates_slug_colliding_branch_names(
+    tmp_path: Path,
+) -> None:
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
     _init_repo(repo)
@@ -2054,7 +2312,9 @@ def test_branch_token_for_detached_head_includes_head_sha() -> None:
     assert branch_token(None, "def987654321") == "detached-def987654321"
 
 
-def test_inspect_workflow_status_preserves_detached_head_state_after_new_commit(tmp_path: Path) -> None:
+def test_inspect_workflow_status_preserves_detached_head_state_after_new_commit(
+    tmp_path: Path,
+) -> None:
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
     _init_repo(repo)
@@ -2080,13 +2340,17 @@ def test_inspect_workflow_status_preserves_detached_head_state_after_new_commit(
     assert payload["last_reviewed_head"] == reviewed_head
 
 
-def test_inspect_workflow_status_does_not_reuse_unrelated_detached_head_state(tmp_path: Path) -> None:
+def test_inspect_workflow_status_does_not_reuse_unrelated_detached_head_state(
+    tmp_path: Path,
+) -> None:
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
     _init_repo(repo)
     base_head = _commit_file(repo, "app.txt", "one\n", "initial")
     _git(repo, "checkout", base_head)
-    detached_reviewed_head = _commit_file(repo, "app.txt", "one\ndetached\n", "detached review")
+    detached_reviewed_head = _commit_file(
+        repo, "app.txt", "one\ndetached\n", "detached review"
+    )
     record_review_anchor(
         state_dir=state_dir,
         review_cwd=repo,
@@ -2109,7 +2373,9 @@ def test_inspect_workflow_status_does_not_reuse_unrelated_detached_head_state(tm
     assert payload["reason"] == "no_review_anchor"
 
 
-def test_record_review_anchor_uses_branch_scoped_lock(monkeypatch, tmp_path: Path) -> None:
+def test_record_review_anchor_uses_branch_scoped_lock(
+    monkeypatch, tmp_path: Path
+) -> None:
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
     _init_repo(repo)
@@ -2123,7 +2389,9 @@ def test_record_review_anchor_uses_branch_scoped_lock(monkeypatch, tmp_path: Pat
         def __exit__(self, exc_type, exc, tb) -> None:
             entered.append("exit")
 
-    monkeypatch.setattr(workflow_state_module, "workflow_state_lock", lambda **kwargs: _Lock())
+    monkeypatch.setattr(
+        workflow_state_module, "workflow_state_lock", lambda **kwargs: _Lock()
+    )
 
     record_review_anchor(
         state_dir=state_dir,
@@ -2137,7 +2405,9 @@ def test_record_review_anchor_uses_branch_scoped_lock(monkeypatch, tmp_path: Pat
     assert entered == ["enter", "exit"]
 
 
-def test_review_state_status_does_not_route_coherence_to_review_deslop(monkeypatch, tmp_path: Path) -> None:
+def test_review_state_status_does_not_route_coherence_to_review_deslop(
+    monkeypatch, tmp_path: Path
+) -> None:
     emitted: list[dict[str, object]] = []
 
     monkeypatch.setattr(review_state, "resolve_repo_root", lambda cd: tmp_path)
@@ -2149,7 +2419,9 @@ def test_review_state_status_does_not_route_coherence_to_review_deslop(monkeypat
             "recommendation": "coherence-review",
         },
     )
-    monkeypatch.setattr(review_state, "emit_toon", lambda payload: emitted.append(payload))
+    monkeypatch.setattr(
+        review_state, "emit_toon", lambda payload: emitted.append(payload)
+    )
     monkeypatch.setattr(sys, "argv", ["review.py", "--status", "--base", "main"])
 
     exit_code = review.main()
@@ -2161,7 +2433,9 @@ def test_review_state_status_does_not_route_coherence_to_review_deslop(monkeypat
     assert "review-deslop" not in str(emitted[0]["Action"])
 
 
-def test_review_state_status_routes_stage_full_review_lane(monkeypatch, tmp_path: Path) -> None:
+def test_review_state_status_routes_stage_full_review_lane(
+    monkeypatch, tmp_path: Path
+) -> None:
     emitted: list[dict[str, object]] = []
     state_dir = tmp_path / "state"
 
@@ -2176,7 +2450,9 @@ def test_review_state_status_routes_stage_full_review_lane(monkeypatch, tmp_path
         },
     )
     _use_default_state_dir(monkeypatch, state_dir)
-    monkeypatch.setattr(review_state, "emit_toon", lambda payload: emitted.append(payload))
+    monkeypatch.setattr(
+        review_state, "emit_toon", lambda payload: emitted.append(payload)
+    )
     monkeypatch.setattr(sys, "argv", ["review.py", "--status", "--base", "main"])
 
     exit_code = review.main()
@@ -2204,7 +2480,9 @@ def test_review_state_status_adds_followup_action(monkeypatch, tmp_path: Path) -
         },
     )
     _use_default_state_dir(monkeypatch, state_dir)
-    monkeypatch.setattr(review_state, "emit_toon", lambda payload: emitted.append(payload))
+    monkeypatch.setattr(
+        review_state, "emit_toon", lambda payload: emitted.append(payload)
+    )
     monkeypatch.setattr(sys, "argv", ["review.py", "--status", "--base", "main"])
 
     exit_code = review.main()
@@ -2220,7 +2498,9 @@ def test_review_state_status_adds_followup_action(monkeypatch, tmp_path: Path) -
     assert "--cd" not in cmd
 
 
-def test_review_state_status_routes_dirty_followup_to_commit_instruction(monkeypatch, tmp_path: Path) -> None:
+def test_review_state_status_routes_dirty_followup_to_commit_instruction(
+    monkeypatch, tmp_path: Path
+) -> None:
     emitted: list[dict[str, object]] = []
     state_dir = tmp_path / "state"
 
@@ -2236,7 +2516,9 @@ def test_review_state_status_routes_dirty_followup_to_commit_instruction(monkeyp
         },
     )
     _use_default_state_dir(monkeypatch, state_dir)
-    monkeypatch.setattr(review_state, "emit_toon", lambda payload: emitted.append(payload))
+    monkeypatch.setattr(
+        review_state, "emit_toon", lambda payload: emitted.append(payload)
+    )
     monkeypatch.setattr(sys, "argv", ["review.py", "--status", "--base", "main"])
 
     exit_code = review.main()
@@ -2247,7 +2529,9 @@ def test_review_state_status_routes_dirty_followup_to_commit_instruction(monkeyp
     assert "Commit intended follow-up changes" in str(emitted[0]["Action"]["note"])
 
 
-def test_review_state_status_routes_pending_gate_signoff_decision(monkeypatch, tmp_path: Path) -> None:
+def test_review_state_status_routes_pending_gate_signoff_decision(
+    monkeypatch, tmp_path: Path
+) -> None:
     emitted: list[dict[str, object]] = []
     state_dir = tmp_path / "state"
     repo = tmp_path / "repo"
@@ -2297,7 +2581,9 @@ def test_review_state_status_routes_pending_gate_signoff_decision(monkeypatch, t
         },
     )
     _use_default_state_dir(monkeypatch, state_dir)
-    monkeypatch.setattr(review_state, "emit_toon", lambda payload: emitted.append(payload))
+    monkeypatch.setattr(
+        review_state, "emit_toon", lambda payload: emitted.append(payload)
+    )
     monkeypatch.setattr(sys, "argv", ["review.py", "--status", "--base", "main"])
 
     exit_code = review.main()
@@ -2313,7 +2599,9 @@ def test_review_state_status_routes_pending_gate_signoff_decision(monkeypatch, t
     assert emitted[0]["Action"]["verdict"] == ["clean", "findings"]
 
 
-def test_review_state_status_keeps_pending_gate_signoff_visible_after_amend(monkeypatch, tmp_path: Path) -> None:
+def test_review_state_status_keeps_pending_gate_signoff_visible_after_amend(
+    monkeypatch, tmp_path: Path
+) -> None:
     emitted: list[dict[str, object]] = []
     state_dir = tmp_path / "state"
     repo = tmp_path / "repo"
@@ -2332,8 +2620,18 @@ def test_review_state_status_keeps_pending_gate_signoff_visible_after_amend(monk
                 "signoff_status": "pending",
                 "signoff_required": True,
                 "runs": [
-                    {"slot": "alpha", "variant_id": "alpha-model", "review_status": "completed", "grade_blocked": False},
-                    {"slot": "bravo", "variant_id": "bravo-model", "review_status": "completed", "grade_blocked": False},
+                    {
+                        "slot": "alpha",
+                        "variant_id": "alpha-model",
+                        "review_status": "completed",
+                        "grade_blocked": False,
+                    },
+                    {
+                        "slot": "bravo",
+                        "variant_id": "bravo-model",
+                        "review_status": "completed",
+                        "grade_blocked": False,
+                    },
                 ],
             }
         )
@@ -2353,7 +2651,9 @@ def test_review_state_status_keeps_pending_gate_signoff_visible_after_amend(monk
         },
     )
     _use_default_state_dir(monkeypatch, state_dir)
-    monkeypatch.setattr(review_state, "emit_toon", lambda payload: emitted.append(payload))
+    monkeypatch.setattr(
+        review_state, "emit_toon", lambda payload: emitted.append(payload)
+    )
     monkeypatch.setattr(sys, "argv", ["review.py", "--status", "--base", "main"])
 
     exit_code = review.main()
@@ -2367,12 +2667,16 @@ def test_review_state_status_keeps_pending_gate_signoff_visible_after_amend(monk
     assert "Reviewed head moved" in str(emitted[0]["note"])
 
 
-def test_review_state_status_adds_fix_gate_findings_action(monkeypatch, tmp_path: Path) -> None:
+def test_review_state_status_adds_fix_gate_findings_action(
+    monkeypatch, tmp_path: Path
+) -> None:
     emitted: list[dict[str, object]] = []
     repo = tmp_path / "repo"
 
     monkeypatch.setattr(review_state, "resolve_repo_root", lambda cd: repo)
-    monkeypatch.setattr(review_state, "pending_gate_signoff_records", lambda **kwargs: [])
+    monkeypatch.setattr(
+        review_state, "pending_gate_signoff_records", lambda **kwargs: []
+    )
     monkeypatch.setattr(
         review_state,
         "inspect_workflow_status",
@@ -2385,7 +2689,9 @@ def test_review_state_status_adds_fix_gate_findings_action(monkeypatch, tmp_path
         },
     )
     _use_default_state_dir(monkeypatch, tmp_path / "state")
-    monkeypatch.setattr(review_state, "emit_toon", lambda payload: emitted.append(payload))
+    monkeypatch.setattr(
+        review_state, "emit_toon", lambda payload: emitted.append(payload)
+    )
     monkeypatch.setattr(sys, "argv", ["review.py", "--status", "--base", "main"])
 
     exit_code = review.main()
@@ -2396,7 +2702,9 @@ def test_review_state_status_adds_fix_gate_findings_action(monkeypatch, tmp_path
     assert "show-round" in str(emitted[0]["Action"]["show_cmd"])
 
 
-def test_review_state_status_routes_t4_findings_followup_back_to_t4(monkeypatch, tmp_path: Path) -> None:
+def test_review_state_status_routes_t4_findings_followup_back_to_t4(
+    monkeypatch, tmp_path: Path
+) -> None:
     emitted: list[dict[str, object]] = []
     state_dir = tmp_path / "state"
     repo = tmp_path / "repo"
@@ -2415,8 +2723,18 @@ def test_review_state_status_routes_t4_findings_followup_back_to_t4(monkeypatch,
             "signoff_status": "pending",
             "signoff_required": True,
             "runs": [
-                {"slot": "alpha", "variant_id": "alpha-model", "review_status": "completed", "grade_blocked": False},
-                {"slot": "bravo", "variant_id": "bravo-model", "review_status": "completed", "grade_blocked": False},
+                {
+                    "slot": "alpha",
+                    "variant_id": "alpha-model",
+                    "review_status": "completed",
+                    "grade_blocked": False,
+                },
+                {
+                    "slot": "bravo",
+                    "variant_id": "bravo-model",
+                    "review_status": "completed",
+                    "grade_blocked": False,
+                },
             ],
         },
     )
@@ -2448,7 +2766,9 @@ def test_review_state_status_routes_t4_findings_followup_back_to_t4(monkeypatch,
         },
     )
     _use_default_state_dir(monkeypatch, state_dir)
-    monkeypatch.setattr(review_state, "emit_toon", lambda payload: emitted.append(payload))
+    monkeypatch.setattr(
+        review_state, "emit_toon", lambda payload: emitted.append(payload)
+    )
     monkeypatch.setattr(sys, "argv", ["review.py", "--status", "--base", "main"])
 
     exit_code = review.main()
@@ -2463,7 +2783,9 @@ def test_review_state_status_routes_t4_findings_followup_back_to_t4(monkeypatch,
     assert "review_t4.py" not in str(emitted[0]["Action"])
 
 
-def test_review_state_status_routes_t2_findings_followup_back_to_t2(monkeypatch, tmp_path: Path) -> None:
+def test_review_state_status_routes_t2_findings_followup_back_to_t2(
+    monkeypatch, tmp_path: Path
+) -> None:
     emitted: list[dict[str, object]] = []
     state_dir = tmp_path / "state"
     repo = tmp_path / "repo"
@@ -2482,8 +2804,18 @@ def test_review_state_status_routes_t2_findings_followup_back_to_t2(monkeypatch,
             "signoff_status": "pending",
             "signoff_required": True,
             "runs": [
-                {"slot": "alpha", "variant_id": "alpha-model", "review_status": "completed", "grade_blocked": False},
-                {"slot": "bravo", "variant_id": "bravo-model", "review_status": "completed", "grade_blocked": False},
+                {
+                    "slot": "alpha",
+                    "variant_id": "alpha-model",
+                    "review_status": "completed",
+                    "grade_blocked": False,
+                },
+                {
+                    "slot": "bravo",
+                    "variant_id": "bravo-model",
+                    "review_status": "completed",
+                    "grade_blocked": False,
+                },
             ],
         },
     )
@@ -2515,7 +2847,9 @@ def test_review_state_status_routes_t2_findings_followup_back_to_t2(monkeypatch,
         },
     )
     _use_default_state_dir(monkeypatch, state_dir)
-    monkeypatch.setattr(review_state, "emit_toon", lambda payload: emitted.append(payload))
+    monkeypatch.setattr(
+        review_state, "emit_toon", lambda payload: emitted.append(payload)
+    )
     monkeypatch.setattr(sys, "argv", ["review.py", "--status", "--base", "main"])
 
     exit_code = review.main()
@@ -2530,7 +2864,9 @@ def test_review_state_status_routes_t2_findings_followup_back_to_t2(monkeypatch,
     assert "review_t2.py" not in str(emitted[0]["Action"])
 
 
-def test_review_state_status_ignores_legacy_pending_grade_for_caller(monkeypatch, tmp_path: Path) -> None:
+def test_review_state_status_ignores_legacy_pending_grade_for_caller(
+    monkeypatch, tmp_path: Path
+) -> None:
     emitted: list[dict[str, object]] = []
     state_dir = tmp_path / "state"
 
@@ -2545,7 +2881,9 @@ def test_review_state_status_ignores_legacy_pending_grade_for_caller(monkeypatch
         },
     )
     _use_default_state_dir(monkeypatch, state_dir)
-    monkeypatch.setattr(review_state, "emit_toon", lambda payload: emitted.append(payload))
+    monkeypatch.setattr(
+        review_state, "emit_toon", lambda payload: emitted.append(payload)
+    )
     monkeypatch.setattr(sys, "argv", ["review.py", "--status", "--base", "main"])
 
     exit_code = review.main()
@@ -2559,7 +2897,9 @@ def test_review_state_status_ignores_legacy_pending_grade_for_caller(monkeypatch
     assert "review_suite_arena.py" not in str(emitted[0]["Action"])
 
 
-def test_review_state_status_ignores_legacy_running_round_for_caller(monkeypatch, tmp_path: Path) -> None:
+def test_review_state_status_ignores_legacy_running_round_for_caller(
+    monkeypatch, tmp_path: Path
+) -> None:
     emitted: list[dict[str, object]] = []
     state_dir = tmp_path / "state"
 
@@ -2574,7 +2914,9 @@ def test_review_state_status_ignores_legacy_running_round_for_caller(monkeypatch
         },
     )
     _use_default_state_dir(monkeypatch, state_dir)
-    monkeypatch.setattr(review_state, "emit_toon", lambda payload: emitted.append(payload))
+    monkeypatch.setattr(
+        review_state, "emit_toon", lambda payload: emitted.append(payload)
+    )
     monkeypatch.setattr(sys, "argv", ["review.py", "--status", "--base", "main"])
 
     exit_code = review.main()

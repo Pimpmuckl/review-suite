@@ -43,7 +43,10 @@ def _make_cache_plugin(codex_home: Path, *, version: str = "1.2.3") -> Path:
         json.dumps({"name": "review-suite", "version": version}),
     )
     _write(plugin_root / "scripts" / "review.py", "print('review')\n")
-    _write(plugin_root / "scripts" / "review_suite_runtime_bootstrap.py", "print('bootstrap')\n")
+    _write(
+        plugin_root / "scripts" / "review_suite_runtime_bootstrap.py",
+        "print('bootstrap')\n",
+    )
     _write(plugin_root / "references" / "default_config.json", "{}\n")
     _write(plugin_root / "assets" / "logo.txt", "asset\n")
     return plugin_root
@@ -145,7 +148,9 @@ def test_runtime_directory_is_created_and_reused(tmp_path: Path) -> None:
 
     assert first_root == second_root
     assert first_root.name.startswith("1.2.3-")
-    assert (first_root / "scripts" / "review.py").read_text(encoding="utf-8") == "print('review')\n"
+    assert (first_root / "scripts" / "review.py").read_text(
+        encoding="utf-8"
+    ) == "print('review')\n"
     assert (first_root / "references" / "default_config.json").is_file()
     metadata = json.loads((first_root / METADATA_FILENAME).read_text(encoding="utf-8"))
     assert metadata["source_path"] == str(plugin_root.resolve(strict=False))
@@ -155,7 +160,9 @@ def test_runtime_directory_is_created_and_reused(tmp_path: Path) -> None:
     assert list(first_root.parent.glob("*.tmp.*")) == []
 
 
-def test_runtime_reuse_does_not_stage_copy(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_runtime_reuse_does_not_stage_copy(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     codex_home = tmp_path / "codex"
     plugin_root = _make_cache_plugin(codex_home)
     runtime_root = ensure_runtime_copy(plugin_root, codex_home=codex_home)
@@ -209,7 +216,9 @@ def test_runtime_hash_ignores_volatile_state(tmp_path: Path) -> None:
     plugin_root = _make_cache_plugin(codex_home)
     initial_hash = content_hash_for_runtime(plugin_root)
 
-    _write(plugin_root / "scripts" / "__pycache__" / "review.cpython-311.pyc", "bytecode")
+    _write(
+        plugin_root / "scripts" / "__pycache__" / "review.cpython-311.pyc", "bytecode"
+    )
     _write(plugin_root / ".pytest_cache" / "README.md", "cache")
 
     assert content_hash_for_runtime(plugin_root) == initial_hash
@@ -224,25 +233,39 @@ def test_runtime_key_matches_staged_copy_when_source_changes_during_install(
     original_copy = runtime_bootstrap._copy_runtime_items
 
     def copy_then_mutate_source(source_root: Path, temp_root: Path) -> None:
-        _write(source_root / ".codex-plugin" / "plugin.json", json.dumps({"name": "review-suite", "version": "9.9.9"}))
+        _write(
+            source_root / ".codex-plugin" / "plugin.json",
+            json.dumps({"name": "review-suite", "version": "9.9.9"}),
+        )
         original_copy(source_root, temp_root)
         _write(source_root / "scripts" / "review.py", "print('changed after copy')\n")
 
-    monkeypatch.setattr(runtime_bootstrap, "_copy_runtime_items", copy_then_mutate_source)
+    monkeypatch.setattr(
+        runtime_bootstrap, "_copy_runtime_items", copy_then_mutate_source
+    )
 
     runtime_root = ensure_runtime_copy(plugin_root, codex_home=codex_home)
-    metadata = json.loads((runtime_root / METADATA_FILENAME).read_text(encoding="utf-8"))
+    metadata = json.loads(
+        (runtime_root / METADATA_FILENAME).read_text(encoding="utf-8")
+    )
 
     assert metadata["content_hash"] == content_hash_for_runtime(runtime_root)
     assert metadata["content_hash"] != content_hash_for_runtime(plugin_root)
     assert metadata["version"] == "9.9.9"
     assert runtime_root.name.startswith("9.9.9-")
-    assert (runtime_root / "scripts" / "review.py").read_text(encoding="utf-8") == "print('review')\n"
+    assert (runtime_root / "scripts" / "review.py").read_text(
+        encoding="utf-8"
+    ) == "print('review')\n"
 
 
-def test_prepare_runtime_bootstrap_returns_none_outside_installed_cache(tmp_path: Path) -> None:
+def test_prepare_runtime_bootstrap_returns_none_outside_installed_cache(
+    tmp_path: Path,
+) -> None:
     source_root = tmp_path / "repo" / "plugins" / "review-suite"
-    _write(source_root / ".codex-plugin" / "plugin.json", json.dumps({"name": "review-suite", "version": "1.2.3"}))
+    _write(
+        source_root / ".codex-plugin" / "plugin.json",
+        json.dumps({"name": "review-suite", "version": "1.2.3"}),
+    )
     _write(source_root / "scripts" / "review.py", "print('review')\n")
 
     plan = prepare_runtime_bootstrap(
@@ -284,8 +307,12 @@ def test_action_command_helpers_use_launcher_paths_after_reexec(
     monkeypatch.setenv(runtime_bootstrap.LAUNCHER_SCRIPT_ENV, str(launcher_script))
 
     commands = [
-        review_suite_arena._grade_command(round_id="round", state_dir=tmp_path / "state"),
-        review_gate.gate_signoff_action_payload(round_id="round", state_dir=tmp_path / "state")["cmd"],
+        review_suite_arena._grade_command(
+            round_id="round", state_dir=tmp_path / "state"
+        ),
+        review_gate.gate_signoff_action_payload(
+            round_id="round", state_dir=tmp_path / "state"
+        )["cmd"],
         _review_status_command(review_cwd=tmp_path, base="main"),
     ]
     command_text = "\n".join(commands).replace("\\", "/")

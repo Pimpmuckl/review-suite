@@ -101,7 +101,9 @@ def _parse_iso(value: str | None) -> datetime | None:
     if not value:
         return None
     try:
-        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).astimezone(timezone.utc)
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).astimezone(
+            timezone.utc
+        )
     except ValueError:
         return None
 
@@ -151,7 +153,11 @@ def _run_cost(run: dict[str, Any]) -> float:
         return float(cost)
     model_name = _run_model_name(run)
     usage = dict(run.get("usage") or {})
-    return _price_from_usage(model_name, usage) or _price_from_total_tokens(model_name, _run_tokens(run)) or 0.0
+    return (
+        _price_from_usage(model_name, usage)
+        or _price_from_total_tokens(model_name, _run_tokens(run))
+        or 0.0
+    )
 
 
 def _default_codex_home() -> Path:
@@ -194,11 +200,12 @@ def _price_from_total_tokens(model_name: str, total_tokens: int) -> float | None
     pricing = MODEL_PRICING_PER_MILLION.get(model_name)
     if not pricing:
         return None
-    effective_input_rate = (
-        ((1 - HEURISTIC_CACHE_HIT_RATE) * pricing["input"])
-        + (HEURISTIC_CACHE_HIT_RATE * pricing["cached_input"])
+    effective_input_rate = ((1 - HEURISTIC_CACHE_HIT_RATE) * pricing["input"]) + (
+        HEURISTIC_CACHE_HIT_RATE * pricing["cached_input"]
     )
-    rate = (HEURISTIC_INPUT_FRACTION * effective_input_rate) + (HEURISTIC_OUTPUT_FRACTION * pricing["output"])
+    rate = (HEURISTIC_INPUT_FRACTION * effective_input_rate) + (
+        HEURISTIC_OUTPUT_FRACTION * pricing["output"]
+    )
     return (total_tokens / 1_000_000) * rate
 
 
@@ -222,7 +229,9 @@ def _read_rollout_usage(rollout_path: str | None) -> dict[str, int] | None:
                 if position > 0 and lines:
                     lines = lines[1:]
                 for raw_line in reversed(lines):
-                    usage = _usage_from_rollout_line(raw_line.decode("utf-8", errors="replace"))
+                    usage = _usage_from_rollout_line(
+                        raw_line.decode("utf-8", errors="replace")
+                    )
                     if usage is not None:
                         return usage
     except OSError:
@@ -240,25 +249,41 @@ def _read_rollout_model_metadata(rollout_path: str | None) -> dict[str, str]:
     try:
         with path.open("r", encoding="utf-8", errors="replace") as handle:
             for line in handle:
-                if not line.strip() or ("model" not in line and "effort" not in line and "reasoning_effort" not in line):
+                if not line.strip() or (
+                    "model" not in line
+                    and "effort" not in line
+                    and "reasoning_effort" not in line
+                ):
                     continue
                 try:
                     obj = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                if obj.get("type") == "turn_context" and isinstance(obj.get("payload"), dict):
+                if obj.get("type") == "turn_context" and isinstance(
+                    obj.get("payload"), dict
+                ):
                     payload = obj["payload"]
                     if payload.get("model") and not metadata.get("model"):
                         metadata["model"] = str(payload["model"])
                     if payload.get("effort") and not metadata.get("reasoning_effort"):
                         metadata["reasoning_effort"] = str(payload["effort"])
-                    settings = payload.get("collaboration_mode", {}).get("settings") if isinstance(payload.get("collaboration_mode"), dict) else None
+                    settings = (
+                        payload.get("collaboration_mode", {}).get("settings")
+                        if isinstance(payload.get("collaboration_mode"), dict)
+                        else None
+                    )
                     if isinstance(settings, dict):
                         if settings.get("model") and not metadata.get("model"):
                             metadata["model"] = str(settings["model"])
-                        if settings.get("reasoning_effort") and not metadata.get("reasoning_effort"):
-                            metadata["reasoning_effort"] = str(settings["reasoning_effort"])
-                if obj.get("type") == "session_meta" and isinstance(obj.get("payload"), dict):
+                        if settings.get("reasoning_effort") and not metadata.get(
+                            "reasoning_effort"
+                        ):
+                            metadata["reasoning_effort"] = str(
+                                settings["reasoning_effort"]
+                            )
+                if obj.get("type") == "session_meta" and isinstance(
+                    obj.get("payload"), dict
+                ):
                     payload = obj["payload"]
                     if payload.get("model") and not metadata.get("model"):
                         metadata["model"] = str(payload["model"])
@@ -277,7 +302,11 @@ def _usage_from_rollout_line(line: str) -> dict[str, int] | None:
     except json.JSONDecodeError:
         return None
     payload = obj.get("payload")
-    if obj.get("type") != "event_msg" or not isinstance(payload, dict) or payload.get("type") != "token_count":
+    if (
+        obj.get("type") != "event_msg"
+        or not isinstance(payload, dict)
+        or payload.get("type") != "token_count"
+    ):
         return None
     info = payload.get("info")
     usage = info.get("total_token_usage") if isinstance(info, dict) else None
@@ -455,12 +484,16 @@ def _thread_rows(
                     cwd_clauses.append(f"lower(cwd) IN ({placeholders})")
                     params.extend(cwd_params)
                 if descendant_patterns:
-                    cwd_clauses.extend("lower(cwd) LIKE ? ESCAPE '\\'" for _ in descendant_patterns)
+                    cwd_clauses.extend(
+                        "lower(cwd) LIKE ? ESCAPE '\\'" for _ in descendant_patterns
+                    )
                     params.extend(descendant_patterns)
                 if cwd_clauses:
                     clauses.append("(" + " OR ".join(cwd_clauses) + ")")
             if id_filters and "id" in selected:
-                thread_ids = sorted(str(value).strip() for value in id_filters if str(value).strip())
+                thread_ids = sorted(
+                    str(value).strip() for value in id_filters if str(value).strip()
+                )
                 if thread_ids:
                     placeholders = ", ".join("?" for _ in thread_ids)
                     clauses.append(f"id IN ({placeholders})")
@@ -523,10 +556,17 @@ def _implementation_costs_for_cwds(
         return {}
     sqlite_path = (codex_home or _default_codex_home()) / DEFAULT_CODEX_SQLITE_FILENAME
     buckets: dict[str, dict[str, Any]] = {
-        normalized_cwd: {"model_tokens": {}, "implementation_tokens": 0, "implementation_cost_usd": 0.0}
+        normalized_cwd: {
+            "model_tokens": {},
+            "implementation_tokens": 0,
+            "implementation_cost_usd": 0.0,
+        }
         for normalized_cwd in normalized_cwds
     }
-    target_by_key = {_cheap_cwd_key(normalized_cwd): normalized_cwd for normalized_cwd in normalized_cwds}
+    target_by_key = {
+        _cheap_cwd_key(normalized_cwd): normalized_cwd
+        for normalized_cwd in normalized_cwds
+    }
     explicit_target_by_thread: dict[str, str] = {}
     explicit_threads_by_cwd: dict[str, set[str]] = {}
     for normalized_cwd, caller_threads in (caller_threads_by_cwd or {}).items():
@@ -558,7 +598,9 @@ def _implementation_costs_for_cwds(
         if row_id in excluded_ids:
             continue
         explicit_match = explicit_target_by_thread.get(row_id)
-        normalized_cwd = explicit_match or _matching_target_cwd(row.get("cwd"), target_by_key)
+        normalized_cwd = explicit_match or _matching_target_cwd(
+            row.get("cwd"), target_by_key
+        )
         if not normalized_cwd:
             continue
         if normalized_cwd in cwd_with_matched_explicit_threads and not explicit_match:
@@ -566,15 +608,23 @@ def _implementation_costs_for_cwds(
         expected_branch = str((branches_by_cwd or {}).get(normalized_cwd) or "")
         row_branch = str(row.get("git_branch") or "")
         if not explicit_match and expected_branch and expected_branch != "-":
-            if "git_branch" in row and (not row_branch or row_branch != expected_branch):
+            if "git_branch" in row and (
+                not row_branch or row_branch != expected_branch
+            ):
                 continue
         if _is_review_session(row):
             continue
         bucket = buckets[normalized_cwd]
         usage = _read_rollout_usage(row.get("rollout_path"))
         rollout_metadata = _read_rollout_model_metadata(row.get("rollout_path"))
-        model_name = _normalize_model_name(row.get("model") or rollout_metadata.get("model"))
-        reasoning_effort = str(row.get("reasoning_effort") or rollout_metadata.get("reasoning_effort") or "")
+        model_name = _normalize_model_name(
+            row.get("model") or rollout_metadata.get("model")
+        )
+        reasoning_effort = str(
+            row.get("reasoning_effort")
+            or rollout_metadata.get("reasoning_effort")
+            or ""
+        )
         tokens = _usage_tokens(usage)
         if tokens <= 0 and isinstance(row.get("tokens_used"), int):
             tokens = int(row["tokens_used"])
@@ -589,13 +639,17 @@ def _implementation_costs_for_cwds(
         normalized_cwd: {
             "worker_model": _summarize_worker_model(bucket["model_tokens"]),
             "implementation_tokens": int(bucket["implementation_tokens"]),
-            "implementation_cost_usd": round(float(bucket["implementation_cost_usd"]), 6),
+            "implementation_cost_usd": round(
+                float(bucket["implementation_cost_usd"]), 6
+            ),
         }
         for normalized_cwd, bucket in buckets.items()
     }
 
 
-def _implementation_cost_for_cwd(normalized_cwd: str, *, codex_home: Path | None = None) -> dict[str, Any]:
+def _implementation_cost_for_cwd(
+    normalized_cwd: str, *, codex_home: Path | None = None
+) -> dict[str, Any]:
     return _implementation_costs_for_cwds({normalized_cwd}, codex_home=codex_home).get(
         normalized_cwd,
         _empty_implementation_cost(),
@@ -668,25 +722,42 @@ def _metadata_for_cwd(normalized_cwd: str) -> dict[str, str]:
     review_cwd = cwd_path_from_normalized(normalized_cwd)
     review_cwd_text = str(review_cwd)
     folder = review_cwd.name
-    if "/" in folder or (folder == review_cwd_text and review_cwd_text.startswith("\\\\")):
+    if "/" in folder or (
+        folder == review_cwd_text and review_cwd_text.startswith("\\\\")
+    ):
         folder = ""
     if not folder:
-        folder = (review_cwd_text or normalized_cwd).rstrip("\\/").replace("\\", "/").rsplit("/", 1)[-1] or "-"
+        folder = (review_cwd_text or normalized_cwd).rstrip("\\/").replace(
+            "\\", "/"
+        ).rsplit("/", 1)[-1] or "-"
     fallback_repo = _repo_from_worktree_folder(folder) or folder
     try:
         exists = review_cwd.exists()
     except OSError:
         exists = False
     if not exists:
-        return {"repo": fallback_repo, "folder": folder, "branch": "-", "pr_number": "-"}
+        return {
+            "repo": fallback_repo,
+            "folder": folder,
+            "branch": "-",
+            "pr_number": "-",
+        }
     branch = _git_text(review_cwd, ["branch", "--show-current"]) or "-"
-    repo = _repo_from_remote(_git_text(review_cwd, ["remote", "get-url", "origin"])) or fallback_repo
+    repo = (
+        _repo_from_remote(_git_text(review_cwd, ["remote", "get-url", "origin"]))
+        or fallback_repo
+    )
     pr_number = _current_pr_number(review_cwd) or "-"
     return {"repo": repo, "folder": folder, "branch": branch, "pr_number": pr_number}
 
 
 def _record_task_id(record: dict[str, Any]) -> str:
-    return str(record.get("graded_task_id") or record.get("task_id") or record.get("task_id_hint") or "")
+    return str(
+        record.get("graded_task_id")
+        or record.get("task_id")
+        or record.get("task_id_hint")
+        or ""
+    )
 
 
 def _record_lane(record: dict[str, Any]) -> str | None:
@@ -697,7 +768,10 @@ def _record_lane(record: dict[str, Any]) -> str | None:
 
 
 def _iter_review_round_payloads(state_dir: Path) -> list[dict[str, Any]]:
-    return [*iter_round_payloads(state_dir), *iter_round_payloads(state_dir / ORCHESTRATOR_REVIEW_STATE_DIR)]
+    return [
+        *iter_round_payloads(state_dir),
+        *iter_round_payloads(state_dir / ORCHESTRATOR_REVIEW_STATE_DIR),
+    ]
 
 
 def _new_bucket() -> dict[str, Any]:
@@ -711,12 +785,23 @@ def _new_bucket() -> dict[str, Any]:
     }
 
 
-def _add_record(bucket: dict[str, Any], *, lane: str, record: dict[str, Any], runs: list[dict[str, Any]]) -> None:
+def _add_record(
+    bucket: dict[str, Any],
+    *,
+    lane: str,
+    record: dict[str, Any],
+    runs: list[dict[str, Any]],
+) -> None:
     bucket["lane_sessions"][lane] += len(runs)
     bucket["review_seconds"] += _run_seconds(record, runs)
     bucket["tokens"] += sum(_run_tokens(run) for run in runs)
     bucket["cost_usd"] += sum(_run_cost(run) for run in runs)
-    timestamp = str(record.get("review_completed_at") or record.get("recorded_at") or record.get("sampled_at") or "")
+    timestamp = str(
+        record.get("review_completed_at")
+        or record.get("recorded_at")
+        or record.get("sampled_at")
+        or ""
+    )
     if timestamp and timestamp > str(bucket.get("latest_review") or ""):
         bucket["latest_review"] = timestamp
     _add_caller_thread(bucket, record.get("caller_id"))
@@ -748,7 +833,9 @@ def collect_review_cost_rows(
     include_all: bool = False,
     codex_home: Path | None = None,
 ) -> list[ReviewCostRow]:
-    requested_cwd = normalize_review_cwd_value(review_cwd) if review_cwd is not None else ""
+    requested_cwd = (
+        normalize_review_cwd_value(review_cwd) if review_cwd is not None else ""
+    )
     buckets: dict[str, dict[str, Any]] = {}
     metadata_by_cwd: dict[str, dict[str, str]] = {}
     wrapper_records_by_cwd = _wrapper_session_records_by_cwd(state_dir)
@@ -760,7 +847,9 @@ def collect_review_cost_rows(
             metadata_by_cwd[normalized_cwd] = metadata
         return metadata
 
-    def record_matches_current_branch(normalized_cwd: str, record: dict[str, Any]) -> bool:
+    def record_matches_current_branch(
+        normalized_cwd: str, record: dict[str, Any]
+    ) -> bool:
         branch = metadata_for(normalized_cwd)["branch"]
         if not branch or branch == "-":
             return True
@@ -804,7 +893,10 @@ def collect_review_cost_rows(
             continue
         runs = [
             run
-            for run in [*list(record.get("retry_runs") or []), *list(record.get("runs") or [])]
+            for run in [
+                *list(record.get("retry_runs") or []),
+                *list(record.get("runs") or []),
+            ]
             if isinstance(run, dict)
         ]
         if not runs:
@@ -819,7 +911,9 @@ def collect_review_cost_rows(
         caller_threads = [
             str(record.get("caller_thread_id") or "").strip()
             for record in records
-            if record_matches_current_branch(normalized_cwd, {"task_id": str(record.get("branch") or "")})
+            if record_matches_current_branch(
+                normalized_cwd, {"task_id": str(record.get("branch") or "")}
+            )
         ]
         if not any(caller_threads):
             continue
@@ -834,21 +928,35 @@ def collect_review_cost_rows(
     implementation_by_cwd = _implementation_costs_for_cwds(
         target_cwds,
         codex_home=codex_home,
-        branches_by_cwd={normalized_cwd: metadata["branch"] for normalized_cwd, metadata in metadata_by_cwd.items()},
+        branches_by_cwd={
+            normalized_cwd: metadata["branch"]
+            for normalized_cwd, metadata in metadata_by_cwd.items()
+        },
         excluded_session_ids=_wrapper_session_ids(state_dir),
         caller_threads_by_cwd={
-            normalized_cwd: set(str(item) for item in bucket.get("caller_threads", set()) if item)
+            normalized_cwd: set(
+                str(item) for item in bucket.get("caller_threads", set()) if item
+            )
             for normalized_cwd, bucket in buckets.items()
         },
     )
     if requested_cwd and requested_cwd not in buckets:
-        implementation = implementation_by_cwd.get(requested_cwd, _empty_implementation_cost())
-        if implementation["implementation_tokens"] or implementation["worker_model"] != "-":
+        implementation = implementation_by_cwd.get(
+            requested_cwd, _empty_implementation_cost()
+        )
+        if (
+            implementation["implementation_tokens"]
+            or implementation["worker_model"] != "-"
+        ):
             buckets[requested_cwd] = _new_bucket()
     rows: list[ReviewCostRow] = []
     for normalized_cwd, bucket in buckets.items():
-        metadata = metadata_by_cwd.get(normalized_cwd) or _metadata_for_cwd(normalized_cwd)
-        implementation = implementation_by_cwd.get(normalized_cwd, _empty_implementation_cost())
+        metadata = metadata_by_cwd.get(normalized_cwd) or _metadata_for_cwd(
+            normalized_cwd
+        )
+        implementation = implementation_by_cwd.get(
+            normalized_cwd, _empty_implementation_cost()
+        )
         rows.append(
             ReviewCostRow(
                 repo=metadata["repo"],
@@ -857,8 +965,16 @@ def collect_review_cost_rows(
                 pr_number=metadata["pr_number"],
                 worker_model=str(implementation["worker_model"]),
                 implementation_tokens=int(implementation["implementation_tokens"]),
-                implementation_cost_usd=float(implementation["implementation_cost_usd"]),
-                caller_threads=tuple(sorted(str(item) for item in bucket.get("caller_threads", set()) if item)),
+                implementation_cost_usd=float(
+                    implementation["implementation_cost_usd"]
+                ),
+                caller_threads=tuple(
+                    sorted(
+                        str(item)
+                        for item in bucket.get("caller_threads", set())
+                        if item
+                    )
+                ),
                 latest_review=str(bucket.get("latest_review") or "-"),
                 lane_sessions=dict(bucket["lane_sessions"]),
                 review_seconds=float(bucket["review_seconds"]),
@@ -866,7 +982,9 @@ def collect_review_cost_rows(
                 cost_usd=round(float(bucket["cost_usd"]), 6),
             )
         )
-    return sorted(rows, key=lambda row: (row.repo.lower(), row.latest_review), reverse=True)
+    return sorted(
+        rows, key=lambda row: (row.repo.lower(), row.latest_review), reverse=True
+    )
 
 
 def format_duration(seconds: float) -> str:
@@ -936,7 +1054,11 @@ def render_review_cost_markdown(rows: list[ReviewCostRow]) -> str:
                 "| "
                 + " | ".join(
                     [
-                        _md_cell(row.latest_review[:10] if row.latest_review and row.latest_review != "-" else "-"),
+                        _md_cell(
+                            row.latest_review[:10]
+                            if row.latest_review and row.latest_review != "-"
+                            else "-"
+                        ),
                         _md_cell(row.folder),
                         _md_cell(row.branch),
                         _md_cell(row.pr_number),
@@ -1011,7 +1133,11 @@ def _cost_row_from_payload(payload: dict[str, Any]) -> ReviewCostRow | None:
             worker_model=str(payload["worker_model"]),
             implementation_tokens=int(payload["implementation_tokens"]),
             implementation_cost_usd=float(payload["implementation_cost_usd"]),
-            caller_threads=tuple(str(item) for item in list(payload.get("caller_threads") or []) if str(item).strip()),
+            caller_threads=tuple(
+                str(item)
+                for item in list(payload.get("caller_threads") or [])
+                if str(item).strip()
+            ),
             latest_review=str(payload["latest_review"]),
             lane_sessions=dict(payload["lane_sessions"]),
             review_seconds=float(payload["review_seconds"]),
@@ -1038,7 +1164,9 @@ def read_review_cost_row_cache(state_dir: Path) -> list[ReviewCostRow]:
 def update_review_cost_row_cache(*, state_dir: Path, rows: list[ReviewCostRow]) -> None:
     cache_dir = _cost_row_cache_dir(state_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
-    next_keys_by_identity = {_cost_row_identity(row): f"{_cost_row_cache_key(row)}.json" for row in rows}
+    next_keys_by_identity = {
+        _cost_row_identity(row): f"{_cost_row_cache_key(row)}.json" for row in rows
+    }
     for path in sorted(cache_dir.glob("*.json")):
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
@@ -1073,12 +1201,17 @@ def refresh_review_cost_report_best_effort(
         )
         update_review_cost_row_cache(state_dir=state_dir, rows=rows)
         cached_rows = read_review_cost_row_cache(state_dir)
-        return write_review_cost_report(rows=cached_rows or rows, output_path=state_dir / DEFAULT_COST_REPORT_FILENAME)
+        return write_review_cost_report(
+            rows=cached_rows or rows,
+            output_path=state_dir / DEFAULT_COST_REPORT_FILENAME,
+        )
     except Exception:
         return None
 
 
-def launch_review_cost_report_refresh_best_effort(*, state_dir: Path, review_cwd: Path | None = None) -> bool:
+def launch_review_cost_report_refresh_best_effort(
+    *, state_dir: Path, review_cwd: Path | None = None
+) -> bool:
     script_path = launcher_script_path(__file__, "review_suite_arena.py")
     command = [sys.executable, str(script_path), "costs", "--state-dir", str(state_dir)]
     if review_cwd is not None:

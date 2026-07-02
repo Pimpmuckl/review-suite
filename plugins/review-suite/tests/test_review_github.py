@@ -11,11 +11,19 @@ if str(SCRIPT_DIR) not in sys.path:
 
 import review_github
 
-from review_github import cmd_run, inspect_existing_cycle, public_cycle_payload, run_review_cycle
+from review_github import (
+    cmd_run,
+    inspect_existing_cycle,
+    public_cycle_payload,
+    run_review_cycle,
+)
 
 
 def _request_comment(
-    *, comment_id: str = "request-1", created_at: str = "2026-04-20T10:00:00Z", head_sha: str = "deadbeef"
+    *,
+    comment_id: str = "request-1",
+    created_at: str = "2026-04-20T10:00:00Z",
+    head_sha: str = "deadbeef",
 ) -> dict[str, object]:
     return {
         "id": comment_id,
@@ -54,8 +62,12 @@ def _response_item(
 
 
 def test_build_request_body_keeps_public_comment_plain() -> None:
-    assert review_github.build_request_body("@codex review", "deadbeef") == "@codex review"
-    assert "Reviewed commit" not in review_github.build_request_body("@codex review", "deadbeef")
+    assert (
+        review_github.build_request_body("@codex review", "deadbeef") == "@codex review"
+    )
+    assert "Reviewed commit" not in review_github.build_request_body(
+        "@codex review", "deadbeef"
+    )
 
 
 def test_request_body_matching_is_exact_after_whitespace_normalization() -> None:
@@ -71,7 +83,9 @@ def test_request_body_matching_is_exact_after_whitespace_normalization() -> None
     )
 
 
-def test_public_cycle_payload_surfaces_verbatim_responses_without_duplicate_aliases() -> None:
+def test_public_cycle_payload_surfaces_verbatim_responses_without_duplicate_aliases() -> (
+    None
+):
     payload = {
         "status": "response_found",
         "pr_number": 87,
@@ -105,12 +119,17 @@ def test_public_cycle_payload_surfaces_verbatim_responses_without_duplicate_alia
     assert result["attempts"] == 2
     assert "main_response" not in result
     assert "child_comments" not in result
-    assert result["responses"][0]["body"] == "Codex Review: Didn't find any major issues. Already looking forward to the next diff."
+    assert (
+        result["responses"][0]["body"]
+        == "Codex Review: Didn't find any major issues. Already looking forward to the next diff."
+    )
     assert result["responses"][1]["body"] == "Please rename this helper for clarity."
     assert result["responses"][1]["loc"] == "src/app.ts:42"
 
 
-def test_inspect_existing_cycle_reuses_any_bot_response_without_cleanliness_judgment(monkeypatch) -> None:
+def test_inspect_existing_cycle_reuses_any_bot_response_without_cleanliness_judgment(
+    monkeypatch,
+) -> None:
     response = _response_item(
         item_id="issue-1",
         kind="issue_comment",
@@ -119,9 +138,15 @@ def test_inspect_existing_cycle_reuses_any_bot_response_without_cleanliness_judg
         url="https://github.com/example-owner/example-repo/pull/87#issuecomment-1",
     )
 
-    monkeypatch.setattr("review_github.get_issue_comments", lambda *args, **kwargs: [_request_comment()])
-    monkeypatch.setattr("review_github.collect_cycle_items", lambda **kwargs: [response])
-    monkeypatch.setattr("review_github.get_commit_timestamp", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "review_github.get_issue_comments", lambda *args, **kwargs: [_request_comment()]
+    )
+    monkeypatch.setattr(
+        "review_github.collect_cycle_items", lambda **kwargs: [response]
+    )
+    monkeypatch.setattr(
+        "review_github.get_commit_timestamp", lambda *args, **kwargs: None
+    )
     monkeypatch.setattr("review_github.has_eyes_reaction", lambda **kwargs: False)
     monkeypatch.setattr("review_github.has_plus_one_reaction", lambda **kwargs: False)
 
@@ -143,7 +168,9 @@ def test_inspect_existing_cycle_reuses_any_bot_response_without_cleanliness_judg
     }
 
 
-def test_inspect_existing_cycle_prefers_eyes_reaction_over_recently_updated_partial_response(monkeypatch) -> None:
+def test_inspect_existing_cycle_prefers_eyes_reaction_over_recently_updated_partial_response(
+    monkeypatch,
+) -> None:
     response = _response_item(
         item_id="issue-1",
         kind="issue_comment",
@@ -153,12 +180,21 @@ def test_inspect_existing_cycle_prefers_eyes_reaction_over_recently_updated_part
         updated_at="2026-04-20T10:01:25Z",
     )
 
-    monkeypatch.setattr("review_github.get_issue_comments", lambda *args, **kwargs: [_request_comment()])
-    monkeypatch.setattr("review_github.collect_cycle_items", lambda **kwargs: [response])
-    monkeypatch.setattr("review_github.get_commit_timestamp", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "review_github.get_issue_comments", lambda *args, **kwargs: [_request_comment()]
+    )
+    monkeypatch.setattr(
+        "review_github.collect_cycle_items", lambda **kwargs: [response]
+    )
+    monkeypatch.setattr(
+        "review_github.get_commit_timestamp", lambda *args, **kwargs: None
+    )
     monkeypatch.setattr("review_github.has_eyes_reaction", lambda **kwargs: True)
     monkeypatch.setattr("review_github.has_plus_one_reaction", lambda **kwargs: False)
-    monkeypatch.setattr("review_github.utc_now", lambda: datetime(2026, 4, 20, 10, 1, 30, tzinfo=timezone.utc))
+    monkeypatch.setattr(
+        "review_github.utc_now",
+        lambda: datetime(2026, 4, 20, 10, 1, 30, tzinfo=timezone.utc),
+    )
 
     cycle = inspect_existing_cycle(
         owner="example-owner",
@@ -178,7 +214,9 @@ def test_inspect_existing_cycle_prefers_eyes_reaction_over_recently_updated_part
     }
 
 
-def test_inspect_existing_cycle_reuses_settled_response_even_if_eyes_reaction_remains(monkeypatch) -> None:
+def test_inspect_existing_cycle_reuses_settled_response_even_if_eyes_reaction_remains(
+    monkeypatch,
+) -> None:
     response = _response_item(
         item_id="issue-1",
         kind="issue_comment",
@@ -188,12 +226,21 @@ def test_inspect_existing_cycle_reuses_settled_response_even_if_eyes_reaction_re
         updated_at="2026-04-20T10:01:05Z",
     )
 
-    monkeypatch.setattr("review_github.get_issue_comments", lambda *args, **kwargs: [_request_comment()])
-    monkeypatch.setattr("review_github.collect_cycle_items", lambda **kwargs: [response])
-    monkeypatch.setattr("review_github.get_commit_timestamp", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "review_github.get_issue_comments", lambda *args, **kwargs: [_request_comment()]
+    )
+    monkeypatch.setattr(
+        "review_github.collect_cycle_items", lambda **kwargs: [response]
+    )
+    monkeypatch.setattr(
+        "review_github.get_commit_timestamp", lambda *args, **kwargs: None
+    )
     monkeypatch.setattr("review_github.has_eyes_reaction", lambda **kwargs: True)
     monkeypatch.setattr("review_github.has_plus_one_reaction", lambda **kwargs: False)
-    monkeypatch.setattr("review_github.utc_now", lambda: datetime(2026, 4, 20, 10, 1, 30, tzinfo=timezone.utc))
+    monkeypatch.setattr(
+        "review_github.utc_now",
+        lambda: datetime(2026, 4, 20, 10, 1, 30, tzinfo=timezone.utc),
+    )
 
     cycle = inspect_existing_cycle(
         owner="example-owner",
@@ -213,7 +260,9 @@ def test_inspect_existing_cycle_reuses_settled_response_even_if_eyes_reaction_re
     }
 
 
-def test_inspect_existing_cycle_does_not_reuse_response_when_head_commit_is_newer_than_response_creation(monkeypatch) -> None:
+def test_inspect_existing_cycle_does_not_reuse_response_when_head_commit_is_newer_than_response_creation(
+    monkeypatch,
+) -> None:
     response = _response_item(
         item_id="issue-1",
         kind="issue_comment",
@@ -223,15 +272,22 @@ def test_inspect_existing_cycle_does_not_reuse_response_when_head_commit_is_newe
         updated_at="2026-04-20T10:01:25Z",
     )
 
-    monkeypatch.setattr("review_github.get_issue_comments", lambda *args, **kwargs: [_request_comment()])
-    monkeypatch.setattr("review_github.collect_cycle_items", lambda **kwargs: [response])
+    monkeypatch.setattr(
+        "review_github.get_issue_comments", lambda *args, **kwargs: [_request_comment()]
+    )
+    monkeypatch.setattr(
+        "review_github.collect_cycle_items", lambda **kwargs: [response]
+    )
     monkeypatch.setattr(
         "review_github.get_commit_timestamp",
         lambda *args, **kwargs: datetime(2026, 4, 20, 10, 1, 20, tzinfo=timezone.utc),
     )
     monkeypatch.setattr("review_github.has_eyes_reaction", lambda **kwargs: True)
     monkeypatch.setattr("review_github.has_plus_one_reaction", lambda **kwargs: False)
-    monkeypatch.setattr("review_github.utc_now", lambda: datetime(2026, 4, 20, 10, 1, 30, tzinfo=timezone.utc))
+    monkeypatch.setattr(
+        "review_github.utc_now",
+        lambda: datetime(2026, 4, 20, 10, 1, 30, tzinfo=timezone.utc),
+    )
 
     cycle = inspect_existing_cycle(
         owner="example-owner",
@@ -245,7 +301,9 @@ def test_inspect_existing_cycle_does_not_reuse_response_when_head_commit_is_newe
     assert cycle is None
 
 
-def test_inspect_existing_cycle_ignores_later_child_comment_creation_for_head_freshness(monkeypatch) -> None:
+def test_inspect_existing_cycle_ignores_later_child_comment_creation_for_head_freshness(
+    monkeypatch,
+) -> None:
     top_level_response = _response_item(
         item_id="issue-1",
         kind="issue_comment",
@@ -264,15 +322,23 @@ def test_inspect_existing_cycle_ignores_later_child_comment_creation_for_head_fr
         line=42,
     )
 
-    monkeypatch.setattr("review_github.get_issue_comments", lambda *args, **kwargs: [_request_comment()])
-    monkeypatch.setattr("review_github.collect_cycle_items", lambda **kwargs: [top_level_response, child_comment])
+    monkeypatch.setattr(
+        "review_github.get_issue_comments", lambda *args, **kwargs: [_request_comment()]
+    )
+    monkeypatch.setattr(
+        "review_github.collect_cycle_items",
+        lambda **kwargs: [top_level_response, child_comment],
+    )
     monkeypatch.setattr(
         "review_github.get_commit_timestamp",
         lambda *args, **kwargs: datetime(2026, 4, 20, 10, 1, 10, tzinfo=timezone.utc),
     )
     monkeypatch.setattr("review_github.has_eyes_reaction", lambda **kwargs: True)
     monkeypatch.setattr("review_github.has_plus_one_reaction", lambda **kwargs: False)
-    monkeypatch.setattr("review_github.utc_now", lambda: datetime(2026, 4, 20, 10, 1, 30, tzinfo=timezone.utc))
+    monkeypatch.setattr(
+        "review_github.utc_now",
+        lambda: datetime(2026, 4, 20, 10, 1, 30, tzinfo=timezone.utc),
+    )
 
     cycle = inspect_existing_cycle(
         owner="example-owner",
@@ -286,7 +352,9 @@ def test_inspect_existing_cycle_ignores_later_child_comment_creation_for_head_fr
     assert cycle is None
 
 
-def test_inspect_existing_cycle_handles_response_items_without_created_at(monkeypatch) -> None:
+def test_inspect_existing_cycle_handles_response_items_without_created_at(
+    monkeypatch,
+) -> None:
     response = _response_item(
         item_id="issue-1",
         kind="issue_comment",
@@ -296,9 +364,15 @@ def test_inspect_existing_cycle_handles_response_items_without_created_at(monkey
         updated_at="2026-04-20T10:01:05Z",
     )
 
-    monkeypatch.setattr("review_github.get_issue_comments", lambda *args, **kwargs: [_request_comment()])
-    monkeypatch.setattr("review_github.collect_cycle_items", lambda **kwargs: [response])
-    monkeypatch.setattr("review_github.get_commit_timestamp", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "review_github.get_issue_comments", lambda *args, **kwargs: [_request_comment()]
+    )
+    monkeypatch.setattr(
+        "review_github.collect_cycle_items", lambda **kwargs: [response]
+    )
+    monkeypatch.setattr(
+        "review_github.get_commit_timestamp", lambda *args, **kwargs: None
+    )
     monkeypatch.setattr("review_github.has_eyes_reaction", lambda **kwargs: False)
     monkeypatch.setattr("review_github.has_plus_one_reaction", lambda **kwargs: False)
 
@@ -320,7 +394,9 @@ def test_inspect_existing_cycle_handles_response_items_without_created_at(monkey
     }
 
 
-def test_emit_new_items_ignores_stale_top_level_response_with_reviewed_commit_body() -> None:
+def test_emit_new_items_ignores_stale_top_level_response_with_reviewed_commit_body() -> (
+    None
+):
     anchor_since = datetime(2026, 4, 20, 10, 0, 0, tzinfo=timezone.utc)
     old_head = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     current_head = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
@@ -368,7 +444,9 @@ def test_emit_new_items_accepts_matching_reviewed_commit_prefix_body() -> None:
     assert emitted[0]["commit_id"] == "bbbbbbb"
 
 
-def test_inspect_existing_cycle_uses_latest_explicit_head_response_for_head_freshness(monkeypatch) -> None:
+def test_inspect_existing_cycle_uses_latest_explicit_head_response_for_head_freshness(
+    monkeypatch,
+) -> None:
     early_response = _response_item(
         item_id="issue-1",
         kind="issue_comment",
@@ -385,8 +463,13 @@ def test_inspect_existing_cycle_uses_latest_explicit_head_response_for_head_fres
         commit_id="deadbeef",
     )
 
-    monkeypatch.setattr("review_github.get_issue_comments", lambda *args, **kwargs: [_request_comment()])
-    monkeypatch.setattr("review_github.collect_cycle_items", lambda **kwargs: [early_response, final_response])
+    monkeypatch.setattr(
+        "review_github.get_issue_comments", lambda *args, **kwargs: [_request_comment()]
+    )
+    monkeypatch.setattr(
+        "review_github.collect_cycle_items",
+        lambda **kwargs: [early_response, final_response],
+    )
     monkeypatch.setattr(
         "review_github.get_commit_timestamp",
         lambda *args, **kwargs: datetime(2026, 4, 20, 10, 1, 10, tzinfo=timezone.utc),
@@ -412,7 +495,9 @@ def test_inspect_existing_cycle_uses_latest_explicit_head_response_for_head_fres
     }
 
 
-def test_inspect_existing_cycle_uses_latest_top_level_response_timestamp_when_no_commit_binding_exists(monkeypatch) -> None:
+def test_inspect_existing_cycle_uses_latest_top_level_response_timestamp_when_no_commit_binding_exists(
+    monkeypatch,
+) -> None:
     early_response = _response_item(
         item_id="issue-1",
         kind="issue_comment",
@@ -428,8 +513,13 @@ def test_inspect_existing_cycle_uses_latest_top_level_response_timestamp_when_no
         url="https://github.com/example-owner/example-repo/pull/87#issuecomment-2",
     )
 
-    monkeypatch.setattr("review_github.get_issue_comments", lambda *args, **kwargs: [_request_comment()])
-    monkeypatch.setattr("review_github.collect_cycle_items", lambda **kwargs: [early_response, final_response])
+    monkeypatch.setattr(
+        "review_github.get_issue_comments", lambda *args, **kwargs: [_request_comment()]
+    )
+    monkeypatch.setattr(
+        "review_github.collect_cycle_items",
+        lambda **kwargs: [early_response, final_response],
+    )
     monkeypatch.setattr(
         "review_github.get_commit_timestamp",
         lambda *args, **kwargs: datetime(2026, 4, 20, 10, 1, 10, tzinfo=timezone.utc),
@@ -455,7 +545,9 @@ def test_inspect_existing_cycle_uses_latest_top_level_response_timestamp_when_no
     }
 
 
-def test_inspect_existing_cycle_uses_explicit_inline_comment_binding_for_head_freshness(monkeypatch) -> None:
+def test_inspect_existing_cycle_uses_explicit_inline_comment_binding_for_head_freshness(
+    monkeypatch,
+) -> None:
     early_response = _response_item(
         item_id="issue-1",
         kind="issue_comment",
@@ -474,8 +566,13 @@ def test_inspect_existing_cycle_uses_explicit_inline_comment_binding_for_head_fr
         line=42,
     )
 
-    monkeypatch.setattr("review_github.get_issue_comments", lambda *args, **kwargs: [_request_comment()])
-    monkeypatch.setattr("review_github.collect_cycle_items", lambda **kwargs: [early_response, inline_comment])
+    monkeypatch.setattr(
+        "review_github.get_issue_comments", lambda *args, **kwargs: [_request_comment()]
+    )
+    monkeypatch.setattr(
+        "review_github.collect_cycle_items",
+        lambda **kwargs: [early_response, inline_comment],
+    )
     monkeypatch.setattr(
         "review_github.get_commit_timestamp",
         lambda *args, **kwargs: datetime(2026, 4, 20, 10, 1, 10, tzinfo=timezone.utc),
@@ -501,7 +598,9 @@ def test_inspect_existing_cycle_uses_explicit_inline_comment_binding_for_head_fr
     }
 
 
-def test_inspect_existing_cycle_uses_later_top_level_reply_after_explicit_head_binding(monkeypatch) -> None:
+def test_inspect_existing_cycle_uses_later_top_level_reply_after_explicit_head_binding(
+    monkeypatch,
+) -> None:
     early_response = _response_item(
         item_id="issue-1",
         kind="issue_comment",
@@ -527,8 +626,13 @@ def test_inspect_existing_cycle_uses_later_top_level_reply_after_explicit_head_b
         url="https://github.com/example-owner/example-repo/pull/87#issuecomment-2",
     )
 
-    monkeypatch.setattr("review_github.get_issue_comments", lambda *args, **kwargs: [_request_comment()])
-    monkeypatch.setattr("review_github.collect_cycle_items", lambda **kwargs: [early_response, inline_comment, final_response])
+    monkeypatch.setattr(
+        "review_github.get_issue_comments", lambda *args, **kwargs: [_request_comment()]
+    )
+    monkeypatch.setattr(
+        "review_github.collect_cycle_items",
+        lambda **kwargs: [early_response, inline_comment, final_response],
+    )
     monkeypatch.setattr(
         "review_github.get_commit_timestamp",
         lambda *args, **kwargs: datetime(2026, 4, 20, 10, 1, 18, tzinfo=timezone.utc),
@@ -554,8 +658,12 @@ def test_inspect_existing_cycle_uses_later_top_level_reply_after_explicit_head_b
     }
 
 
-def test_inspect_existing_cycle_does_not_reuse_acknowledged_without_body_when_head_moved(monkeypatch) -> None:
-    monkeypatch.setattr("review_github.get_issue_comments", lambda *args, **kwargs: [_request_comment()])
+def test_inspect_existing_cycle_does_not_reuse_acknowledged_without_body_when_head_moved(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "review_github.get_issue_comments", lambda *args, **kwargs: [_request_comment()]
+    )
     monkeypatch.setattr("review_github.collect_cycle_items", lambda **kwargs: [])
     monkeypatch.setattr(
         "review_github.get_commit_timestamp",
@@ -576,8 +684,12 @@ def test_inspect_existing_cycle_does_not_reuse_acknowledged_without_body_when_he
     assert cycle is None
 
 
-def test_inspect_existing_cycle_does_not_reuse_eyes_only_request_when_head_moved(monkeypatch) -> None:
-    monkeypatch.setattr("review_github.get_issue_comments", lambda *args, **kwargs: [_request_comment()])
+def test_inspect_existing_cycle_does_not_reuse_eyes_only_request_when_head_moved(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "review_github.get_issue_comments", lambda *args, **kwargs: [_request_comment()]
+    )
     monkeypatch.setattr("review_github.collect_cycle_items", lambda **kwargs: [])
     monkeypatch.setattr(
         "review_github.get_commit_timestamp",
@@ -598,8 +710,12 @@ def test_inspect_existing_cycle_does_not_reuse_eyes_only_request_when_head_moved
     assert cycle is None
 
 
-def test_inspect_existing_cycle_does_not_reuse_active_request_when_head_moved(monkeypatch) -> None:
-    monkeypatch.setattr("review_github.get_issue_comments", lambda *args, **kwargs: [_request_comment()])
+def test_inspect_existing_cycle_does_not_reuse_active_request_when_head_moved(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "review_github.get_issue_comments", lambda *args, **kwargs: [_request_comment()]
+    )
     monkeypatch.setattr("review_github.collect_cycle_items", lambda **kwargs: [])
     monkeypatch.setattr(
         "review_github.get_commit_timestamp",
@@ -620,13 +736,21 @@ def test_inspect_existing_cycle_does_not_reuse_active_request_when_head_moved(mo
     assert cycle is None
 
 
-def test_cmd_run_records_workflow_anchor_for_completed_cycle(monkeypatch, tmp_path: Path) -> None:
+def test_cmd_run_records_workflow_anchor_for_completed_cycle(
+    monkeypatch, tmp_path: Path
+) -> None:
     emitted: list[dict[str, object]] = []
     recorded: list[dict[str, object]] = []
 
     monkeypatch.setattr(review_github, "resolve_repo_root", lambda cd: tmp_path)
-    monkeypatch.setattr(review_github, "local_checkout_contains_reviewed_head", lambda review_root, head_sha: True)
-    monkeypatch.setattr(review_github, "merge_base", lambda review_root, base_ref: "base-sha-123")
+    monkeypatch.setattr(
+        review_github,
+        "local_checkout_contains_reviewed_head",
+        lambda review_root, head_sha: True,
+    )
+    monkeypatch.setattr(
+        review_github, "merge_base", lambda review_root, base_ref: "base-sha-123"
+    )
     monkeypatch.setattr(
         review_github,
         "get_pr_context",
@@ -659,9 +783,15 @@ def test_cmd_run_records_workflow_anchor_for_completed_cycle(monkeypatch, tmp_pa
             ],
         },
     )
-    monkeypatch.setattr(review_github, "record_review_anchor", lambda **kwargs: recorded.append(kwargs) or {})
+    monkeypatch.setattr(
+        review_github,
+        "record_review_anchor",
+        lambda **kwargs: recorded.append(kwargs) or {},
+    )
     monkeypatch.setattr(review_github, "default_state_dir", lambda: tmp_path / "state")
-    monkeypatch.setattr(review_github, "emit_toon", lambda payload: emitted.append(payload))
+    monkeypatch.setattr(
+        review_github, "emit_toon", lambda payload: emitted.append(payload)
+    )
 
     exit_code = cmd_run(
         review_github.build_parser().parse_args(["run", "--cd", str(tmp_path)]),
@@ -675,13 +805,17 @@ def test_cmd_run_records_workflow_anchor_for_completed_cycle(monkeypatch, tmp_pa
     assert recorded[0]["review_scope"]["merge_base"] == "base-sha-123"
 
 
-def test_cmd_run_does_not_record_workflow_anchor_for_acknowledged_without_body(monkeypatch, tmp_path: Path) -> None:
+def test_cmd_run_does_not_record_workflow_anchor_for_acknowledged_without_body(
+    monkeypatch, tmp_path: Path
+) -> None:
     emitted: list[dict[str, object]] = []
     recorded: list[dict[str, object]] = []
     custom_state_dir = tmp_path / "custom-state"
 
     monkeypatch.setattr(review_github, "resolve_repo_root", lambda cd: tmp_path)
-    monkeypatch.setattr(review_github, "merge_base", lambda review_root, base_ref: "base-sha-456")
+    monkeypatch.setattr(
+        review_github, "merge_base", lambda review_root, base_ref: "base-sha-456"
+    )
     monkeypatch.setattr(
         review_github,
         "get_pr_context",
@@ -708,12 +842,22 @@ def test_cmd_run_does_not_record_workflow_anchor_for_acknowledged_without_body(m
             "items": [],
         },
     )
-    monkeypatch.setattr(review_github, "record_review_anchor", lambda **kwargs: recorded.append(kwargs) or {})
-    monkeypatch.setattr(review_github, "refresh_review_cost_report_best_effort", lambda **kwargs: None)
-    monkeypatch.setattr(review_github, "emit_toon", lambda payload: emitted.append(payload))
+    monkeypatch.setattr(
+        review_github,
+        "record_review_anchor",
+        lambda **kwargs: recorded.append(kwargs) or {},
+    )
+    monkeypatch.setattr(
+        review_github, "refresh_review_cost_report_best_effort", lambda **kwargs: None
+    )
+    monkeypatch.setattr(
+        review_github, "emit_toon", lambda payload: emitted.append(payload)
+    )
 
     exit_code = cmd_run(
-        review_github.build_parser().parse_args(["run", "--cd", str(tmp_path), "--state-dir", str(custom_state_dir)]),
+        review_github.build_parser().parse_args(
+            ["run", "--cd", str(tmp_path), "--state-dir", str(custom_state_dir)]
+        ),
     )
 
     assert exit_code == 0
@@ -721,7 +865,9 @@ def test_cmd_run_does_not_record_workflow_anchor_for_acknowledged_without_body(m
     assert recorded == []
 
 
-def test_cmd_run_does_not_record_workflow_anchor_for_existing_completed_cycle(monkeypatch, tmp_path: Path) -> None:
+def test_cmd_run_does_not_record_workflow_anchor_for_existing_completed_cycle(
+    monkeypatch, tmp_path: Path
+) -> None:
     emitted: list[dict[str, object]] = []
     recorded: list[dict[str, object]] = []
 
@@ -758,9 +904,17 @@ def test_cmd_run_does_not_record_workflow_anchor_for_existing_completed_cycle(mo
             ],
         },
     )
-    monkeypatch.setattr(review_github, "record_review_anchor", lambda **kwargs: recorded.append(kwargs) or {})
-    monkeypatch.setattr(review_github, "refresh_review_cost_report_best_effort", lambda **kwargs: None)
-    monkeypatch.setattr(review_github, "emit_toon", lambda payload: emitted.append(payload))
+    monkeypatch.setattr(
+        review_github,
+        "record_review_anchor",
+        lambda **kwargs: recorded.append(kwargs) or {},
+    )
+    monkeypatch.setattr(
+        review_github, "refresh_review_cost_report_best_effort", lambda **kwargs: None
+    )
+    monkeypatch.setattr(
+        review_github, "emit_toon", lambda payload: emitted.append(payload)
+    )
 
     exit_code = cmd_run(
         review_github.build_parser().parse_args(["run", "--cd", str(tmp_path)]),
@@ -771,12 +925,18 @@ def test_cmd_run_does_not_record_workflow_anchor_for_existing_completed_cycle(mo
     assert recorded == []
 
 
-def test_cmd_run_skips_workflow_anchor_when_local_checkout_lacks_reviewed_head(monkeypatch, tmp_path: Path) -> None:
+def test_cmd_run_skips_workflow_anchor_when_local_checkout_lacks_reviewed_head(
+    monkeypatch, tmp_path: Path
+) -> None:
     emitted: list[dict[str, object]] = []
     recorded: list[dict[str, object]] = []
 
     monkeypatch.setattr(review_github, "resolve_repo_root", lambda cd: tmp_path)
-    monkeypatch.setattr(review_github, "local_checkout_contains_reviewed_head", lambda review_root, head_sha: False)
+    monkeypatch.setattr(
+        review_github,
+        "local_checkout_contains_reviewed_head",
+        lambda review_root, head_sha: False,
+    )
     monkeypatch.setattr(
         review_github,
         "get_pr_context",
@@ -809,8 +969,14 @@ def test_cmd_run_skips_workflow_anchor_when_local_checkout_lacks_reviewed_head(m
             ],
         },
     )
-    monkeypatch.setattr(review_github, "record_review_anchor", lambda **kwargs: recorded.append(kwargs) or {})
-    monkeypatch.setattr(review_github, "emit_toon", lambda payload: emitted.append(payload))
+    monkeypatch.setattr(
+        review_github,
+        "record_review_anchor",
+        lambda **kwargs: recorded.append(kwargs) or {},
+    )
+    monkeypatch.setattr(
+        review_github, "emit_toon", lambda payload: emitted.append(payload)
+    )
 
     exit_code = cmd_run(
         review_github.build_parser().parse_args(["run", "--cd", str(tmp_path)]),
@@ -821,11 +987,19 @@ def test_cmd_run_skips_workflow_anchor_when_local_checkout_lacks_reviewed_head(m
     assert recorded == []
 
 
-def test_cmd_run_allows_explicit_repo_without_local_checkout(monkeypatch, tmp_path: Path) -> None:
+def test_cmd_run_allows_explicit_repo_without_local_checkout(
+    monkeypatch, tmp_path: Path
+) -> None:
     emitted: list[dict[str, object]] = []
     recorded: list[dict[str, object]] = []
 
-    monkeypatch.setattr(review_github, "resolve_repo_root", lambda cd: (_ for _ in ()).throw(AssertionError("should not resolve repo root")))
+    monkeypatch.setattr(
+        review_github,
+        "resolve_repo_root",
+        lambda cd: (_ for _ in ()).throw(
+            AssertionError("should not resolve repo root")
+        ),
+    )
     monkeypatch.setattr(
         review_github,
         "get_pr_context",
@@ -851,12 +1025,26 @@ def test_cmd_run_allows_explicit_repo_without_local_checkout(monkeypatch, tmp_pa
             "items": [],
         },
     )
-    monkeypatch.setattr(review_github, "record_review_anchor", lambda **kwargs: recorded.append(kwargs) or {})
-    monkeypatch.setattr(review_github, "emit_toon", lambda payload: emitted.append(payload))
+    monkeypatch.setattr(
+        review_github,
+        "record_review_anchor",
+        lambda **kwargs: recorded.append(kwargs) or {},
+    )
+    monkeypatch.setattr(
+        review_github, "emit_toon", lambda payload: emitted.append(payload)
+    )
 
     exit_code = cmd_run(
         review_github.build_parser().parse_args(
-            ["run", "--owner", "example-owner", "--repo", "sample-web", "--pr-number", "87"]
+            [
+                "run",
+                "--owner",
+                "example-owner",
+                "--repo",
+                "sample-web",
+                "--pr-number",
+                "87",
+            ]
         ),
     )
 
@@ -898,7 +1086,15 @@ def test_cmd_run_uses_fast_github_review_polling_default(monkeypatch) -> None:
 
     exit_code = cmd_run(
         review_github.build_parser().parse_args(
-            ["run", "--owner", "example-owner", "--repo", "sample-web", "--pr-number", "87"]
+            [
+                "run",
+                "--owner",
+                "example-owner",
+                "--repo",
+                "sample-web",
+                "--pr-number",
+                "87",
+            ]
         ),
     )
 
@@ -910,9 +1106,17 @@ def test_post_request_includes_repo_selector(monkeypatch) -> None:
     gh_calls: list[list[str]] = []
     request_comment = _request_comment(head_sha="deadbeef")
 
-    monkeypatch.setattr(review_github, "run_gh", lambda args: gh_calls.append(list(args)) or "")
-    monkeypatch.setattr(review_github, "get_issue_comments", lambda *args, **kwargs: [request_comment])
-    monkeypatch.setattr(review_github, "utc_now", lambda: datetime(2026, 4, 20, 10, 0, 0, tzinfo=timezone.utc))
+    monkeypatch.setattr(
+        review_github, "run_gh", lambda args: gh_calls.append(list(args)) or ""
+    )
+    monkeypatch.setattr(
+        review_github, "get_issue_comments", lambda *args, **kwargs: [request_comment]
+    )
+    monkeypatch.setattr(
+        review_github,
+        "utc_now",
+        lambda: datetime(2026, 4, 20, 10, 0, 0, tzinfo=timezone.utc),
+    )
 
     payload = review_github.post_request(
         owner="example-owner",
@@ -923,11 +1127,23 @@ def test_post_request_includes_repo_selector(monkeypatch) -> None:
         bot_login="chatgpt-codex-connector[bot]",
     )
 
-    assert gh_calls == [["pr", "comment", "87", "--repo", "example-owner/sample-web", "--body", "@codex review"]]
+    assert gh_calls == [
+        [
+            "pr",
+            "comment",
+            "87",
+            "--repo",
+            "example-owner/sample-web",
+            "--body",
+            "@codex review",
+        ]
+    ]
     assert payload["request_comment_id"] == "request-1"
 
 
-def test_run_review_cycle_returns_response_found_for_top_level_message(monkeypatch) -> None:
+def test_run_review_cycle_returns_response_found_for_top_level_message(
+    monkeypatch,
+) -> None:
     response = _response_item(
         item_id="issue-1",
         kind="issue_comment",
@@ -953,9 +1169,13 @@ def test_run_review_cycle_returns_response_found_for_top_level_message(monkeypat
             "requested_at": "2026-04-20T10:00:00Z",
         },
     )
-    monkeypatch.setattr("review_github.get_pr_head_sha", lambda *args, **kwargs: "deadbeef")
+    monkeypatch.setattr(
+        "review_github.get_pr_head_sha", lambda *args, **kwargs: "deadbeef"
+    )
     monkeypatch.setattr("review_github.has_eyes_reaction", lambda **kwargs: False)
-    monkeypatch.setattr("review_github.collect_cycle_items", lambda **kwargs: [response])
+    monkeypatch.setattr(
+        "review_github.collect_cycle_items", lambda **kwargs: [response]
+    )
     monkeypatch.setattr("review_github.has_plus_one_reaction", lambda **kwargs: False)
 
     payload = run_review_cycle(
@@ -977,7 +1197,9 @@ def test_run_review_cycle_returns_response_found_for_top_level_message(monkeypat
     assert payload["items"] == [response]
 
 
-def test_run_review_cycle_updates_request_url_when_reusing_active_cycle_after_pickup_timeout(monkeypatch) -> None:
+def test_run_review_cycle_updates_request_url_when_reusing_active_cycle_after_pickup_timeout(
+    monkeypatch,
+) -> None:
     response = _response_item(
         item_id="issue-1",
         kind="issue_comment",
@@ -998,7 +1220,9 @@ def test_run_review_cycle_updates_request_url_when_reusing_active_cycle_after_pi
 
     def fake_now() -> datetime:
         now_calls["count"] += 1
-        return datetime(2026, 4, 20, 10, 0, 0, tzinfo=timezone.utc) + timedelta(seconds=40 * now_calls["count"])
+        return datetime(2026, 4, 20, 10, 0, 0, tzinfo=timezone.utc) + timedelta(
+            seconds=40 * now_calls["count"]
+        )
 
     def fake_inspect_existing_cycle(**kwargs: object) -> dict[str, object] | None:
         inspect_calls["count"] += 1
@@ -1018,7 +1242,9 @@ def test_run_review_cycle_updates_request_url_when_reusing_active_cycle_after_pi
 
     monkeypatch.setattr("review_github.utc_now", fake_now)
     monkeypatch.setattr("review_github.get_pr_context", lambda *args, **kwargs: context)
-    monkeypatch.setattr("review_github.inspect_existing_cycle", fake_inspect_existing_cycle)
+    monkeypatch.setattr(
+        "review_github.inspect_existing_cycle", fake_inspect_existing_cycle
+    )
     monkeypatch.setattr(
         "review_github.post_request",
         lambda **kwargs: {
@@ -1027,7 +1253,9 @@ def test_run_review_cycle_updates_request_url_when_reusing_active_cycle_after_pi
             "requested_at": "2026-04-20T10:00:00Z",
         },
     )
-    monkeypatch.setattr("review_github.get_pr_head_sha", lambda *args, **kwargs: "deadbeef")
+    monkeypatch.setattr(
+        "review_github.get_pr_head_sha", lambda *args, **kwargs: "deadbeef"
+    )
     monkeypatch.setattr("review_github.has_eyes_reaction", lambda **kwargs: False)
     monkeypatch.setattr("review_github.collect_cycle_items", fake_collect_cycle_items)
     monkeypatch.setattr("review_github.has_plus_one_reaction", lambda **kwargs: False)
@@ -1050,10 +1278,15 @@ def test_run_review_cycle_updates_request_url_when_reusing_active_cycle_after_pi
 
     assert payload["status"] == "response_found"
     assert payload["request_comment_id"] == "request-2"
-    assert payload["request_comment_url"] == "https://github.com/example-owner/example-repo/pull/87#issuecomment-request-2"
+    assert (
+        payload["request_comment_url"]
+        == "https://github.com/example-owner/example-repo/pull/87#issuecomment-request-2"
+    )
 
 
-def test_run_review_cycle_uses_status_interval_seconds_for_wait_updates(monkeypatch) -> None:
+def test_run_review_cycle_uses_status_interval_seconds_for_wait_updates(
+    monkeypatch,
+) -> None:
     events: list[str] = []
     timeline = iter(
         [
@@ -1074,7 +1307,9 @@ def test_run_review_cycle_uses_status_interval_seconds_for_wait_updates(monkeypa
     }
 
     monkeypatch.setattr("review_github.utc_now", lambda: next(timeline))
-    monkeypatch.setattr("review_github.emit_state_change", lambda message: events.append(message))
+    monkeypatch.setattr(
+        "review_github.emit_state_change", lambda message: events.append(message)
+    )
     monkeypatch.setattr("review_github.get_pr_context", lambda *args, **kwargs: context)
     monkeypatch.setattr("review_github.inspect_existing_cycle", lambda **kwargs: None)
     monkeypatch.setattr(
@@ -1085,7 +1320,9 @@ def test_run_review_cycle_uses_status_interval_seconds_for_wait_updates(monkeypa
             "requested_at": "2026-04-20T10:00:00Z",
         },
     )
-    monkeypatch.setattr("review_github.get_pr_head_sha", lambda *args, **kwargs: "deadbeef")
+    monkeypatch.setattr(
+        "review_github.get_pr_head_sha", lambda *args, **kwargs: "deadbeef"
+    )
     monkeypatch.setattr("review_github.has_eyes_reaction", lambda **kwargs: False)
     monkeypatch.setattr("review_github.collect_cycle_items", lambda **kwargs: [])
     monkeypatch.setattr("review_github.has_plus_one_reaction", lambda **kwargs: False)

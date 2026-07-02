@@ -10,7 +10,10 @@ import sys
 from pathlib import Path
 from typing import Callable
 
-from review_suite_runtime_bootstrap import bootstrap_from_installed_cache, launcher_script_path
+from review_suite_runtime_bootstrap import (
+    bootstrap_from_installed_cache,
+    launcher_script_path,
+)
 
 bootstrap_from_installed_cache(__file__)
 
@@ -32,7 +35,6 @@ from review_suite_local import (
     RUN_LOG_FILENAME,
     TASK_CLASSES,
     PUBLIC_REVIEWER_LABELS,
-    _run_is_finalized,
     aggregate_records,
     append_record_if_new,
     build_phase_instructions,
@@ -51,7 +53,6 @@ from review_suite_local import (
     find_pending_rounds_for_caller,
     guard_no_stage_step_down,
     includes_deep_review_effort,
-    launch_round,
     load_operational_state,
     load_roster,
     normalize_record_review_cwd_value,
@@ -67,7 +68,6 @@ from review_suite_local import (
     public_reviewer_label,
     read_jsonl,
     round_needs_caller_grade,
-    record_identity_key,
     resolve_caller_id,
     run_round,
     select_pair,
@@ -132,7 +132,9 @@ def _blocking_round_error(
         message = f"pending round blocks {action}: {round_id}"
         action_payload: dict[str, object] = {
             "cmd": _grade_command(round_id=round_id, state_dir=state_dir),
-            "tie_clean": _tie_clean_grade_command(round_id=round_id, state_dir=state_dir),
+            "tie_clean": _tie_clean_grade_command(
+                round_id=round_id, state_dir=state_dir
+            ),
             "dismiss_cmd": _dismiss_round_command(round_id=round_id),
         }
     else:
@@ -155,7 +157,9 @@ def _raise_if_blocking_round_exists(
 ) -> None:
     if ignore_pending_grades:
         return
-    blocking = find_blocking_rounds_for_caller(state_dir=state_dir, caller_id=caller_id, review_cwd=review_cwd)
+    blocking = find_blocking_rounds_for_caller(
+        state_dir=state_dir, caller_id=caller_id, review_cwd=review_cwd
+    )
     if not blocking:
         return
     latest = blocking[-1]
@@ -177,8 +181,12 @@ def _summary_equivalence_view(summary: dict[str, object]) -> dict[str, object]:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = AxiArgumentParser(description="Review Suite paired local review orchestration.")
-    sub = parser.add_subparsers(dest="command", required=True, parser_class=AxiArgumentParser)
+    parser = AxiArgumentParser(
+        description="Review Suite paired local review orchestration."
+    )
+    sub = parser.add_subparsers(
+        dest="command", required=True, parser_class=AxiArgumentParser
+    )
     task_class_choices = tuple(TASK_CLASSES) + tuple(PUBLIC_ARENA_TASK_CLASS_ALIASES)
 
     run = sub.add_parser("run")
@@ -190,7 +198,9 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--roster", default=str(default_roster_path()))
     run.add_argument("--rubric", default=str(default_rubric_path()))
     run.add_argument("--state-dir", default=str(default_state_dir()))
-    run.add_argument("--sqlite-path", default=str(Path.home() / ".codex" / "state_5.sqlite"))
+    run.add_argument(
+        "--sqlite-path", default=str(Path.home() / ".codex" / "state_5.sqlite")
+    )
     run.add_argument("--wsl", action="store_true")
     run.add_argument("--caller-id")
     run.add_argument("--ignore-pending-grades", action="store_true")
@@ -214,7 +224,9 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--cd")
     run.add_argument("--roster", default=str(default_roster_path()))
     run.add_argument("--state-dir", default=str(default_state_dir()))
-    run.add_argument("--sqlite-path", default=str(Path.home() / ".codex" / "state_5.sqlite"))
+    run.add_argument(
+        "--sqlite-path", default=str(Path.home() / ".codex" / "state_5.sqlite")
+    )
     run.add_argument("--base", required=True)
     run.add_argument("--wsl", action="store_true")
 
@@ -223,7 +235,9 @@ def build_parser() -> argparse.ArgumentParser:
     resume.add_argument("--cd")
     resume.add_argument("--roster", default=str(default_roster_path()))
     resume.add_argument("--state-dir", default=str(default_state_dir()))
-    resume.add_argument("--sqlite-path", default=str(Path.home() / ".codex" / "state_5.sqlite"))
+    resume.add_argument(
+        "--sqlite-path", default=str(Path.home() / ".codex" / "state_5.sqlite")
+    )
 
     show = sub.add_parser("show-round")
     show.add_argument("--round-id", required=True)
@@ -232,7 +246,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     show_last = sub.add_parser("show-last", aliases=["show_last"])
     show_last.add_argument("--cd")
-    show_last.add_argument("--task", choices=["review_t1", "review_t2", "review_t3", "review_t4"])
+    show_last.add_argument(
+        "--task", choices=["review_t1", "review_t2", "review_t3", "review_t4"]
+    )
     show_last.add_argument("--state-dir", default=str(default_state_dir()))
     show_last.add_argument("--json", action="store_true")
 
@@ -253,7 +269,9 @@ def build_parser() -> argparse.ArgumentParser:
     grade = sub.add_parser("grade")
     grade.add_argument("--round-id")
     grade.add_argument("--task-id")
-    grade.add_argument("--winner", required=True, help="alpha, bravo, tie, or a concrete variant id")
+    grade.add_argument(
+        "--winner", required=True, help="alpha, bravo, tie, or a concrete variant id"
+    )
     grade.add_argument("--basis", required=True, help="grade basis")
     grade.add_argument("--note")
     grade.add_argument("--alpha-note")
@@ -303,7 +321,9 @@ def build_parser() -> argparse.ArgumentParser:
     reroll.add_argument("--roster", default=str(default_roster_path()))
     reroll.add_argument("--rubric", default=str(default_rubric_path()))
     reroll.add_argument("--state-dir", default=str(default_state_dir()))
-    reroll.add_argument("--sqlite-path", default=str(Path.home() / ".codex" / "state_5.sqlite"))
+    reroll.add_argument(
+        "--sqlite-path", default=str(Path.home() / ".codex" / "state_5.sqlite")
+    )
     reroll.add_argument("--wsl", action="store_true")
 
     return parser
@@ -324,7 +344,9 @@ def cmd_sample(args: argparse.Namespace) -> int:
         roster_path=Path(args.roster),
         rubric_path=Path(getattr(args, "rubric", default_rubric_path())),
     )
-    records = read_jsonl(state_dir / RUN_LOG_FILENAME) + ungraded_round_exposure_records(state_dir)
+    records = read_jsonl(
+        state_dir / RUN_LOG_FILENAME
+    ) + ungraded_round_exposure_records(state_dir)
     operational_state = load_operational_state(state_dir / OPERATIONAL_STATE_FILENAME)
     payload = select_pair(
         roster=roster,
@@ -338,7 +360,9 @@ def cmd_sample(args: argparse.Namespace) -> int:
         excluded_variant_ids=set(args.exclude_variant_id),
     )
     write_round(state_dir, payload)
-    emit_toon(public_round_payload(payload, task_name=_public_local_task_name(task_class)))
+    emit_toon(
+        public_round_payload(payload, task_name=_public_local_task_name(task_class))
+    )
     return 0
 
 
@@ -387,13 +411,21 @@ def _prompt_line(label: str, default: str | None = None) -> str:
 
 def _prompt_winner(default: str | None = None) -> str:
     while True:
-        winner = _prompt_line(
-            "Winner (alpha/bravo/tie; use tie only when materially indistinguishable)",
-            default=default,
-        ).strip().lower()
+        winner = (
+            _prompt_line(
+                "Winner (alpha/bravo/tie; use tie only when materially indistinguishable)",
+                default=default,
+            )
+            .strip()
+            .lower()
+        )
         if winner in {"alpha", "bravo", "tie"}:
             return winner
-        print("[review-suite] winner must be alpha, bravo, or tie", file=sys.stderr, flush=True)
+        print(
+            "[review-suite] winner must be alpha, bravo, or tie",
+            file=sys.stderr,
+            flush=True,
+        )
 
 
 def _prompt_basis(rubric: dict[str, object]) -> str:
@@ -409,11 +441,17 @@ def _prompt_basis(rubric: dict[str, object]) -> str:
         except Exception as exc:
             print(f"[review-suite] invalid basis: {exc}", file=sys.stderr, flush=True)
             if basis_values:
-                print(f"[review-suite] basis values: {', '.join(basis_values)}", file=sys.stderr, flush=True)
+                print(
+                    f"[review-suite] basis values: {', '.join(basis_values)}",
+                    file=sys.stderr,
+                    flush=True,
+                )
 
 
 def _print_findings(result: dict[str, object]) -> bool:
-    return print_reviewer_output_section([run for run in list(result.get("runs") or []) if isinstance(run, dict)])
+    return print_reviewer_output_section(
+        [run for run in list(result.get("runs") or []) if isinstance(run, dict)]
+    )
 
 
 def _ensure_no_pending_grades(
@@ -493,7 +531,10 @@ def _grade_command_for_payload(
     basis: str = "BASIS",
 ) -> str:
     round_id = str(payload.get("round_id") or "").strip() or None
-    task_id = str(payload.get("task_id_hint") or payload.get("graded_task_id") or "").strip() or None
+    task_id = (
+        str(payload.get("task_id_hint") or payload.get("graded_task_id") or "").strip()
+        or None
+    )
     return _grade_command(
         round_id=round_id,
         task_id=task_id,
@@ -572,13 +613,18 @@ def _newly_usable_output_slots(
 
 
 def _visible_completed_output_slots(
-    *, previous_payload: dict[str, object], completed_payload: dict[str, object], show_all_when_gradeable: bool
+    *,
+    previous_payload: dict[str, object],
+    completed_payload: dict[str, object],
+    show_all_when_gradeable: bool,
 ) -> set[str] | None:
     if show_all_when_gradeable:
         if payload_has_blocked_runs(completed_payload):
             return usable_output_slots(completed_payload)
         return None
-    return _newly_usable_output_slots(previous_payload=previous_payload, completed_payload=completed_payload)
+    return _newly_usable_output_slots(
+        previous_payload=previous_payload, completed_payload=completed_payload
+    )
 
 
 def _reroll_rows(
@@ -630,7 +676,9 @@ def _resolve_pending_round_for_direct_grade(
 ) -> dict[str, object] | None:
     pending = [
         payload
-        for payload in find_pending_rounds_for_caller(state_dir=state_dir, caller_id=caller_id, review_cwd=review_cwd)
+        for payload in find_pending_rounds_for_caller(
+            state_dir=state_dir, caller_id=caller_id, review_cwd=review_cwd
+        )
         if str(payload.get("task_class") or "") == task_class
     ]
     if len(pending) == 1:
@@ -670,7 +718,10 @@ def _completed_round_payload(
     if grade_command:
         actions.append({"kind": "grade", "cmd": grade_command})
     if reroll_rows:
-        actions.extend({"kind": "reroll", "slot": row["slot"], "cmd": row["command"]} for row in reroll_rows)
+        actions.extend(
+            {"kind": "reroll", "slot": row["slot"], "cmd": row["command"]}
+            for row in reroll_rows
+        )
     if (
         status == "completed_ungraded"
         and grade_command
@@ -686,7 +737,11 @@ def _completed_round_payload(
             }
         }
     if manual and not grade_command and not reroll_rows and grade is None:
-        note = "manual review blocked; read Output" if round_result.get("blocked") else "manual review complete"
+        note = (
+            "manual review blocked; read Output"
+            if round_result.get("blocked")
+            else "manual review complete"
+        )
         return {"Action": {"note": note}}
     payload: dict[str, object] = {
         "status": status,
@@ -732,7 +787,9 @@ def _orchestrator_banner_task_name(
 def _public_summary(summary: dict[str, object]) -> dict[str, object]:
     public = copy.deepcopy(summary)
     task_classes = dict(public.get("task_classes") or {})
-    public["task_classes"] = {_public_local_task_name(task): value for task, value in task_classes.items()}
+    public["task_classes"] = {
+        _public_local_task_name(task): value for task, value in task_classes.items()
+    }
     return public
 
 
@@ -745,9 +802,21 @@ def _public_operational_state(state: dict[str, object]) -> dict[str, object]:
     task_classes = dict(state.get("task_classes") or {})
     for task in TASK_CLASSES:
         slot = dict(task_classes.get(task) or {})
-        champions = [str(value) for value in list(slot.get("champion_variant_ids") or []) if str(value).strip()]
-        probation = [str(value) for value in list(slot.get("probation_variant_ids") or []) if str(value).strip()]
-        stable = [str(value) for value in list(slot.get("stable_variant_ids") or []) if str(value).strip()]
+        champions = [
+            str(value)
+            for value in list(slot.get("champion_variant_ids") or [])
+            if str(value).strip()
+        ]
+        probation = [
+            str(value)
+            for value in list(slot.get("probation_variant_ids") or [])
+            if str(value).strip()
+        ]
+        stable = [
+            str(value)
+            for value in list(slot.get("stable_variant_ids") or [])
+            if str(value).strip()
+        ]
         rows.append(
             {
                 "task": _public_local_task_name(task),
@@ -781,7 +850,17 @@ def _print_next_steps(
         for slot in blocked_slots:
             print(f"Reroll {slot}:", file=sys.stderr, flush=True)
             print(
-                _reroll_command(round_id=round_id, slot=slot, review_cwd=review_cwd, base=base, roster_path=roster_path, rubric_path=rubric_path, state_dir=state_dir, sqlite_path=sqlite_path, allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback),
+                _reroll_command(
+                    round_id=round_id,
+                    slot=slot,
+                    review_cwd=review_cwd,
+                    base=base,
+                    roster_path=roster_path,
+                    rubric_path=rubric_path,
+                    state_dir=state_dir,
+                    sqlite_path=sqlite_path,
+                    allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
+                ),
                 file=sys.stderr,
                 flush=True,
             )
@@ -804,7 +883,9 @@ def _review_output_refs(runs: list[dict[str, object]]) -> list[str]:
 
 
 def _is_orchestrated_round_payload(payload: dict[str, object]) -> bool:
-    return bool(payload.get("arena_round")) and bool(str(payload.get("orchestrator_step") or "").strip())
+    return bool(payload.get("arena_round")) and bool(
+        str(payload.get("orchestrator_step") or "").strip()
+    )
 
 
 def _round_is_graded(payload: dict[str, object]) -> bool:
@@ -849,7 +930,9 @@ def _orchestrator_review_state_dir(state_dir: Path) -> Path:
 
 def _orchestrator_roster_from_round(payload: dict[str, object]) -> dict[str, object]:
     variants: dict[str, dict[str, object]] = {}
-    task_class = str(payload.get("task_class") or "phase_review").strip() or "phase_review"
+    task_class = (
+        str(payload.get("task_class") or "phase_review").strip() or "phase_review"
+    )
     for run in list(payload.get("runs") or []):
         if not isinstance(run, dict):
             continue
@@ -870,7 +953,9 @@ def _orchestrator_roster_from_round(payload: dict[str, object]) -> dict[str, obj
             variant["service_tier"] = service_tier
         variants[variant_id] = variant
     if not variants:
-        raise ValueError(f"round {payload.get('round_id')} is missing reviewer model metadata")
+        raise ValueError(
+            f"round {payload.get('round_id')} is missing reviewer model metadata"
+        )
     return {"settings": {}, "variants": list(variants.values())}
 
 
@@ -897,8 +982,12 @@ def _completed_orchestrator_review_result(
     write_round(round_state_dir, completed)
     result = public_round_result(completed)
     _print_findings(completed)
-    launch_review_cost_report_refresh_best_effort(state_dir=state_dir, review_cwd=review_cwd)
-    output_refs = _review_output_refs([run for run in list(completed.get("runs") or []) if isinstance(run, dict)])
+    launch_review_cost_report_refresh_best_effort(
+        state_dir=state_dir, review_cwd=review_cwd
+    )
+    output_refs = _review_output_refs(
+        [run for run in list(completed.get("runs") or []) if isinstance(run, dict)]
+    )
     review_scope = dict(completed.get("review_scope") or {})
     return {
         "round_id": str(completed.get("round_id") or ""),
@@ -906,13 +995,16 @@ def _completed_orchestrator_review_result(
         "kind": "review",
         "status": result.get("status"),
         "blocked": bool(result.get("blocked")),
-        "reviewed_head": str(review_scope.get("reviewed_head") or review_scope.get("commit_end") or ""),
+        "reviewed_head": str(
+            review_scope.get("reviewed_head") or review_scope.get("commit_end") or ""
+        ),
         "output_refs": output_refs,
         "runs": list(result.get("runs") or []),
         "round_state_dir": str(round_state_dir),
         "grading_required": bool(grading_required),
         "arena_round": bool(completed.get("arena_round")),
-        "needs_grade": bool(grading_required or completed.get("arena_round")) and bool(round_needs_caller_grade(completed)),
+        "needs_grade": bool(grading_required or completed.get("arena_round"))
+        and bool(round_needs_caller_grade(completed)),
         "graded": _round_is_graded(completed),
     }
 
@@ -920,12 +1012,16 @@ def _completed_orchestrator_review_result(
 def _orchestrator_review_slots(count: int) -> list[str]:
     labels = list(PUBLIC_REVIEWER_LABELS)
     return [
-        labels[index] if index < len(labels) else public_reviewer_label(f"reviewer_{index + 1}")
+        labels[index]
+        if index < len(labels)
+        else public_reviewer_label(f"reviewer_{index + 1}")
         for index in range(count)
     ]
 
 
-def _orchestrator_phase_review_request(*, review_cwd: Path, base: str, custom_instructions: str | None = None):
+def _orchestrator_phase_review_request(
+    *, review_cwd: Path, base: str, custom_instructions: str | None = None
+):
     return _orchestrator_review_request(
         review_cwd=review_cwd,
         base=base,
@@ -934,7 +1030,13 @@ def _orchestrator_phase_review_request(*, review_cwd: Path, base: str, custom_in
     )
 
 
-def _orchestrator_review_request(*, review_cwd: Path, base: str, task_class: str, custom_instructions: str | None = None):
+def _orchestrator_review_request(
+    *,
+    review_cwd: Path,
+    base: str,
+    task_class: str,
+    custom_instructions: str | None = None,
+):
     instruction_builders = {
         "phase_review": build_phase_instructions,
         "pr_review": build_pr_instructions,
@@ -950,7 +1052,9 @@ def _orchestrator_review_request(*, review_cwd: Path, base: str, task_class: str
         custom_instructions=custom_instructions or "",
     )
     if not request.prompt.strip():
-        raise ValueError(f"orchestrator review requires a non-empty {task_class} prompt")
+        raise ValueError(
+            f"orchestrator review requires a non-empty {task_class} prompt"
+        )
     return request
 
 
@@ -1040,7 +1144,9 @@ def run_orchestrated_arena_round(
     roster_path = default_roster_path()
     rubric_path = default_rubric_path()
     roster = load_roster(roster_path)
-    records = read_jsonl(state_dir / RUN_LOG_FILENAME) + ungraded_round_exposure_records(state_dir)
+    records = read_jsonl(
+        state_dir / RUN_LOG_FILENAME
+    ) + ungraded_round_exposure_records(state_dir)
     operational_state = load_operational_state(state_dir / OPERATIONAL_STATE_FILENAME)
     payload = select_pair(
         roster=roster,
@@ -1078,7 +1184,11 @@ def run_orchestrated_arena_round(
             {
                 "round_id": str(payload.get("round_id") or ""),
                 "round_state_dir": str(state_dir),
-                "reviewed_head": str(request.review_scope.get("reviewed_head") or request.review_scope.get("commit_end") or ""),
+                "reviewed_head": str(
+                    request.review_scope.get("reviewed_head")
+                    or request.review_scope.get("commit_end")
+                    or ""
+                ),
             }
         )
     _print_round_banner(
@@ -1152,7 +1262,9 @@ def _run_orchestrator_manual_review_step(
         raise ValueError("reviewer_count must be > 0")
     if not prompt.strip():
         raise ValueError("orchestrator review requires a non-empty prompt")
-    variant_id = "-".join(part for part in [model, reasoning_effort, service_tier] if part)
+    variant_id = "-".join(
+        part for part in [model, reasoning_effort, service_tier] if part
+    )
     variant = {
         "id": variant_id,
         "state": "active",
@@ -1200,7 +1312,11 @@ def _run_orchestrator_manual_review_step(
             {
                 "round_id": round_id,
                 "round_state_dir": str(round_state_dir),
-                "reviewed_head": str(review_scope.get("reviewed_head") or review_scope.get("commit_end") or ""),
+                "reviewed_head": str(
+                    review_scope.get("reviewed_head")
+                    or review_scope.get("commit_end")
+                    or ""
+                ),
             }
         )
     _print_round_banner(
@@ -1252,7 +1368,9 @@ def resume_orchestrator_review_step(
     progress_interval_seconds: int,
     grading_required: bool = False,
 ) -> dict[str, object]:
-    resolved_round_state_dir = round_state_dir or _orchestrator_review_state_dir(state_dir)
+    resolved_round_state_dir = round_state_dir or _orchestrator_review_state_dir(
+        state_dir
+    )
     payload = load_round(resolved_round_state_dir, round_id)
     status = str(payload.get("status") or "").strip()
     resolved_review_cwd = Path(str(payload.get("review_cwd") or review_cwd))
@@ -1280,10 +1398,14 @@ def resume_orchestrator_review_step(
             progress_interval_seconds=int(
                 payload.get("progress_interval_seconds") or progress_interval_seconds
             ),
-            allow_unsafe_windows_wsl_fallback=bool(payload.get("allow_unsafe_windows_wsl_fallback")),
+            allow_unsafe_windows_wsl_fallback=bool(
+                payload.get("allow_unsafe_windows_wsl_fallback")
+            ),
         )
     else:
-        raise ValueError(f"round {round_id} is {status or 'missing status'}, not resumable")
+        raise ValueError(
+            f"round {round_id} is {status or 'missing status'}, not resumable"
+        )
     return _completed_orchestrator_review_result(
         completed=completed,
         lane=lane,
@@ -1342,7 +1464,11 @@ def run_orchestrator_followup_review_step(
 
 
 def _record_anchor_warning(exc: Exception) -> None:
-    print(f"[review-suite] WARNING: failed to record workflow anchor: {exc}", file=sys.stderr, flush=True)
+    print(
+        f"[review-suite] WARNING: failed to record workflow anchor: {exc}",
+        file=sys.stderr,
+        flush=True,
+    )
 
 
 def run_benchmarked_round(
@@ -1429,7 +1555,9 @@ def run_benchmarked_round(
     )
     roster = load_roster(roster_path)
     rubric = load_rubric(rubric_path)
-    records = read_jsonl(state_dir / RUN_LOG_FILENAME) + ungraded_round_exposure_records(state_dir)
+    records = read_jsonl(
+        state_dir / RUN_LOG_FILENAME
+    ) + ungraded_round_exposure_records(state_dir)
     operational_state = load_operational_state(state_dir / OPERATIONAL_STATE_FILENAME)
     payload = select_pair(
         roster=roster,
@@ -1461,7 +1589,9 @@ def run_benchmarked_round(
     )
     round_result = public_round_result(
         completed,
-        output_slots=_newly_usable_output_slots(previous_payload=payload, completed_payload=completed),
+        output_slots=_newly_usable_output_slots(
+            previous_payload=payload, completed_payload=completed
+        ),
     )
     _print_findings(completed)
 
@@ -1550,15 +1680,25 @@ def run_benchmarked_round(
             task_id = task_id or _prompt_line("Task id", default=branch_default)
             winner = winner or _prompt_winner()
             basis = basis or _prompt_basis(rubric)
-            alpha_note = alpha_note if alpha_note is not None else _prompt_line("Alpha note", default="")
-            bravo_note = bravo_note if bravo_note is not None else _prompt_line("Bravo note", default="")
+            alpha_note = (
+                alpha_note
+                if alpha_note is not None
+                else _prompt_line("Alpha note", default="")
+            )
+            bravo_note = (
+                bravo_note
+                if bravo_note is not None
+                else _prompt_line("Bravo note", default="")
+            )
             note = note if note is not None else _prompt_line("Shared note", default="")
         except EOFError:
             if not interactive_output:
                 emit_toon(
                     _completed_round_payload(
                         round_result=round_result,
-                        grade_command=_grade_command_for_payload(completed, state_dir=state_dir),
+                        grade_command=_grade_command_for_payload(
+                            completed, state_dir=state_dir
+                        ),
                         grade_tie_clean_command=_grade_command_for_payload(
                             completed,
                             state_dir=state_dir,
@@ -1667,7 +1807,9 @@ def _refresh_state_and_reports_locked(
     records: list[dict[str, object]] | None = None,
 ) -> None:
     operational_state = load_operational_state(state_dir / OPERATIONAL_STATE_FILENAME)
-    current_records = records if records is not None else read_jsonl(state_dir / RUN_LOG_FILENAME)
+    current_records = (
+        records if records is not None else read_jsonl(state_dir / RUN_LOG_FILENAME)
+    )
     summary = aggregate_records(
         roster=roster,
         records=current_records,
@@ -1736,7 +1878,9 @@ def cmd_run_round(args: argparse.Namespace) -> int:
         progress_interval_seconds=DEFAULT_PROGRESS_INTERVAL_SECONDS,
         allow_unsafe_windows_wsl_fallback=bool(args.wsl),
     )
-    completed["task_id_hint"] = _current_branch_name(review_cwd) or str(payload["round_id"])
+    completed["task_id_hint"] = _current_branch_name(review_cwd) or str(
+        payload["round_id"]
+    )
     write_round(state_dir, completed)
     refresh_review_cost_report_best_effort(state_dir=state_dir, review_cwd=review_cwd)
     result = public_round_result(
@@ -1752,7 +1896,9 @@ def cmd_run_round(args: argparse.Namespace) -> int:
         _record_standalone_review_anchor_for_round(
             state_dir=state_dir,
             review_cwd=review_cwd,
-            lane=_public_local_task_name(str(payload.get("task_class") or completed.get("task_class") or "")),
+            lane=_public_local_task_name(
+                str(payload.get("task_class") or completed.get("task_class") or "")
+            ),
             base=str(review_scope.get("base") or "") or None,
             review_scope=review_scope,
             round_payload=payload,
@@ -1764,7 +1910,9 @@ def cmd_run_round(args: argparse.Namespace) -> int:
         emit_toon(
             _completed_round_payload(
                 round_result=result,
-                grade_command=None if result.get("blocked") else _grade_command_for_payload(completed, state_dir=state_dir),
+                grade_command=None
+                if result.get("blocked")
+                else _grade_command_for_payload(completed, state_dir=state_dir),
                 grade_tie_clean_command=_grade_command_for_payload(
                     completed,
                     state_dir=state_dir,
@@ -1779,17 +1927,25 @@ def cmd_run_round(args: argparse.Namespace) -> int:
 def cmd_reroll_slot(args: argparse.Namespace) -> int:
     roster = load_roster(Path(args.roster))
     state_dir = Path(args.state_dir)
-    records = read_jsonl(state_dir / RUN_LOG_FILENAME) + ungraded_round_exposure_records(state_dir)
+    records = read_jsonl(
+        state_dir / RUN_LOG_FILENAME
+    ) + ungraded_round_exposure_records(state_dir)
     original = load_round(state_dir, args.round_id)
     payload = build_reroll_slot_payload(
         round_payload=original,
         roster=roster,
-        operational_state=load_operational_state(state_dir / OPERATIONAL_STATE_FILENAME),
+        operational_state=load_operational_state(
+            state_dir / OPERATIONAL_STATE_FILENAME
+        ),
         records=records,
         slot=args.slot,
         seed=args.seed,
     )
-    review_cwd = Path(args.cd).resolve() if args.cd else Path(str(original["review_cwd"])).resolve()
+    review_cwd = (
+        Path(args.cd).resolve()
+        if args.cd
+        else Path(str(original["review_cwd"])).resolve()
+    )
     review_scope = copy.deepcopy(original.get("review_scope") or {})
     if args.base:
         review_scope["base"] = args.base
@@ -1799,7 +1955,10 @@ def cmd_reroll_slot(args: argparse.Namespace) -> int:
     payload["review_cwd_normalized"] = (
         normalize_review_cwd_value(review_cwd)
         if args.cd
-        else str(original.get("review_cwd_normalized") or normalize_review_cwd_value(review_cwd))
+        else str(
+            original.get("review_cwd_normalized")
+            or normalize_review_cwd_value(review_cwd)
+        )
     )
     for key in (
         "allow_unsafe_windows_wsl_fallback",
@@ -1817,7 +1976,9 @@ def cmd_reroll_slot(args: argparse.Namespace) -> int:
             payload[key] = copy.deepcopy(original[key])
     if _output_isatty():
         _print_round_banner(
-            task_name=_public_local_task_name(str(original.get("task_class") or payload.get("task_class") or "")),
+            task_name=_public_local_task_name(
+                str(original.get("task_class") or payload.get("task_class") or "")
+            ),
             round_id=str(payload["round_id"]),
         )
     print(f"[review-suite] reroll {args.slot}", file=sys.stderr, flush=True)
@@ -1860,7 +2021,9 @@ def cmd_reroll_slot(args: argparse.Namespace) -> int:
         _record_standalone_review_anchor_for_round(
             state_dir=state_dir,
             review_cwd=review_cwd,
-            lane=_public_local_task_name(str(original.get("task_class") or payload.get("task_class") or "")),
+            lane=_public_local_task_name(
+                str(original.get("task_class") or payload.get("task_class") or "")
+            ),
             base=str(review_scope.get("base") or "") or None,
             review_scope=review_scope,
             round_payload=payload,
@@ -1874,7 +2037,9 @@ def cmd_reroll_slot(args: argparse.Namespace) -> int:
         emit_toon(
             _completed_round_payload(
                 round_result=result,
-                grade_command=None if result.get("blocked") else _grade_command_for_payload(completed, state_dir=state_dir),
+                grade_command=None
+                if result.get("blocked")
+                else _grade_command_for_payload(completed, state_dir=state_dir),
                 grade_tie_clean_command=_grade_command_for_payload(
                     completed,
                     state_dir=state_dir,
@@ -1917,7 +2082,9 @@ def cmd_resume_round(args: argparse.Namespace) -> int:
         )
         return 0
     if payload.get("status") != "running":
-        raise ValueError(f"round {args.round_id} is {payload.get('status')}, not running")
+        raise ValueError(
+            f"round {args.round_id} is {payload.get('status')}, not running"
+        )
     review_cwd = Path(str(payload["review_cwd"]))
     completed = collect_round_results(
         round_payload=payload,
@@ -1937,13 +2104,19 @@ def cmd_resume_round(args: argparse.Namespace) -> int:
         ),
     )
     _print_findings(completed)
-    completed["task_id_hint"] = _current_branch_name(review_cwd) or str(payload["round_id"])
+    completed["task_id_hint"] = _current_branch_name(review_cwd) or str(
+        payload["round_id"]
+    )
     if not bool(result.get("blocked")):
-        review_scope = dict(completed.get("review_scope") or payload.get("review_scope") or {})
+        review_scope = dict(
+            completed.get("review_scope") or payload.get("review_scope") or {}
+        )
         _record_standalone_review_anchor_for_round(
             state_dir=state_dir,
             review_cwd=review_cwd,
-            lane=_public_local_task_name(str(payload.get("task_class") or completed.get("task_class") or "")),
+            lane=_public_local_task_name(
+                str(payload.get("task_class") or completed.get("task_class") or "")
+            ),
             base=str(review_scope.get("base") or "") or None,
             review_scope=review_scope,
             round_payload=payload,
@@ -1955,7 +2128,9 @@ def cmd_resume_round(args: argparse.Namespace) -> int:
         emit_toon(
             _completed_round_payload(
                 round_result=result,
-                grade_command=None if result.get("blocked") else _grade_command_for_payload(completed, state_dir=state_dir),
+                grade_command=None
+                if result.get("blocked")
+                else _grade_command_for_payload(completed, state_dir=state_dir),
                 grade_tie_clean_command=_grade_command_for_payload(
                     completed,
                     state_dir=state_dir,
@@ -2011,7 +2186,9 @@ def _print_round_outputs(payload: dict[str, object]) -> None:
     recorded_at = str(payload.get("recorded_at") or "").strip()
     if recorded_at:
         write_text(f"recorded_at: {recorded_at}")
-    review_cwd = str(payload.get("review_cwd") or payload.get("review_cwd_normalized") or "").strip()
+    review_cwd = str(
+        payload.get("review_cwd") or payload.get("review_cwd_normalized") or ""
+    ).strip()
     if review_cwd:
         write_text(f"review_cwd: {review_cwd}")
     graded_at = str(payload.get("graded_at") or "").strip()
@@ -2038,11 +2215,15 @@ def _round_output_sort_key(payload: dict[str, object]) -> str:
     )
 
 
-def _gate_record_as_round_payload(record: dict[str, object], decision: dict[str, object] | None = None) -> dict[str, object]:
+def _gate_record_as_round_payload(
+    record: dict[str, object], decision: dict[str, object] | None = None
+) -> dict[str, object]:
     payload = {
         "round_id": record.get("round_id"),
         "task_class": record.get("task_class"),
-        "status": gate_record_status(dict(record), dict(decision) if decision else None),
+        "status": gate_record_status(
+            dict(record), dict(decision) if decision else None
+        ),
         "recorded_at": record.get("recorded_at"),
         "review_cwd": record.get("review_cwd"),
         "review_cwd_normalized": record.get("review_cwd_normalized"),
@@ -2056,10 +2237,14 @@ def _gate_record_as_round_payload(record: dict[str, object], decision: dict[str,
     return payload
 
 
-def _load_gate_round_payload(state_dir: Path, round_id: str) -> dict[str, object] | None:
+def _load_gate_round_payload(
+    state_dir: Path, round_id: str
+) -> dict[str, object] | None:
     for record in read_jsonl(state_dir / "gate_runs.jsonl"):
         if str(record.get("round_id") or "") == round_id:
-            return _gate_record_as_round_payload(record, gate_signoff_decision_for_round(state_dir, round_id))
+            return _gate_record_as_round_payload(
+                record, gate_signoff_decision_for_round(state_dir, round_id)
+            )
     return None
 
 
@@ -2089,7 +2274,9 @@ def _iter_recoverable_round_outputs(state_dir: Path) -> list[dict[str, object]]:
         task_class = str(record.get("task_class") or "")
         if task_class in {"phase_gate", "pr_gate"}:
             round_id = str(record.get("round_id") or "")
-            payloads.append(_gate_record_as_round_payload(record, gate_decisions.get(round_id)))
+            payloads.append(
+                _gate_record_as_round_payload(record, gate_decisions.get(round_id))
+            )
     return payloads
 
 
@@ -2099,7 +2286,9 @@ def _last_round_outputs(
     review_cwd: Path | None,
     task: str | None,
 ) -> list[dict[str, object]]:
-    normalized_cwd = normalize_review_cwd_value(review_cwd) if review_cwd is not None else None
+    normalized_cwd = (
+        normalize_review_cwd_value(review_cwd) if review_cwd is not None else None
+    )
     latest_by_task: dict[str, dict[str, object]] = {}
     for payload in _iter_recoverable_round_outputs(state_dir):
         public_task = public_task_name(str(payload.get("task_class") or ""))
@@ -2110,7 +2299,9 @@ def _last_round_outputs(
             if payload_cwd != normalized_cwd:
                 continue
         previous = latest_by_task.get(public_task)
-        if previous is None or _round_output_sort_key(payload) > _round_output_sort_key(previous):
+        if previous is None or _round_output_sort_key(payload) > _round_output_sort_key(
+            previous
+        ):
             latest_by_task[public_task] = payload
     return [latest_by_task[key] for key in sorted(latest_by_task)]
 
@@ -2130,7 +2321,9 @@ def cmd_show_round(args: argparse.Namespace) -> int:
         if payload is None:
             raise load_error or ValueError(f"unknown round: {args.round_id}")
     if bool(getattr(args, "json", False)):
-        write_text(json.dumps(_round_output_payload(payload), indent=2, ensure_ascii=False))
+        write_text(
+            json.dumps(_round_output_payload(payload), indent=2, ensure_ascii=False)
+        )
         return 0
     _print_round_outputs(payload)
     return 0
@@ -2144,7 +2337,13 @@ def cmd_show_last(args: argparse.Namespace) -> int:
         task=getattr(args, "task", None),
     )
     if bool(getattr(args, "json", False)):
-        write_text(json.dumps([_round_output_payload(payload) for payload in payloads], indent=2, ensure_ascii=False))
+        write_text(
+            json.dumps(
+                [_round_output_payload(payload) for payload in payloads],
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
         return 0
     if not payloads:
         target = f" for {review_cwd}" if review_cwd is not None else ""
@@ -2170,12 +2369,16 @@ def cmd_close_gate(args: argparse.Namespace) -> int:
     existing = gate_signoff_decision_for_round(state_dir, round_id)
     status = gate_record_status(gate_record, existing)
     if status == "blocked":
-        raise ValueError(f"blocked gate rounds cannot be closed as signoff decisions: {round_id}")
+        raise ValueError(
+            f"blocked gate rounds cannot be closed as signoff decisions: {round_id}"
+        )
     verdict = str(args.verdict or "").strip()
     if existing:
         existing_verdict = str(existing.get("verdict") or "").strip()
         if existing_verdict != verdict:
-            raise ValueError(f"gate round already closed as {existing_verdict}: {round_id}")
+            raise ValueError(
+                f"gate round already closed as {existing_verdict}: {round_id}"
+            )
         emit_toon(
             {
                 "status": "ok",
@@ -2184,7 +2387,11 @@ def cmd_close_gate(args: argparse.Namespace) -> int:
                 "round_id": round_id,
                 "verdict": existing_verdict,
                 "anchored": bool(existing.get("workflow_anchor_recorded")),
-                **({"scope_check": GATE_FINDINGS_SCOPE_CHECK} if existing_verdict == "findings" else {}),
+                **(
+                    {"scope_check": GATE_FINDINGS_SCOPE_CHECK}
+                    if existing_verdict == "findings"
+                    else {}
+                ),
             }
         )
         return 0
@@ -2194,7 +2401,9 @@ def cmd_close_gate(args: argparse.Namespace) -> int:
     review_cwd_text = str(gate_record.get("review_cwd") or "").strip()
     if verdict == "clean":
         if not review_cwd_text:
-            raise ValueError(f"gate round is missing review_cwd and cannot be anchored: {round_id}")
+            raise ValueError(
+                f"gate round is missing review_cwd and cannot be anchored: {round_id}"
+            )
         review_scope = dict(gate_record.get("review_scope") or {})
         record_review_anchor(
             state_dir=state_dir,
@@ -2261,7 +2470,11 @@ def _cost_row_payload(row) -> dict[str, object]:
 def cmd_costs(args: argparse.Namespace) -> int:
     state_dir = Path(args.state_dir)
     include_all = bool(getattr(args, "all", False))
-    review_cwd = None if include_all else (resolve_repo_root(args.cd) if getattr(args, "cd", None) else None)
+    review_cwd = (
+        None
+        if include_all
+        else (resolve_repo_root(args.cd) if getattr(args, "cd", None) else None)
+    )
     if review_cwd is None and not include_all:
         review_cwd = resolve_repo_root(None)
     rows = collect_review_cost_rows(
@@ -2270,7 +2483,11 @@ def cmd_costs(args: argparse.Namespace) -> int:
         include_all=include_all,
         codex_home=Path(args.codex_home) if getattr(args, "codex_home", None) else None,
     )
-    output_path = Path(args.output) if getattr(args, "output", None) else state_dir / DEFAULT_COST_REPORT_FILENAME
+    output_path = (
+        Path(args.output)
+        if getattr(args, "output", None)
+        else state_dir / DEFAULT_COST_REPORT_FILENAME
+    )
     update_review_cost_row_cache(state_dir=state_dir, rows=rows)
     report_rows = read_review_cost_row_cache(state_dir) or rows
     write_review_cost_report(rows=report_rows, output_path=output_path)
@@ -2278,7 +2495,9 @@ def cmd_costs(args: argparse.Namespace) -> int:
         "tokens": sum(row.tokens for row in rows),
         "cost_usd": round(sum(row.cost_usd for row in rows), 6),
         "implementation_tokens": sum(row.implementation_tokens for row in rows),
-        "implementation_cost_usd": round(sum(row.implementation_cost_usd for row in rows), 6),
+        "implementation_cost_usd": round(
+            sum(row.implementation_cost_usd for row in rows), 6
+        ),
     }
     payload = {
         "status": "ok",
@@ -2293,8 +2512,12 @@ def cmd_costs(args: argparse.Namespace) -> int:
     }
     if len(report_rows) != len(rows):
         payload["report_total_tokens"] = sum(row.tokens for row in report_rows)
-        payload["report_total_cost_usd"] = round(sum(row.cost_usd for row in report_rows), 6)
-        payload["report_total_implementation_tokens"] = sum(row.implementation_tokens for row in report_rows)
+        payload["report_total_cost_usd"] = round(
+            sum(row.cost_usd for row in report_rows), 6
+        )
+        payload["report_total_implementation_tokens"] = sum(
+            row.implementation_tokens for row in report_rows
+        )
         payload["report_total_implementation_cost_usd"] = round(
             sum(row.implementation_cost_usd for row in report_rows),
             6,
@@ -2316,14 +2539,23 @@ def cmd_grade(args: argparse.Namespace) -> int:
         review_cwd = resolve_repo_root(None)
         blocking = [
             payload
-            for payload in find_blocking_rounds_for_caller(state_dir=state_dir, caller_id=caller_id, review_cwd=review_cwd)
+            for payload in find_blocking_rounds_for_caller(
+                state_dir=state_dir, caller_id=caller_id, review_cwd=review_cwd
+            )
             if round_needs_caller_grade(payload)
         ]
         if not blocking:
-            raise ValueError("no completed ungraded round found for this caller/worktree; pass --round-id to grade a specific round")
+            raise ValueError(
+                "no completed ungraded round found for this caller/worktree; pass --round-id to grade a specific round"
+            )
         round_id = str(blocking[-1].get("round_id") or "").strip()
     round_payload = load_round(state_dir, round_id)
-    task_id = str(args.task_id or round_payload.get("task_id_hint") or round_payload.get("graded_task_id") or round_id).strip()
+    task_id = str(
+        args.task_id
+        or round_payload.get("task_id_hint")
+        or round_payload.get("graded_task_id")
+        or round_id
+    ).strip()
     result = _record_grade_result(
         roster=roster,
         rubric=rubric,
@@ -2351,7 +2583,9 @@ def cmd_dismiss_round(args: argparse.Namespace) -> int:
     caller_id, caller_id_source = resolve_caller_id(args.caller_id)
     previous_status = str(payload.get("status") or "unknown")
     if str(payload.get("graded_at") or "").strip():
-        raise ValueError(f"round {args.round_id} is already graded and cannot be dismissed")
+        raise ValueError(
+            f"round {args.round_id} is already graded and cannot be dismissed"
+        )
     if previous_status == "dismissed":
         emit_toon(
             {
@@ -2364,7 +2598,9 @@ def cmd_dismiss_round(args: argparse.Namespace) -> int:
         )
         return 0
     if round_has_live_reviewer_process(payload):
-        raise ValueError(f"round {args.round_id} still has live reviewer processes; refusing dismissal")
+        raise ValueError(
+            f"round {args.round_id} still has live reviewer processes; refusing dismissal"
+        )
     dismissed_at = utc_now_iso()
     payload["status"] = "dismissed"
     payload["dismissed_at"] = dismissed_at
@@ -2395,7 +2631,9 @@ def cmd_report(args: argparse.Namespace) -> int:
         summary = aggregate_records(
             roster=roster,
             records=records,
-            operational_state=load_operational_state(state_dir / OPERATIONAL_STATE_FILENAME),
+            operational_state=load_operational_state(
+                state_dir / OPERATIONAL_STATE_FILENAME
+            ),
         )
         write_reports(state_dir, summary)
     emit_toon(_public_summary(summary))
@@ -2423,7 +2661,9 @@ def cmd_promote(args: argparse.Namespace) -> int:
     state_dir = Path(args.state_dir)
     with state_lock(state_dir, "reports"):
         records = read_jsonl(state_dir / RUN_LOG_FILENAME)
-        operational_state = load_operational_state(state_dir / OPERATIONAL_STATE_FILENAME)
+        operational_state = load_operational_state(
+            state_dir / OPERATIONAL_STATE_FILENAME
+        )
         summary = aggregate_records(
             roster=roster,
             records=records,
@@ -2443,21 +2683,40 @@ def cmd_compact_runs(args: argparse.Namespace) -> int:
     with state_lock(state_dir, "runs"), state_lock(state_dir, "reports"):
         records = read_jsonl(run_log_path)
         compacted_records = [compact_benchmark_record(record) for record in records]
-        operational_state = load_operational_state(state_dir / OPERATIONAL_STATE_FILENAME)
-        summary_before = aggregate_records(roster=roster, records=records, operational_state=operational_state)
-        summary_after = aggregate_records(roster=roster, records=compacted_records, operational_state=operational_state)
-        if _summary_equivalence_view(summary_before) != _summary_equivalence_view(summary_after):
-            raise ValueError("compacted runs would change aggregate output; aborting migration")
+        operational_state = load_operational_state(
+            state_dir / OPERATIONAL_STATE_FILENAME
+        )
+        summary_before = aggregate_records(
+            roster=roster, records=records, operational_state=operational_state
+        )
+        summary_after = aggregate_records(
+            roster=roster,
+            records=compacted_records,
+            operational_state=operational_state,
+        )
+        if _summary_equivalence_view(summary_before) != _summary_equivalence_view(
+            summary_after
+        ):
+            raise ValueError(
+                "compacted runs would change aggregate output; aborting migration"
+            )
         before_bytes = run_log_path.stat().st_size if run_log_path.exists() else 0
         compacted_text = ""
         if compacted_records:
-            compacted_text = "\n".join(json.dumps(record, sort_keys=True) for record in compacted_records) + "\n"
+            compacted_text = (
+                "\n".join(
+                    json.dumps(record, sort_keys=True) for record in compacted_records
+                )
+                + "\n"
+            )
         after_bytes = len(compacted_text.encode("utf-8"))
         backup_path = None
         report_refreshed = False
         if args.apply:
             if run_log_path.exists():
-                backup_path = run_log_path.with_name(f"{run_log_path.name}{args.backup_suffix}")
+                backup_path = run_log_path.with_name(
+                    f"{run_log_path.name}{args.backup_suffix}"
+                )
                 shutil.copy2(run_log_path, backup_path)
             write_jsonl(run_log_path, compacted_records)
             write_reports(state_dir, summary_after)
@@ -2470,7 +2729,11 @@ def cmd_compact_runs(args: argparse.Namespace) -> int:
         "before_b": before_bytes,
         "after_b": after_bytes,
         "saved_b": before_bytes - after_bytes,
-        "reduction_pct": round((((before_bytes - after_bytes) / before_bytes) * 100.0), 3) if before_bytes else 0.0,
+        "reduction_pct": round(
+            (((before_bytes - after_bytes) / before_bytes) * 100.0), 3
+        )
+        if before_bytes
+        else 0.0,
         "runs": str(run_log_path),
         "backup": str(backup_path) if backup_path else None,
         "reports": report_refreshed,
@@ -2485,7 +2748,9 @@ def cmd_compact_rounds(args: argparse.Namespace) -> int:
         {
             "status": "ok",
             "applied": bool(args.apply),
-            "reduction_pct": round((result["saved_b"] / result["before_b"]) * 100.0, 3) if result["before_b"] else 0.0,
+            "reduction_pct": round((result["saved_b"] / result["before_b"]) * 100.0, 3)
+            if result["before_b"]
+            else 0.0,
         }
     )
     emit_toon(result)

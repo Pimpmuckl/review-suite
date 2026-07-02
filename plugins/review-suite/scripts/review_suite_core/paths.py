@@ -60,7 +60,12 @@ def _candidate_windows_paths_for_posix_input(cwd: str) -> list[str]:
     if not normalized:
         return []
     candidates: list[str] = []
-    if normalized.startswith("/mnt/") and len(normalized) >= 7 and normalized[5].isalpha() and normalized[6] == "/":
+    if (
+        normalized.startswith("/mnt/")
+        and len(normalized) >= 7
+        and normalized[5].isalpha()
+        and normalized[6] == "/"
+    ):
         drive = normalized[5].upper()
         remainder = normalized[7:]
         windows_path = f"{drive}:/{remainder}" if remainder else f"{drive}:/"
@@ -74,7 +79,9 @@ def _translate_windows_posix_path(cwd: str) -> str | None:
     candidates = _candidate_windows_paths_for_posix_input(cwd)
     if candidates:
         preferred = candidates[0]
-        if preferred.lower().startswith(tuple(f"{drive}:/" for drive in "abcdefghijklmnopqrstuvwxyz")) and _path_exists(preferred):
+        if preferred.lower().startswith(
+            tuple(f"{drive}:/" for drive in "abcdefghijklmnopqrstuvwxyz")
+        ) and _path_exists(preferred):
             return preferred
     existing = [candidate for candidate in candidates if _path_exists(candidate)]
     unique_existing = list(dict.fromkeys(existing))
@@ -92,13 +99,22 @@ def _windows_posix_path_message(cwd: str) -> str | None:
         "If this repo lives inside WSL, rerun from Windows with "
         f"`--cd //wsl.localhost/<Distro>{normalized}`.",
     ]
-    if normalized.startswith("/mnt/") and len(normalized) >= 7 and normalized[5].isalpha() and normalized[6] == "/":
+    if (
+        normalized.startswith("/mnt/")
+        and len(normalized) >= 7
+        and normalized[5].isalpha()
+        and normalized[6] == "/"
+    ):
         drive = normalized[5].upper()
         remainder = normalized[7:]
         windows_path = f"{drive}:/{remainder}" if remainder else f"{drive}:/"
-        lines.append(f"If this repo actually lives on Windows, use a native Windows path such as `{windows_path}` instead.")
+        lines.append(
+            f"If this repo actually lives on Windows, use a native Windows path such as `{windows_path}` instead."
+        )
     else:
-        lines.append("If this repo actually lives on Windows, use a native Windows path such as `C:/Code/your-repo` instead.")
+        lines.append(
+            "If this repo actually lives on Windows, use a native Windows path such as `C:/Code/your-repo` instead."
+        )
     return " ".join(lines)
 
 
@@ -113,7 +129,9 @@ def _git_top_level(path: Path) -> Path:
     )
     if proc.returncode != 0:
         stderr = (proc.stderr or proc.stdout or "").strip()
-        raise ValueError(f"review-suite requires a git repo root or repo subdirectory: {stderr or 'git rev-parse --show-toplevel failed'}")
+        raise ValueError(
+            f"review-suite requires a git repo root or repo subdirectory: {stderr or 'git rev-parse --show-toplevel failed'}"
+        )
     top_level = (proc.stdout or "").strip()
     if not top_level:
         raise ValueError("review-suite could not determine the git top-level directory")
@@ -163,7 +181,12 @@ def _native_wsl_key(cwd: str) -> str | None:
     normalized = str(cwd or "").strip().replace("\\", "/")
     if not normalized.startswith("/") or normalized.startswith("//"):
         return None
-    if len(normalized) >= 7 and normalized.startswith("/mnt/") and normalized[5].isalpha() and normalized[6] == "/":
+    if (
+        len(normalized) >= 7
+        and normalized.startswith("/mnt/")
+        and normalized[5].isalpha()
+        and normalized[6] == "/"
+    ):
         return None
     return _canonical_wsl_key(distro, normalized)
 
@@ -178,7 +201,14 @@ def cwd_path_from_normalized(normalized_cwd: str) -> Path:
             if sys.platform != "win32" and current_distro == distro.lower():
                 return Path(posix_path)
             if sys.platform == "win32":
-                matching_distro = next((item for item in _list_wsl_distributions() if item.lower() == distro.lower()), distro)
+                matching_distro = next(
+                    (
+                        item
+                        for item in _list_wsl_distributions()
+                        if item.lower() == distro.lower()
+                    ),
+                    distro,
+                )
                 return Path(f"//wsl.localhost/{matching_distro}{posix_path}")
     return Path(value)
 

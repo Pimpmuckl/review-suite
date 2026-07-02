@@ -12,7 +12,9 @@ REVIEW_SUBAGENT_SOURCE = json.dumps({"subagent": "review"}, separators=(",", ":"
 
 _JSONL_CACHE: dict[tuple[str, int, int], list[dict[str, Any]]] = {}
 _ROLLOUT_SUMMARY_CACHE: dict[tuple[str, int, int], dict[str, Any]] = {}
-_THREAD_LOOKUP_CACHE: dict[tuple[str, int, int, str, str | None, int | None], dict[str, Any] | None] = {}
+_THREAD_LOOKUP_CACHE: dict[
+    tuple[str, int, int, str, str | None, int | None], dict[str, Any] | None
+] = {}
 
 
 def _path_cache_key(path: Path) -> tuple[str, int, int]:
@@ -108,7 +110,9 @@ def read_rollout_summary(path: Path) -> dict[str, Any]:
                     "output_tokens": 0,
                 }
             usage = {
-                metric: max(0, final_total[metric] - first_total[metric] + first_last[metric])
+                metric: max(
+                    0, final_total[metric] - first_total[metric] + first_last[metric]
+                )
                 for metric in ("input_tokens", "cached_input_tokens", "output_tokens")
             }
     summary = {"usage": usage, "reviewer_output": final_text}
@@ -140,7 +144,13 @@ def _is_meaningful_activity(row: dict[str, Any]) -> bool:
         return False
     if row_type == "response_item":
         payload_type = str(payload.get("type") or "")
-        if payload_type in {"custom_tool_call", "custom_tool_call_output", "function_call", "function_call_output", "reasoning"}:
+        if payload_type in {
+            "custom_tool_call",
+            "custom_tool_call_output",
+            "function_call",
+            "function_call_output",
+            "reasoning",
+        }:
             return True
         if payload_type != "message" or payload.get("role") != "assistant":
             return False
@@ -204,7 +214,14 @@ def find_thread_by_title(
     if not sqlite_path.is_file():
         return None
     stat = sqlite_path.stat()
-    cache_key = (str(sqlite_path), stat.st_mtime_ns, stat.st_size, title, cwd, created_after)
+    cache_key = (
+        str(sqlite_path),
+        stat.st_mtime_ns,
+        stat.st_size,
+        title,
+        cwd,
+        created_after,
+    )
     cached = _THREAD_LOOKUP_CACHE.get(cache_key)
     if cached is not None:
         return dict(cached) if cached else None
@@ -290,7 +307,12 @@ def find_review_child_thread(
                   and lower(coalesce(model, '')) = lower(?)
                   and lower(coalesce(reasoning_effort, '')) = lower(?)
             """
-            params: list[Any] = [cwd_value, REVIEW_SUBAGENT_SOURCE, model_value, effort_value]
+            params: list[Any] = [
+                cwd_value,
+                REVIEW_SUBAGENT_SOURCE,
+                model_value,
+                effort_value,
+            ]
             if title_value:
                 sql += " and title = ?"
                 params.append(title_value)

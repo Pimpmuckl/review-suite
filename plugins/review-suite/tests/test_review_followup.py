@@ -26,7 +26,9 @@ def test_load_followup_note_requires_non_empty_content(tmp_path: Path) -> None:
         review_followup.load_followup_note(note=None, note_file=str(note_path))
 
 
-def test_load_followup_note_resolves_relative_file_against_repo_root(tmp_path: Path) -> None:
+def test_load_followup_note_resolves_relative_file_against_repo_root(
+    tmp_path: Path,
+) -> None:
     review_root = tmp_path / "repo"
     note_path = review_root / ".review-suite" / "fix-note.md"
     note_path.parent.mkdir(parents=True)
@@ -41,14 +43,28 @@ def test_load_followup_note_resolves_relative_file_against_repo_root(tmp_path: P
     assert text == "invariant: keep owner state coherent"
 
 
-def test_main_uses_recorded_anchor_and_records_new_followup_anchor(monkeypatch, tmp_path: Path) -> None:
+def test_main_uses_recorded_anchor_and_records_new_followup_anchor(
+    monkeypatch, tmp_path: Path
+) -> None:
     captured: dict[str, object] = {}
 
     monkeypatch.setattr(review_followup, "resolve_repo_root", lambda cd: tmp_path)
-    monkeypatch.setattr(review_followup, "ensure_clean_git_worktree", lambda *args, **kwargs: None)
-    monkeypatch.setattr(review_followup, "use_unsafe_windows_wsl_fallback", lambda *args, **kwargs: False)
-    monkeypatch.setattr(review_followup, "effective_base_ref", lambda review_root, base: {"base": base, "requested_base": base})
-    monkeypatch.setattr(review_followup, "has_committed_diff", lambda review_root, start, end: True)
+    monkeypatch.setattr(
+        review_followup, "ensure_clean_git_worktree", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        review_followup,
+        "use_unsafe_windows_wsl_fallback",
+        lambda *args, **kwargs: False,
+    )
+    monkeypatch.setattr(
+        review_followup,
+        "effective_base_ref",
+        lambda review_root, base: {"base": base, "requested_base": base},
+    )
+    monkeypatch.setattr(
+        review_followup, "has_committed_diff", lambda review_root, start, end: True
+    )
     monkeypatch.setattr(
         review_followup,
         "inspect_workflow_status",
@@ -59,7 +75,9 @@ def test_main_uses_recorded_anchor_and_records_new_followup_anchor(monkeypatch, 
         },
     )
     monkeypatch.setattr(review_followup, "current_head", lambda review_root: "def456")
-    monkeypatch.setattr(review_followup, "merge_base", lambda review_root, base: "base123")
+    monkeypatch.setattr(
+        review_followup, "merge_base", lambda review_root, base: "base123"
+    )
     monkeypatch.setattr(
         review_followup,
         "validated_linear_review_range",
@@ -71,6 +89,7 @@ def test_main_uses_recorded_anchor_and_records_new_followup_anchor(monkeypatch, 
             "head": end,
         },
     )
+
     def fake_run_codex_review(**kwargs):
         captured["prompt"] = kwargs["prompt"]
         captured["review_base"] = kwargs["base"]
@@ -85,7 +104,11 @@ def test_main_uses_recorded_anchor_and_records_new_followup_anchor(monkeypatch, 
         }
 
     monkeypatch.setattr(review_followup, "run_codex_review", fake_run_codex_review)
-    monkeypatch.setattr(review_followup, "record_review_anchor", lambda **kwargs: captured.setdefault("anchor", kwargs) or {})
+    monkeypatch.setattr(
+        review_followup,
+        "record_review_anchor",
+        lambda **kwargs: captured.setdefault("anchor", kwargs) or {},
+    )
 
     def fake_emit_result(**kwargs):
         captured["result"] = kwargs
@@ -121,13 +144,21 @@ def test_main_uses_recorded_anchor_and_records_new_followup_anchor(monkeypatch, 
     assert captured["anchor"]["review_scope"]["merge_base"] == "base123"
 
 
-def test_main_records_effective_branch_base_for_followup_anchor(monkeypatch, tmp_path: Path) -> None:
+def test_main_records_effective_branch_base_for_followup_anchor(
+    monkeypatch, tmp_path: Path
+) -> None:
     captured: dict[str, object] = {}
     status_bases: list[str] = []
 
     monkeypatch.setattr(review_followup, "resolve_repo_root", lambda cd: tmp_path)
-    monkeypatch.setattr(review_followup, "ensure_clean_git_worktree", lambda *args, **kwargs: None)
-    monkeypatch.setattr(review_followup, "use_unsafe_windows_wsl_fallback", lambda *args, **kwargs: False)
+    monkeypatch.setattr(
+        review_followup, "ensure_clean_git_worktree", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        review_followup,
+        "use_unsafe_windows_wsl_fallback",
+        lambda *args, **kwargs: False,
+    )
     monkeypatch.setattr(
         review_followup,
         "effective_base_ref",
@@ -149,10 +180,18 @@ def test_main_records_effective_branch_base_for_followup_anchor(monkeypatch, tmp
             "last_reviewed_head": "abc123",
         }
 
-    monkeypatch.setattr(review_followup, "inspect_workflow_status", fake_inspect_workflow_status)
+    monkeypatch.setattr(
+        review_followup, "inspect_workflow_status", fake_inspect_workflow_status
+    )
     monkeypatch.setattr(review_followup, "current_head", lambda review_root: "def456")
-    monkeypatch.setattr(review_followup, "merge_base", lambda review_root, base: f"merge-base-for-{base}")
-    monkeypatch.setattr(review_followup, "has_committed_diff", lambda review_root, start, end: True)
+    monkeypatch.setattr(
+        review_followup,
+        "merge_base",
+        lambda review_root, base: f"merge-base-for-{base}",
+    )
+    monkeypatch.setattr(
+        review_followup, "has_committed_diff", lambda review_root, start, end: True
+    )
     monkeypatch.setattr(
         review_followup,
         "validated_linear_review_range",
@@ -177,7 +216,11 @@ def test_main_records_effective_branch_base_for_followup_anchor(monkeypatch, tmp
             "timed_out": False,
         },
     )
-    monkeypatch.setattr(review_followup, "record_review_anchor", lambda **kwargs: captured.setdefault("anchor", kwargs) or {})
+    monkeypatch.setattr(
+        review_followup,
+        "record_review_anchor",
+        lambda **kwargs: captured.setdefault("anchor", kwargs) or {},
+    )
     monkeypatch.setattr(review_followup, "emit_result", lambda **kwargs: 0)
     monkeypatch.setattr(
         sys,
@@ -197,7 +240,9 @@ def test_main_records_effective_branch_base_for_followup_anchor(monkeypatch, tmp
     assert captured["anchor"]["review_scope"]["base"] == "abc123"
     assert captured["anchor"]["review_scope"]["branch_base"] == "origin/main"
     assert captured["anchor"]["review_scope"]["requested_base"] == "main"
-    assert captured["anchor"]["review_scope"]["merge_base"] == "merge-base-for-origin/main"
+    assert (
+        captured["anchor"]["review_scope"]["merge_base"] == "merge-base-for-origin/main"
+    )
     assert captured["anchor"]["review_scope"]["base_upstream"] == "origin/main"
     assert captured["anchor"]["review_scope"]["base_ref_stale"] is True
 
@@ -206,8 +251,16 @@ def test_main_rejects_empty_followup_interdiff(monkeypatch, tmp_path: Path) -> N
     errors: list[tuple[str, dict[str, object]]] = []
 
     monkeypatch.setattr(review_followup, "resolve_repo_root", lambda cd: tmp_path)
-    monkeypatch.setattr(review_followup, "use_unsafe_windows_wsl_fallback", lambda *args, **kwargs: False)
-    monkeypatch.setattr(review_followup, "effective_base_ref", lambda review_root, base: {"base": base, "requested_base": base})
+    monkeypatch.setattr(
+        review_followup,
+        "use_unsafe_windows_wsl_fallback",
+        lambda *args, **kwargs: False,
+    )
+    monkeypatch.setattr(
+        review_followup,
+        "effective_base_ref",
+        lambda review_root, base: {"base": base, "requested_base": base},
+    )
     monkeypatch.setattr(
         review_followup,
         "inspect_workflow_status",
@@ -229,9 +282,19 @@ def test_main_rejects_empty_followup_interdiff(monkeypatch, tmp_path: Path) -> N
             "head": end,
         },
     )
-    monkeypatch.setattr(review_followup, "has_committed_diff", lambda review_root, start, end: False)
-    monkeypatch.setattr(review_followup, "run_codex_review", lambda **kwargs: (_ for _ in ()).throw(AssertionError("review should not run")))
-    monkeypatch.setattr(review_followup, "emit_error", lambda message, **kwargs: errors.append((message, dict(kwargs))) or 2)
+    monkeypatch.setattr(
+        review_followup, "has_committed_diff", lambda review_root, start, end: False
+    )
+    monkeypatch.setattr(
+        review_followup,
+        "run_codex_review",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("review should not run")),
+    )
+    monkeypatch.setattr(
+        review_followup,
+        "emit_error",
+        lambda message, **kwargs: errors.append((message, dict(kwargs))) or 2,
+    )
     monkeypatch.setattr(
         sys,
         "argv",
@@ -277,9 +340,15 @@ def test_main_rejects_allow_dirty_flag(monkeypatch) -> None:
     assert "unrecognized arguments: --allow-dirty" in errors[0][0]
 
 
-def test_resolve_since_head_requires_anchor_when_not_explicit(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setattr(review_followup, "inspect_workflow_status", lambda **kwargs: {"status": "ok"})
-    with pytest.raises(ValueError, match="requires --since or an existing recorded review anchor"):
+def test_resolve_since_head_requires_anchor_when_not_explicit(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        review_followup, "inspect_workflow_status", lambda **kwargs: {"status": "ok"}
+    )
+    with pytest.raises(
+        ValueError, match="requires --since or an existing recorded review anchor"
+    ):
         review_followup.resolve_since_head(
             explicit_since=None,
             state_dir=tmp_path / "state",
@@ -289,7 +358,9 @@ def test_resolve_since_head_requires_anchor_when_not_explicit(monkeypatch: pytes
         )
 
 
-def test_resolve_since_head_rejects_large_recorded_delta_without_force(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_resolve_since_head_rejects_large_recorded_delta_without_force(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.setattr(
         review_followup,
         "inspect_workflow_status",
@@ -311,11 +382,17 @@ def test_resolve_since_head_rejects_large_recorded_delta_without_force(monkeypat
         )
 
 
-def test_resolve_since_head_allows_large_explicit_delta_with_force(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_resolve_since_head_allows_large_explicit_delta_with_force(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.setattr(
         review_followup,
         "diff_stats",
-        lambda review_cwd, start_ref, end_ref: {"commits_since_anchor": 8, "files_changed": 9, "lines_changed": 900},
+        lambda review_cwd, start_ref, end_ref: {
+            "commits_since_anchor": 8,
+            "files_changed": 9,
+            "lines_changed": 900,
+        },
     )
 
     resolved = review_followup.resolve_since_head(
@@ -351,7 +428,11 @@ def test_resolve_since_head_allows_valid_explicit_anchor_even_when_stored_state_
     monkeypatch.setattr(
         review_followup,
         "diff_stats",
-        lambda review_cwd, start_ref, end_ref: {"commits_since_anchor": 1, "files_changed": 1, "lines_changed": 20},
+        lambda review_cwd, start_ref, end_ref: {
+            "commits_since_anchor": 1,
+            "files_changed": 1,
+            "lines_changed": 20,
+        },
     )
 
     resolved = review_followup.resolve_since_head(
@@ -416,8 +497,12 @@ def test_resolve_since_head_rejects_explicit_anchor_when_followup_cycle_limit_is
 def test_resolve_since_head_rejects_explicit_anchor_that_is_not_ancestor_without_force(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(review_followup, "inspect_workflow_status", lambda **kwargs: {"status": "ok"})
-    monkeypatch.setattr(review_followup, "resolve_ref", lambda review_cwd, ref: "abc123-resolved")
+    monkeypatch.setattr(
+        review_followup, "inspect_workflow_status", lambda **kwargs: {"status": "ok"}
+    )
+    monkeypatch.setattr(
+        review_followup, "resolve_ref", lambda review_cwd, ref: "abc123-resolved"
+    )
     monkeypatch.setattr(review_followup, "is_ancestor", lambda *args, **kwargs: False)
 
     with pytest.raises(ValueError, match="ancestor of HEAD"):
@@ -443,12 +528,18 @@ def test_resolve_since_head_allows_non_ancestor_gate_findings_anchor(
             "last_reviewed_head": "abc123-resolved",
         },
     )
-    monkeypatch.setattr(review_followup, "resolve_ref", lambda review_cwd, ref: "abc123-resolved")
+    monkeypatch.setattr(
+        review_followup, "resolve_ref", lambda review_cwd, ref: "abc123-resolved"
+    )
     monkeypatch.setattr(review_followup, "is_ancestor", lambda *args, **kwargs: False)
     monkeypatch.setattr(
         review_followup,
         "diff_stats",
-        lambda review_cwd, start_ref, end_ref: {"commits_since_anchor": 1, "files_changed": 1, "lines_changed": 20},
+        lambda review_cwd, start_ref, end_ref: {
+            "commits_since_anchor": 1,
+            "files_changed": 1,
+            "lines_changed": 20,
+        },
     )
 
     resolved = review_followup.resolve_since_head(
@@ -462,7 +553,9 @@ def test_resolve_since_head_allows_non_ancestor_gate_findings_anchor(
     assert resolved == "abc123-resolved"
 
 
-def test_gate_findings_source_context_returns_link_metadata(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_gate_findings_source_context_returns_link_metadata(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.setattr(
         review_followup,
         "inspect_workflow_status",
@@ -493,14 +586,24 @@ def test_gate_findings_source_context_returns_link_metadata(monkeypatch: pytest.
     }
 
 
-def test_resolve_since_head_rejects_large_explicit_delta_without_force(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setattr(review_followup, "inspect_workflow_status", lambda **kwargs: {"status": "ok"})
-    monkeypatch.setattr(review_followup, "resolve_ref", lambda review_cwd, ref: "abc123-resolved")
+def test_resolve_since_head_rejects_large_explicit_delta_without_force(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        review_followup, "inspect_workflow_status", lambda **kwargs: {"status": "ok"}
+    )
+    monkeypatch.setattr(
+        review_followup, "resolve_ref", lambda review_cwd, ref: "abc123-resolved"
+    )
     monkeypatch.setattr(review_followup, "is_ancestor", lambda *args, **kwargs: True)
     monkeypatch.setattr(
         review_followup,
         "diff_stats",
-        lambda review_cwd, start_ref, end_ref: {"commits_since_anchor": 8, "files_changed": 9, "lines_changed": 900},
+        lambda review_cwd, start_ref, end_ref: {
+            "commits_since_anchor": 8,
+            "files_changed": 9,
+            "lines_changed": 900,
+        },
     )
 
     with pytest.raises(ValueError, match="coherence/reset"):

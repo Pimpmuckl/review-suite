@@ -21,7 +21,6 @@ from review_suite_core.lens_runtime import (
     codex_exec_command,
     codex_exec_review_command,
     codex_review_prompt_instructions,
-    codex_review_stdin_text,
     isolated_runtime_user_config_overrides,
     prepare_codex_review_launch,
     progress_heartbeat_line,
@@ -29,23 +28,32 @@ from review_suite_core.lens_runtime import (
 )
 
 
-def test_codex_user_config_path_honors_codex_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_codex_user_config_path_honors_codex_home(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     codex_home = tmp_path / "codex-home"
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
 
     assert _codex_user_config_path() == codex_home.resolve(strict=False) / "config.toml"
 
 
-def test_codex_user_config_path_expands_codex_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_codex_user_config_path_expands_codex_home(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     home = tmp_path / "home"
     monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("CODEX_HOME", "~/.codex-alt")
 
-    assert _codex_user_config_path() == (home / ".codex-alt").resolve(strict=False) / "config.toml"
+    assert (
+        _codex_user_config_path()
+        == (home / ".codex-alt").resolve(strict=False) / "config.toml"
+    )
 
 
-def test_isolated_runtime_user_config_overrides_preserves_only_provider_config(tmp_path: Path) -> None:
+def test_isolated_runtime_user_config_overrides_preserves_only_provider_config(
+    tmp_path: Path,
+) -> None:
     config_path = tmp_path / "config.toml"
     config_path.write_text(
         """
@@ -85,7 +93,9 @@ command = "node_repl"
     assert all(not item.startswith("model=") for item in overrides)
 
 
-def test_isolated_runtime_user_config_overrides_preserves_dotted_provider_keys(tmp_path: Path) -> None:
+def test_isolated_runtime_user_config_overrides_preserves_dotted_provider_keys(
+    tmp_path: Path,
+) -> None:
     config_path = tmp_path / "config.toml"
     config_path.write_text(
         """
@@ -108,10 +118,19 @@ wire_api = "responses"
     ) in overrides
 
 
-def test_codex_exec_command_includes_service_tier_when_configured(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setattr("review_suite_core.lens_runtime.shutil.which", lambda name: "codex")
-    monkeypatch.setattr("review_suite_core.lens_runtime.validate_codex_runtime", lambda **kwargs: None)
-    monkeypatch.setattr("review_suite_core.lens_runtime.isolated_runtime_user_config_overrides", lambda: [])
+def test_codex_exec_command_includes_service_tier_when_configured(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime.shutil.which", lambda name: "codex"
+    )
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime.validate_codex_runtime", lambda **kwargs: None
+    )
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime.isolated_runtime_user_config_overrides",
+        lambda: [],
+    )
 
     command = codex_exec_command(
         tool_name="review-followup",
@@ -136,8 +155,12 @@ def test_codex_exec_command_repasses_provider_overrides_before_review_model(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setattr("review_suite_core.lens_runtime.shutil.which", lambda name: "codex")
-    monkeypatch.setattr("review_suite_core.lens_runtime.validate_codex_runtime", lambda **kwargs: None)
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime.shutil.which", lambda name: "codex"
+    )
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime.validate_codex_runtime", lambda **kwargs: None
+    )
     monkeypatch.setattr(
         "review_suite_core.lens_runtime.isolated_runtime_user_config_overrides",
         lambda: [
@@ -158,18 +181,35 @@ def test_codex_exec_command_repasses_provider_overrides_before_review_model(
     )
 
     assert 'model_provider="openrouter"' in command
-    assert 'model_providers={openrouter = {base_url = "https://openrouter.example/v1"}}' in command
+    assert (
+        'model_providers={openrouter = {base_url = "https://openrouter.example/v1"}}'
+        in command
+    )
     assert 'openai_base_url="https://openai-proxy.example/v1"' in command
-    assert command.index('model_provider="openrouter"') < command.index('model="gpt-5.5"')
+    assert command.index('model_provider="openrouter"') < command.index(
+        'model="gpt-5.5"'
+    )
     assert "plugins.github.enabled=true" not in command
-    assert "mcp_servers.node_repl.command=\"node_repl\"" not in command
+    assert 'mcp_servers.node_repl.command="node_repl"' not in command
 
 
-def test_codex_exec_command_isolates_unsafe_wsl_fallback(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setattr("review_suite_core.lens_runtime.shutil.which", lambda name: "codex")
-    monkeypatch.setattr("review_suite_core.lens_runtime.validate_codex_runtime", lambda **kwargs: None)
-    monkeypatch.setattr("review_suite_core.lens_runtime.use_unsafe_windows_wsl_fallback", lambda *args: True)
-    monkeypatch.setattr("review_suite_core.lens_runtime.isolated_runtime_user_config_overrides", lambda: [])
+def test_codex_exec_command_isolates_unsafe_wsl_fallback(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime.shutil.which", lambda name: "codex"
+    )
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime.validate_codex_runtime", lambda **kwargs: None
+    )
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime.use_unsafe_windows_wsl_fallback",
+        lambda *args: True,
+    )
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime.isolated_runtime_user_config_overrides",
+        lambda: [],
+    )
 
     command = codex_exec_command(
         tool_name="review-followup",
@@ -187,11 +227,23 @@ def test_codex_exec_command_isolates_unsafe_wsl_fallback(monkeypatch: pytest.Mon
     assert "-s" not in command
 
 
-def test_codex_exec_review_command_isolates_unsafe_wsl_fallback(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setattr("review_suite_core.lens_runtime.shutil.which", lambda name: "codex")
-    monkeypatch.setattr("review_suite_core.lens_runtime.validate_codex_runtime", lambda **kwargs: None)
-    monkeypatch.setattr("review_suite_core.lens_runtime.use_unsafe_windows_wsl_fallback", lambda *args: True)
-    monkeypatch.setattr("review_suite_core.lens_runtime.isolated_runtime_user_config_overrides", lambda: [])
+def test_codex_exec_review_command_isolates_unsafe_wsl_fallback(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime.shutil.which", lambda name: "codex"
+    )
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime.validate_codex_runtime", lambda **kwargs: None
+    )
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime.use_unsafe_windows_wsl_fallback",
+        lambda *args: True,
+    )
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime.isolated_runtime_user_config_overrides",
+        lambda: [],
+    )
 
     command = codex_exec_review_command(
         tool_name="review-suite",
@@ -215,10 +267,20 @@ def test_prepare_codex_review_launch_creates_prompted_exec_without_native_target
     tmp_path: Path,
 ) -> None:
     state_dir = tmp_path / "state"
-    monkeypatch.setattr("review_suite_core.lens_runtime.shutil.which", lambda name: "codex")
-    monkeypatch.setattr("review_suite_core.lens_runtime.validate_codex_runtime", lambda **kwargs: None)
-    monkeypatch.setattr("review_suite_core.lens_runtime.default_review_suite_state_dir", lambda: state_dir)
-    monkeypatch.setattr("review_suite_core.lens_runtime.isolated_runtime_user_config_overrides", lambda: [])
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime.shutil.which", lambda name: "codex"
+    )
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime.validate_codex_runtime", lambda **kwargs: None
+    )
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime.default_review_suite_state_dir",
+        lambda: state_dir,
+    )
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime.isolated_runtime_user_config_overrides",
+        lambda: [],
+    )
 
     launch = prepare_codex_review_launch(
         tool_name="review-suite",
@@ -237,18 +299,28 @@ def test_prepare_codex_review_launch_creates_prompted_exec_without_native_target
         assert launch.command[0:2] == ["codex", "exec"]
         assert "--ignore-user-config" in launch.command
         assert "review" in launch.command
-        assert launch.command[launch.command.index("--title") + 1] == "review-suite::round::alpha::gpt-5.5-medium"
+        assert (
+            launch.command[launch.command.index("--title") + 1]
+            == "review-suite::round::alpha::gpt-5.5-medium"
+        )
         assert "--base" not in launch.command
         assert "--commit" not in launch.command
         assert launch.command[-1] == "-"
         assert 'service_tier="fast"' in launch.command
         assert 'approval_policy="never"' in launch.command
         assert launch.command.index("--ignore-user-config") < launch.command.index("-C")
-        assert launch.command.index('approval_policy="never"') < launch.command.index("--title")
-        assert launch.command.index('service_tier="fast"') < launch.command.index("--title")
+        assert launch.command.index('approval_policy="never"') < launch.command.index(
+            "--title"
+        )
+        assert launch.command.index('service_tier="fast"') < launch.command.index(
+            "--title"
+        )
         assert launch.stdin_text is not None
         assert "base ref `origin/main`" in launch.stdin_text
-        assert "Review only for concrete technical merge-readiness risks" in launch.stdin_text
+        assert (
+            "Review only for concrete technical merge-readiness risks"
+            in launch.stdin_text
+        )
         assert "because AI is involved" in launch.stdin_text
         assert "Review Suite instructions:" in launch.stdin_text
         assert "Review for correctness." in launch.stdin_text
@@ -267,10 +339,20 @@ def test_prepare_codex_review_launch_uses_native_exec_review_without_prompt(
     tmp_path: Path,
 ) -> None:
     state_dir = tmp_path / "state"
-    monkeypatch.setattr("review_suite_core.lens_runtime.shutil.which", lambda name: "codex")
-    monkeypatch.setattr("review_suite_core.lens_runtime.validate_codex_runtime", lambda **kwargs: None)
-    monkeypatch.setattr("review_suite_core.lens_runtime.default_review_suite_state_dir", lambda: state_dir)
-    monkeypatch.setattr("review_suite_core.lens_runtime.isolated_runtime_user_config_overrides", lambda: [])
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime.shutil.which", lambda name: "codex"
+    )
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime.validate_codex_runtime", lambda **kwargs: None
+    )
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime.default_review_suite_state_dir",
+        lambda: state_dir,
+    )
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime.isolated_runtime_user_config_overrides",
+        lambda: [],
+    )
 
     launch = prepare_codex_review_launch(
         tool_name="review-suite",
@@ -288,7 +370,10 @@ def test_prepare_codex_review_launch_uses_native_exec_review_without_prompt(
         assert launch.command[0:2] == ["codex", "exec"]
         assert "--ignore-user-config" in launch.command
         assert "review" in launch.command
-        assert launch.command[launch.command.index("--title") + 1] == "review-suite::round::alpha::gpt-5.5-medium"
+        assert (
+            launch.command[launch.command.index("--title") + 1]
+            == "review-suite::round::alpha::gpt-5.5-medium"
+        )
         assert 'approval_policy="never"' in launch.command
         assert launch.command[-2:] == ["--base", "origin/main"]
         assert launch.command[-1] != "-"
@@ -305,10 +390,20 @@ def test_prepare_codex_review_launch_keeps_prompt_only_stdin(
     tmp_path: Path,
 ) -> None:
     state_dir = tmp_path / "state"
-    monkeypatch.setattr("review_suite_core.lens_runtime.shutil.which", lambda name: "codex")
-    monkeypatch.setattr("review_suite_core.lens_runtime.validate_codex_runtime", lambda **kwargs: None)
-    monkeypatch.setattr("review_suite_core.lens_runtime.default_review_suite_state_dir", lambda: state_dir)
-    monkeypatch.setattr("review_suite_core.lens_runtime.isolated_runtime_user_config_overrides", lambda: [])
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime.shutil.which", lambda name: "codex"
+    )
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime.validate_codex_runtime", lambda **kwargs: None
+    )
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime.default_review_suite_state_dir",
+        lambda: state_dir,
+    )
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime.isolated_runtime_user_config_overrides",
+        lambda: [],
+    )
 
     launch = prepare_codex_review_launch(
         tool_name="review-suite",
@@ -325,7 +420,10 @@ def test_prepare_codex_review_launch_keeps_prompt_only_stdin(
         assert launch.command[-1] == "-"
         assert launch.stdin_text is not None
         assert "Do not modify files." in launch.stdin_text
-        assert "Review only for concrete technical merge-readiness risks" in launch.stdin_text
+        assert (
+            "Review only for concrete technical merge-readiness risks"
+            in launch.stdin_text
+        )
         assert "Review Suite instructions:" in launch.stdin_text
         assert "Review this checkout." in launch.stdin_text
         assert launch.final_message_path is not None
@@ -338,9 +436,16 @@ def test_codex_exec_review_command_rejects_prompted_native_target(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setattr("review_suite_core.lens_runtime.shutil.which", lambda name: "codex")
-    monkeypatch.setattr("review_suite_core.lens_runtime.validate_codex_runtime", lambda **kwargs: None)
-    monkeypatch.setattr("review_suite_core.lens_runtime.isolated_runtime_user_config_overrides", lambda: [])
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime.shutil.which", lambda name: "codex"
+    )
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime.validate_codex_runtime", lambda **kwargs: None
+    )
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime.isolated_runtime_user_config_overrides",
+        lambda: [],
+    )
 
     with pytest.raises(ValueError, match="cannot combine"):
         codex_exec_review_command(
@@ -368,10 +473,20 @@ def test_prepare_codex_review_launch_does_not_prefix_deslop_prompt_with_technica
     tmp_path: Path,
 ) -> None:
     state_dir = tmp_path / "state"
-    monkeypatch.setattr("review_suite_core.lens_runtime.shutil.which", lambda name: "codex")
-    monkeypatch.setattr("review_suite_core.lens_runtime.validate_codex_runtime", lambda **kwargs: None)
-    monkeypatch.setattr("review_suite_core.lens_runtime.default_review_suite_state_dir", lambda: state_dir)
-    monkeypatch.setattr("review_suite_core.lens_runtime.isolated_runtime_user_config_overrides", lambda: [])
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime.shutil.which", lambda name: "codex"
+    )
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime.validate_codex_runtime", lambda **kwargs: None
+    )
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime.default_review_suite_state_dir",
+        lambda: state_dir,
+    )
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime.isolated_runtime_user_config_overrides",
+        lambda: [],
+    )
 
     launch = prepare_codex_review_launch(
         tool_name="review-deslop",
@@ -390,7 +505,10 @@ def test_prepare_codex_review_launch_does_not_prefix_deslop_prompt_with_technica
         assert launch.stdin_text is not None
         assert "base ref `origin/main`" in launch.stdin_text
         assert "Find redundant code." in launch.stdin_text
-        assert "Review only for concrete technical merge-readiness risks" not in launch.stdin_text
+        assert (
+            "Review only for concrete technical merge-readiness risks"
+            not in launch.stdin_text
+        )
         assert "Review Suite instructions:" not in launch.stdin_text
     finally:
         if launch.final_message_path is not None:
@@ -402,10 +520,20 @@ def test_prepare_codex_review_launch_does_not_prefix_followup_prompt_with_techni
     tmp_path: Path,
 ) -> None:
     state_dir = tmp_path / "state"
-    monkeypatch.setattr("review_suite_core.lens_runtime.shutil.which", lambda name: "codex")
-    monkeypatch.setattr("review_suite_core.lens_runtime.validate_codex_runtime", lambda **kwargs: None)
-    monkeypatch.setattr("review_suite_core.lens_runtime.default_review_suite_state_dir", lambda: state_dir)
-    monkeypatch.setattr("review_suite_core.lens_runtime.isolated_runtime_user_config_overrides", lambda: [])
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime.shutil.which", lambda name: "codex"
+    )
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime.validate_codex_runtime", lambda **kwargs: None
+    )
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime.default_review_suite_state_dir",
+        lambda: state_dir,
+    )
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime.isolated_runtime_user_config_overrides",
+        lambda: [],
+    )
 
     launch = prepare_codex_review_launch(
         tool_name="review-followup",
@@ -423,7 +551,10 @@ def test_prepare_codex_review_launch_does_not_prefix_followup_prompt_with_techni
         assert launch.command[-1] == "-"
         assert launch.stdin_text is not None
         assert "Verify the previous finding was fixed." in launch.stdin_text
-        assert "Review only for concrete technical merge-readiness risks" not in launch.stdin_text
+        assert (
+            "Review only for concrete technical merge-readiness risks"
+            not in launch.stdin_text
+        )
         assert "Review Suite instructions:" not in launch.stdin_text
     finally:
         if launch.final_message_path is not None:
@@ -436,13 +567,25 @@ def test_prepare_codex_review_launch_validates_base_commit_end_range(
 ) -> None:
     state_dir = tmp_path / "state"
     calls: list[tuple[Path, str, str, str]] = []
-    monkeypatch.setattr("review_suite_core.lens_runtime.shutil.which", lambda name: "codex")
-    monkeypatch.setattr("review_suite_core.lens_runtime.validate_codex_runtime", lambda **kwargs: None)
-    monkeypatch.setattr("review_suite_core.lens_runtime.default_review_suite_state_dir", lambda: state_dir)
-    monkeypatch.setattr("review_suite_core.lens_runtime.isolated_runtime_user_config_overrides", lambda: [])
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime.shutil.which", lambda name: "codex"
+    )
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime.validate_codex_runtime", lambda **kwargs: None
+    )
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime.default_review_suite_state_dir",
+        lambda: state_dir,
+    )
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime.isolated_runtime_user_config_overrides",
+        lambda: [],
+    )
     monkeypatch.setattr(
         "review_suite_core.lens_runtime.validated_linear_review_range",
-        lambda cwd, start_ref, end_ref, label: calls.append((cwd, start_ref, end_ref, label)),
+        lambda cwd, start_ref, end_ref, label: calls.append(
+            (cwd, start_ref, end_ref, label)
+        ),
     )
 
     launch = prepare_codex_review_launch(
@@ -458,11 +601,16 @@ def test_prepare_codex_review_launch_validates_base_commit_end_range(
     )
 
     try:
-        assert calls == [(tmp_path, "old-head", "new-head", "native commit-range review launch")]
+        assert calls == [
+            (tmp_path, "old-head", "new-head", "native commit-range review launch")
+        ]
         assert launch.stdin_text is not None
         assert "commit range `old-head..new-head`" in launch.stdin_text
         assert "current checkout against base ref" not in launch.stdin_text
-        assert "Review only for concrete technical merge-readiness risks" in launch.stdin_text
+        assert (
+            "Review only for concrete technical merge-readiness risks"
+            in launch.stdin_text
+        )
         assert "because AI is involved" in launch.stdin_text
         assert "Review interdiff." in launch.stdin_text
         assert "--base" not in launch.command
@@ -479,13 +627,25 @@ def test_prepare_codex_review_launch_uses_prompt_for_promptless_commit_end(
 ) -> None:
     state_dir = tmp_path / "state"
     calls: list[tuple[Path, str, str, str]] = []
-    monkeypatch.setattr("review_suite_core.lens_runtime.shutil.which", lambda name: "codex")
-    monkeypatch.setattr("review_suite_core.lens_runtime.validate_codex_runtime", lambda **kwargs: None)
-    monkeypatch.setattr("review_suite_core.lens_runtime.default_review_suite_state_dir", lambda: state_dir)
-    monkeypatch.setattr("review_suite_core.lens_runtime.isolated_runtime_user_config_overrides", lambda: [])
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime.shutil.which", lambda name: "codex"
+    )
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime.validate_codex_runtime", lambda **kwargs: None
+    )
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime.default_review_suite_state_dir",
+        lambda: state_dir,
+    )
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime.isolated_runtime_user_config_overrides",
+        lambda: [],
+    )
     monkeypatch.setattr(
         "review_suite_core.lens_runtime.validated_linear_review_range",
-        lambda cwd, start_ref, end_ref, label: calls.append((cwd, start_ref, end_ref, label)),
+        lambda cwd, start_ref, end_ref, label: calls.append(
+            (cwd, start_ref, end_ref, label)
+        ),
     )
 
     launch = prepare_codex_review_launch(
@@ -501,11 +661,16 @@ def test_prepare_codex_review_launch_uses_prompt_for_promptless_commit_end(
     )
 
     try:
-        assert calls == [(tmp_path, "old-head", "new-head", "native commit-range review launch")]
+        assert calls == [
+            (tmp_path, "old-head", "new-head", "native commit-range review launch")
+        ]
         assert launch.stdin_text is not None
         assert "commit range `old-head..new-head`" in launch.stdin_text
         assert "Review instructions:" in launch.stdin_text
-        assert "Review only for concrete technical merge-readiness risks" in launch.stdin_text
+        assert (
+            "Review only for concrete technical merge-readiness risks"
+            in launch.stdin_text
+        )
         assert "because AI is involved" in launch.stdin_text
         assert "Review Suite instructions:" not in launch.stdin_text
         assert "--base" not in launch.command
@@ -516,7 +681,9 @@ def test_prepare_codex_review_launch_uses_prompt_for_promptless_commit_end(
             launch.final_message_path.unlink(missing_ok=True)
 
 
-def test_progress_heartbeat_line_is_sparse_for_agent_output(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_progress_heartbeat_line_is_sparse_for_agent_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     class Stderr:
         def isatty(self) -> bool:
             return False
@@ -526,7 +693,9 @@ def test_progress_heartbeat_line_is_sparse_for_agent_output(monkeypatch: pytest.
     assert progress_heartbeat_line("review-deslop", 120) == "OK 2m: deslop"
 
 
-def test_progress_heartbeat_line_keeps_elapsed_for_interactive_output(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_progress_heartbeat_line_keeps_elapsed_for_interactive_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     class Stderr:
         def isatty(self) -> bool:
             return True
@@ -536,11 +705,21 @@ def test_progress_heartbeat_line_keeps_elapsed_for_interactive_output(monkeypatc
     assert progress_heartbeat_line("review-deslop", 120) == "deslop running (120s)"
 
 
-def test_record_wrapper_session_writes_timestamped_entry(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_record_wrapper_session_writes_timestamped_entry(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     state_dir = tmp_path / "state"
-    monkeypatch.setattr("review_suite_core.lens_runtime.default_review_suite_state_dir", lambda: state_dir)
-    monkeypatch.setattr("review_suite_core.lens_runtime._caller_thread_id", lambda: "thread-123")
-    monkeypatch.setattr("review_suite_core.lens_runtime._review_branch", lambda review_root: "feature/test")
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime.default_review_suite_state_dir",
+        lambda: state_dir,
+    )
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime._caller_thread_id", lambda: "thread-123"
+    )
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime._review_branch",
+        lambda review_root: "feature/test",
+    )
 
     record_wrapper_session(
         session_id="sess-123",
@@ -549,7 +728,9 @@ def test_record_wrapper_session_writes_timestamped_entry(monkeypatch: pytest.Mon
         elapsed_seconds=12.3456,
     )
 
-    payload = json.loads((state_dir / "wrapper_sessions.jsonl").read_text(encoding="utf-8"))
+    payload = json.loads(
+        (state_dir / "wrapper_sessions.jsonl").read_text(encoding="utf-8")
+    )
     assert payload["session_id"] == "sess-123"
     assert payload["tool_name"] == "review-deslop"
     assert payload["caller_thread_id"] == "thread-123"
@@ -558,32 +739,50 @@ def test_record_wrapper_session_writes_timestamped_entry(monkeypatch: pytest.Mon
     assert payload["recorded_at"].endswith("Z")
 
 
-def test_unsafe_windows_wsl_fallback_requested_honors_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("review_suite_core.codex_runtime._env_flag_value", lambda name: "")
+def test_unsafe_windows_wsl_fallback_requested_honors_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "review_suite_core.codex_runtime._env_flag_value", lambda name: ""
+    )
     assert not unsafe_windows_wsl_fallback_requested(False)
 
-    monkeypatch.setattr("review_suite_core.codex_runtime._env_flag_value", lambda name: "1")
+    monkeypatch.setattr(
+        "review_suite_core.codex_runtime._env_flag_value", lambda name: "1"
+    )
     assert unsafe_windows_wsl_fallback_requested(False)
 
 
-def test_unsafe_windows_wsl_fallback_requested_honors_windows_user_env(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_unsafe_windows_wsl_fallback_requested_honors_windows_user_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv(AUTO_UNSAFE_WINDOWS_WSL_FALLBACK_ENV, raising=False)
-    monkeypatch.setattr("review_suite_core.codex_runtime._env_flag_value", lambda name: "on")
+    monkeypatch.setattr(
+        "review_suite_core.codex_runtime._env_flag_value", lambda name: "on"
+    )
 
     assert unsafe_windows_wsl_fallback_requested(False)
 
 
-def test_use_unsafe_windows_wsl_fallback_honors_env_only_for_unc_path(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_use_unsafe_windows_wsl_fallback_honors_env_only_for_unc_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setenv(AUTO_UNSAFE_WINDOWS_WSL_FALLBACK_ENV, "true")
 
-    assert use_unsafe_windows_wsl_fallback(Path("//wsl.localhost/Ubuntu/home/alice/code/repo"), False)
+    assert use_unsafe_windows_wsl_fallback(
+        Path("//wsl.localhost/Ubuntu/home/alice/code/repo"), False
+    )
     assert not use_unsafe_windows_wsl_fallback(Path("C:/Code/repo"), False)
 
 
-def test_validate_codex_runtime_mentions_env_opt_in_for_unc_path(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_validate_codex_runtime_mentions_env_opt_in_for_unc_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(sys, "platform", "win32")
-    monkeypatch.setattr("review_suite_core.codex_runtime._env_flag_value", lambda name: "")
+    monkeypatch.setattr(
+        "review_suite_core.codex_runtime._env_flag_value", lambda name: ""
+    )
 
     with pytest.raises(ValueError) as excinfo:
         validate_codex_runtime(
@@ -599,7 +798,9 @@ def test_validate_codex_runtime_mentions_env_opt_in_for_unc_path(monkeypatch: py
     assert f"{AUTO_UNSAFE_WINDOWS_WSL_FALLBACK_ENV}=1" in message
 
 
-def test_validate_codex_runtime_mentions_windows_unc_workaround_for_wsl_windows_shim(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_validate_codex_runtime_mentions_windows_unc_workaround_for_wsl_windows_shim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setattr("review_suite_core.codex_runtime.running_in_wsl", lambda: True)
     monkeypatch.setenv("WSL_DISTRO_NAME", "Ubuntu")

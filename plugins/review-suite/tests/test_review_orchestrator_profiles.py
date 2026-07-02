@@ -20,8 +20,17 @@ from review_suite_core.orchestrator_profiles import (
 )
 
 
-def _step_summary(step: OrchestratorProfileStep) -> tuple[str, str, int | None, str | None, str | None, bool]:
-    return (step.kind, step.name, step.count, step.model, step.reasoning_effort, step.rerun_on_findings)
+def _step_summary(
+    step: OrchestratorProfileStep,
+) -> tuple[str, str, int | None, str | None, str | None, bool]:
+    return (
+        step.kind,
+        step.name,
+        step.count,
+        step.model,
+        step.reasoning_effort,
+        step.rerun_on_findings,
+    )
 
 
 def test_default_stable_profiles_cover_all_modes(tmp_path: Path) -> None:
@@ -76,7 +85,12 @@ def test_default_stable_profiles_cover_all_modes(tmp_path: Path) -> None:
 def test_profile_step_kind_defaults_to_review(tmp_path: Path) -> None:
     config = deepcopy(load_config(tmp_path / "state"))
     config["orchestrator"]["profiles"]["stable"]["brief"]["steps"] = [
-        {"name": "precision", "count": 1, "model": "gpt-5.5", "reasoning_effort": "medium"}
+        {
+            "name": "precision",
+            "count": 1,
+            "model": "gpt-5.5",
+            "reasoning_effort": "medium",
+        }
     ]
 
     profiles = load_orchestrator_profiles(config)
@@ -97,7 +111,9 @@ def test_profile_step_rejects_conflicting_findings_policies(tmp_path: Path) -> N
         }
     ]
 
-    with pytest.raises(ValueError, match="cannot combine rerun_on_findings with max_review_rounds"):
+    with pytest.raises(
+        ValueError, match="cannot combine rerun_on_findings with max_review_rounds"
+    ):
         load_orchestrator_profiles(config)
 
 
@@ -160,14 +176,21 @@ def test_stable_discovery_loop_budgets_repeat_discovery_blocks(tmp_path: Path) -
     ]
 
 
-def test_arena_disabled_omits_arena_steps_even_with_loop_budgets(tmp_path: Path) -> None:
+def test_arena_disabled_omits_arena_steps_even_with_loop_budgets(
+    tmp_path: Path,
+) -> None:
     config = deepcopy(load_config(tmp_path / "state"))
     config["orchestrator"]["stable_defaults"]["normal_arena_loops"] = 2
     config["orchestrator"]["stable_defaults"]["deep_arena_loops"] = 1
 
     profiles = load_orchestrator_profiles(config)
 
-    assert [step.kind for step in profiles["stable"]["normal"].steps] == ["review", "review", "review", "review"]
+    assert [step.kind for step in profiles["stable"]["normal"].steps] == [
+        "review",
+        "review",
+        "review",
+        "review",
+    ]
     assert [step.name for step in profiles["stable"]["normal"].steps] == [
         "broad-discovery-1",
         "broad-discovery-2",
@@ -177,7 +200,9 @@ def test_arena_disabled_omits_arena_steps_even_with_loop_budgets(tmp_path: Path)
     assert all(step.kind != "arena" for step in profiles["stable"]["deep"].steps)
 
 
-def test_disabled_first_step_in_loop_block_does_not_drop_enabled_steps(tmp_path: Path) -> None:
+def test_disabled_first_step_in_loop_block_does_not_drop_enabled_steps(
+    tmp_path: Path,
+) -> None:
     config = deepcopy(load_config(tmp_path / "state"))
     config["arena"]["enabled"] = False
     config["orchestrator"]["stable_defaults"]["normal_discovery_loops"] = 2
@@ -200,10 +225,15 @@ def test_disabled_first_step_in_loop_block_does_not_drop_enabled_steps(tmp_path:
 
     profiles = load_orchestrator_profiles(config)
 
-    assert [step.name for step in profiles["stable"]["normal"].steps] == ["broad-discovery-1", "broad-discovery-2"]
+    assert [step.name for step in profiles["stable"]["normal"].steps] == [
+        "broad-discovery-1",
+        "broad-discovery-2",
+    ]
 
 
-def test_arena_enabled_inserts_arena_steps_and_keeps_minimum_discovery(tmp_path: Path) -> None:
+def test_arena_enabled_inserts_arena_steps_and_keeps_minimum_discovery(
+    tmp_path: Path,
+) -> None:
     config = deepcopy(load_config(tmp_path / "state"))
     config["arena"]["enabled"] = True
     config["orchestrator"]["stable_defaults"].update(
@@ -241,10 +271,16 @@ def test_arena_steps_reject_mismatched_lane_and_task_class(tmp_path: Path) -> No
     config = deepcopy(load_config(tmp_path / "state"))
     config["arena"]["enabled"] = True
     config["orchestrator"]["stable_defaults"]["normal_arena_loops"] = 1
-    config["orchestrator"]["profiles"]["stable"]["normal"]["steps"][0]["lane"] = "review_t1"
-    config["orchestrator"]["profiles"]["stable"]["normal"]["steps"][0]["task_class"] = "pr_review"
+    config["orchestrator"]["profiles"]["stable"]["normal"]["steps"][0]["lane"] = (
+        "review_t1"
+    )
+    config["orchestrator"]["profiles"]["stable"]["normal"]["steps"][0]["task_class"] = (
+        "pr_review"
+    )
 
-    with pytest.raises(ValueError, match="lane must be review_t3 for task_class pr_review"):
+    with pytest.raises(
+        ValueError, match="lane must be review_t3 for task_class pr_review"
+    ):
         load_orchestrator_profiles(config)
 
 
@@ -252,12 +288,16 @@ def test_stable_model_refs_require_model_effort_labels(tmp_path: Path) -> None:
     config = deepcopy(load_config(tmp_path / "state"))
     config["orchestrator"]["stable_defaults"]["signoff_brief_model"] = "gpt-5.5"
 
-    with pytest.raises(ValueError, match="orchestrator.stable_defaults.signoff_brief_model"):
+    with pytest.raises(
+        ValueError, match="orchestrator.stable_defaults.signoff_brief_model"
+    ):
         load_orchestrator_profiles(config)
 
 
 @pytest.mark.parametrize("mode", ["brief", "normal", "deep", "emergency"])
-def test_auto_selection_uses_stable_profile_when_configured(tmp_path: Path, mode: str) -> None:
+def test_auto_selection_uses_stable_profile_when_configured(
+    tmp_path: Path, mode: str
+) -> None:
     config = load_config(tmp_path / "state")
 
     resolution = resolve_orchestrator_profile(config, mode=mode, selection="auto")
@@ -270,7 +310,9 @@ def test_auto_selection_uses_stable_profile_when_configured(tmp_path: Path, mode
     assert resolution.steps
 
 
-def test_explicit_stable_selection_records_reason_and_skips_grading(tmp_path: Path) -> None:
+def test_explicit_stable_selection_records_reason_and_skips_grading(
+    tmp_path: Path,
+) -> None:
     config = load_config(tmp_path / "state")
 
     resolution = resolve_orchestrator_profile(config, mode="normal", selection="stable")
@@ -291,7 +333,9 @@ def test_auto_selection_requires_stable_profile(tmp_path: Path) -> None:
     config = deepcopy(load_config(tmp_path / "state"))
     del config["orchestrator"]["profiles"]["stable"]["normal"]
 
-    with pytest.raises(ValueError, match="missing orchestrator stable profile for mode normal"):
+    with pytest.raises(
+        ValueError, match="missing orchestrator stable profile for mode normal"
+    ):
         resolve_orchestrator_profile(config, mode="normal", selection="auto")
 
 
@@ -307,5 +351,7 @@ def test_explicit_stable_selection_requires_stable_profile(tmp_path: Path) -> No
     config = deepcopy(load_config(tmp_path / "state"))
     del config["orchestrator"]["profiles"]["stable"]["normal"]
 
-    with pytest.raises(ValueError, match="missing orchestrator stable profile for mode normal"):
+    with pytest.raises(
+        ValueError, match="missing orchestrator stable profile for mode normal"
+    ):
         resolve_orchestrator_profile(config, mode="normal", selection="stable")

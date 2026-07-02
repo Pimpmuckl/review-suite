@@ -12,7 +12,10 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from review_suite_runtime_bootstrap import bootstrap_from_installed_cache, launcher_script_path
+from review_suite_runtime_bootstrap import (
+    bootstrap_from_installed_cache,
+    launcher_script_path,
+)
 
 bootstrap_from_installed_cache(__file__)
 
@@ -30,6 +33,7 @@ from review_suite_core import (
 )
 from review_costs import refresh_review_cost_report_best_effort
 from review_suite_local import default_state_dir
+
 DEFAULT_BOT_LOGIN = "chatgpt-codex-connector[bot]"
 DEFAULT_REQUEST_BODY = "@codex review"
 EXISTING_RESPONSE_SETTLE_SECONDS = 20
@@ -40,7 +44,9 @@ DEFAULT_RE_REQUEST_AFTER_SECONDS = 120
 DEFAULT_MAX_REQUEST_ATTEMPTS = 2
 DEFAULT_SETTLE_SECONDS = 20
 GH_CWD: str | None = None
-REVIEWED_COMMIT_RE = re.compile(r"\bReviewed commit:\s*`?([0-9a-f]{7,40})`?", re.IGNORECASE)
+REVIEWED_COMMIT_RE = re.compile(
+    r"\bReviewed commit:\s*`?([0-9a-f]{7,40})`?", re.IGNORECASE
+)
 
 
 def utc_now() -> datetime:
@@ -70,7 +76,9 @@ def run_gh(args: list[str]) -> str:
         check=False,
     )
     if proc.returncode != 0:
-        message = (proc.stderr or proc.stdout or "").strip() or f"gh exited with code {proc.returncode}"
+        message = (
+            proc.stderr or proc.stdout or ""
+        ).strip() or f"gh exited with code {proc.returncode}"
         raise RuntimeError(f"gh {' '.join(args)} failed: {message}")
     return proc.stdout
 
@@ -90,7 +98,9 @@ def emit_state_change(message: str) -> None:
     emit_progress(message)
 
 
-def get_pr_context(owner: str | None, repo: str | None, pr_number: int | None) -> dict[str, Any]:
+def get_pr_context(
+    owner: str | None, repo: str | None, pr_number: int | None
+) -> dict[str, Any]:
     if owner and repo and pr_number:
         pr = run_gh_json(["api", f"repos/{owner}/{repo}/pulls/{pr_number}"])
         return {
@@ -101,7 +111,14 @@ def get_pr_context(owner: str | None, repo: str | None, pr_number: int | None) -
             "head_sha": pr["head"]["sha"],
             "base_ref": pr["base"]["ref"],
         }
-    pr = run_gh_json(["pr", "view", "--json", "number,url,headRefOid,headRepositoryOwner,headRepository,baseRefName"])
+    pr = run_gh_json(
+        [
+            "pr",
+            "view",
+            "--json",
+            "number,url,headRefOid,headRepositoryOwner,headRepository,baseRefName",
+        ]
+    )
     return {
         "owner": pr["headRepositoryOwner"]["login"],
         "repo": pr["headRepository"]["name"],
@@ -121,27 +138,42 @@ def get_commit_timestamp(owner: str, repo: str, commit_sha: str) -> datetime | N
     if not commit_sha:
         return None
     payload = run_gh_json(["api", f"repos/{owner}/{repo}/commits/{commit_sha}"])
-    raw = (
-        ((payload or {}).get("commit") or {}).get("committer") or {}
-    ).get("date") or (
-        ((payload or {}).get("commit") or {}).get("author") or {}
-    ).get("date")
+    raw = (((payload or {}).get("commit") or {}).get("committer") or {}).get(
+        "date"
+    ) or (((payload or {}).get("commit") or {}).get("author") or {}).get("date")
     return parse_iso(str(raw)) if raw else None
 
 
 def get_issue_comments(owner: str, repo: str, pr_number: int) -> list[dict[str, Any]]:
-    return list(run_gh_json(["api", f"repos/{owner}/{repo}/issues/{pr_number}/comments?per_page=100"]) or [])
+    return list(
+        run_gh_json(
+            ["api", f"repos/{owner}/{repo}/issues/{pr_number}/comments?per_page=100"]
+        )
+        or []
+    )
 
 
 def get_review_comments(owner: str, repo: str, pr_number: int) -> list[dict[str, Any]]:
-    return list(run_gh_json(["api", f"repos/{owner}/{repo}/pulls/{pr_number}/comments?per_page=100"]) or [])
+    return list(
+        run_gh_json(
+            ["api", f"repos/{owner}/{repo}/pulls/{pr_number}/comments?per_page=100"]
+        )
+        or []
+    )
 
 
 def get_reviews(owner: str, repo: str, pr_number: int) -> list[dict[str, Any]]:
-    return list(run_gh_json(["api", f"repos/{owner}/{repo}/pulls/{pr_number}/reviews?per_page=100"]) or [])
+    return list(
+        run_gh_json(
+            ["api", f"repos/{owner}/{repo}/pulls/{pr_number}/reviews?per_page=100"]
+        )
+        or []
+    )
 
 
-def get_comment_reactions(owner: str, repo: str, comment_id: str) -> list[dict[str, Any]]:
+def get_comment_reactions(
+    owner: str, repo: str, comment_id: str
+) -> list[dict[str, Any]]:
     return list(
         run_gh_json(
             [
@@ -182,14 +214,21 @@ def build_request_body(body_prefix: str, head_sha: str) -> str:
     return str(body_prefix or "").strip()
 
 
-def request_body_matches(*, request_body: str, expected_prefix: str, head_sha: str) -> bool:
+def request_body_matches(
+    *, request_body: str, expected_prefix: str, head_sha: str
+) -> bool:
     normalized_expected = normalize_request_body(expected_prefix)
     normalized_request = normalize_request_body(request_body)
     return normalized_request == normalized_expected
 
 
 def latest_review_request(
-    issue_comments: list[dict[str, Any]], *, bot_login: str, since: datetime, body_prefix: str, head_sha: str
+    issue_comments: list[dict[str, Any]],
+    *,
+    bot_login: str,
+    since: datetime,
+    body_prefix: str,
+    head_sha: str,
 ) -> dict[str, Any] | None:
     matching = []
     for item in issue_comments:
@@ -200,7 +239,9 @@ def latest_review_request(
             continue
         if author == bot_login:
             continue
-        if not request_body_matches(request_body=body, expected_prefix=body_prefix, head_sha=head_sha):
+        if not request_body_matches(
+            request_body=body, expected_prefix=body_prefix, head_sha=head_sha
+        ):
             continue
         if created_at < since:
             continue
@@ -269,11 +310,28 @@ def emit_new_items(
 
 
 def post_request(
-    *, owner: str, repo: str, pr_number: int, body: str, head_sha: str, bot_login: str, anchor_window_seconds: int = 5
+    *,
+    owner: str,
+    repo: str,
+    pr_number: int,
+    body: str,
+    head_sha: str,
+    bot_login: str,
+    anchor_window_seconds: int = 5,
 ) -> dict[str, Any]:
     started_at = utc_now()
     request_body = build_request_body(body, head_sha)
-    run_gh(["pr", "comment", str(pr_number), "--repo", f"{owner}/{repo}", "--body", request_body])
+    run_gh(
+        [
+            "pr",
+            "comment",
+            str(pr_number),
+            "--repo",
+            f"{owner}/{repo}",
+            "--body",
+            request_body,
+        ]
+    )
     issue_comments = get_issue_comments(owner, repo, pr_number)
     anchor = latest_review_request(
         issue_comments,
@@ -283,7 +341,9 @@ def post_request(
         head_sha=head_sha,
     )
     if not anchor:
-        raise RuntimeError("posted @codex review but could not resolve the matching request comment")
+        raise RuntimeError(
+            "posted @codex review but could not resolve the matching request comment"
+        )
     requested_at = item_timestamp(anchor) or utc_now()
     return {
         "request_comment_id": str(anchor["id"]),
@@ -292,7 +352,9 @@ def post_request(
     }
 
 
-def has_eyes_reaction(*, owner: str, repo: str, comment_id: str, bot_login: str) -> bool:
+def has_eyes_reaction(
+    *, owner: str, repo: str, comment_id: str, bot_login: str
+) -> bool:
     for reaction in get_comment_reactions(owner, repo, comment_id):
         if str(reaction.get("content") or "") != "eyes":
             continue
@@ -302,7 +364,9 @@ def has_eyes_reaction(*, owner: str, repo: str, comment_id: str, bot_login: str)
     return False
 
 
-def has_plus_one_reaction(*, owner: str, repo: str, comment_id: str, bot_login: str) -> bool:
+def has_plus_one_reaction(
+    *, owner: str, repo: str, comment_id: str, bot_login: str
+) -> bool:
     for reaction in get_comment_reactions(owner, repo, comment_id):
         if str(reaction.get("content") or "") != "+1":
             continue
@@ -325,13 +389,49 @@ def collect_cycle_items(
     if seen is None:
         seen = set()
     issue_comments = get_issue_comments(owner, repo, pr_number)
-    bot_issue_comments = [item for item in issue_comments if str((item.get("user") or {}).get("login") or "") == bot_login]
-    review_comments = [item for item in get_review_comments(owner, repo, pr_number) if str((item.get("user") or {}).get("login") or "") == bot_login]
-    reviews = [item for item in get_reviews(owner, repo, pr_number) if str((item.get("user") or {}).get("login") or "") == bot_login]
+    bot_issue_comments = [
+        item
+        for item in issue_comments
+        if str((item.get("user") or {}).get("login") or "") == bot_login
+    ]
+    review_comments = [
+        item
+        for item in get_review_comments(owner, repo, pr_number)
+        if str((item.get("user") or {}).get("login") or "") == bot_login
+    ]
+    reviews = [
+        item
+        for item in get_reviews(owner, repo, pr_number)
+        if str((item.get("user") or {}).get("login") or "") == bot_login
+    ]
     items: list[dict[str, Any]] = []
-    items.extend(emit_new_items(kind="issue_comment", items=bot_issue_comments, head_sha=head_sha, anchor_since=anchor_since, seen=seen))
-    items.extend(emit_new_items(kind="review_comment", items=review_comments, head_sha=head_sha, anchor_since=anchor_since, seen=seen))
-    items.extend(emit_new_items(kind="review", items=reviews, head_sha=head_sha, anchor_since=anchor_since, seen=seen))
+    items.extend(
+        emit_new_items(
+            kind="issue_comment",
+            items=bot_issue_comments,
+            head_sha=head_sha,
+            anchor_since=anchor_since,
+            seen=seen,
+        )
+    )
+    items.extend(
+        emit_new_items(
+            kind="review_comment",
+            items=review_comments,
+            head_sha=head_sha,
+            anchor_since=anchor_since,
+            seen=seen,
+        )
+    )
+    items.extend(
+        emit_new_items(
+            kind="review",
+            items=reviews,
+            head_sha=head_sha,
+            anchor_since=anchor_since,
+            seen=seen,
+        )
+    )
     return items
 
 
@@ -346,31 +446,46 @@ def compact_location(item: dict[str, Any]) -> str | None:
 
 
 def _record_anchor_warning(exc: Exception) -> None:
-    print(f"[review-suite] WARNING: failed to record workflow anchor: {exc}", file=sys.stderr, flush=True)
+    print(
+        f"[review-suite] WARNING: failed to record workflow anchor: {exc}",
+        file=sys.stderr,
+        flush=True,
+    )
 
 
 def sorted_cycle_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return sorted(items, key=lambda item: (item_timestamp(item) or utc_now(), str(item.get("id") or "")))
+    return sorted(
+        items,
+        key=lambda item: (item_timestamp(item) or utc_now(), str(item.get("id") or "")),
+    )
 
 
-def cycle_coverage_timestamp(items: list[dict[str, Any]], *, head_sha: str) -> datetime | None:
+def cycle_coverage_timestamp(
+    items: list[dict[str, Any]], *, head_sha: str
+) -> datetime | None:
     explicit_head_matches = [
         response_creation_timestamp(item)
         for item in sorted_cycle_items(items)
         if head_sha and str(item.get("commit_id") or "").strip() == head_sha
     ]
-    explicit_head_matches = [timestamp for timestamp in explicit_head_matches if timestamp is not None]
+    explicit_head_matches = [
+        timestamp for timestamp in explicit_head_matches if timestamp is not None
+    ]
     top_level_items = [
         item
         for item in sorted_cycle_items(items)
-        if str(item.get("kind") or "") in {"issue_comment", "review"} and str(item.get("body") or "").strip()
+        if str(item.get("kind") or "") in {"issue_comment", "review"}
+        and str(item.get("body") or "").strip()
     ]
     top_level = [response_creation_timestamp(item) for item in top_level_items]
     top_level = [timestamp for timestamp in top_level if timestamp is not None]
     if explicit_head_matches:
         latest_explicit_head_match = explicit_head_matches[-1]
         latest_top_level = top_level[-1] if top_level else None
-        if latest_top_level is not None and latest_top_level > latest_explicit_head_match:
+        if (
+            latest_top_level is not None
+            and latest_top_level > latest_explicit_head_match
+        ):
             return latest_top_level
         return latest_explicit_head_match
     if top_level:
@@ -410,7 +525,9 @@ def public_cycle_payload(payload: dict[str, Any]) -> dict[str, Any]:
     }
     items = list(payload.get("items") or [])
     if payload["status"] == "timeout":
-        result["error"] = f"review cycle timed out after {payload.get('timeout_minutes')} minutes"
+        result["error"] = (
+            f"review cycle timed out after {payload.get('timeout_minutes')} minutes"
+        )
     note = str(payload.get("note") or "").strip()
     if note:
         result["note"] = note
@@ -427,7 +544,9 @@ def public_cycle_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def cycle_has_review_body(payload: dict[str, Any]) -> bool:
-    return any(str(item.get("body") or "").strip() for item in list(payload.get("items") or []))
+    return any(
+        str(item.get("body") or "").strip() for item in list(payload.get("items") or [])
+    )
 
 
 def local_checkout_contains_reviewed_head(review_root: Path, head_sha: str) -> bool:
@@ -437,12 +556,16 @@ def local_checkout_contains_reviewed_head(review_root: Path, head_sha: str) -> b
     try:
         resolved_head = resolve_ref(review_root, normalized_head)
         local_head = current_head(review_root)
-        return resolved_head == local_head or is_ancestor(review_root, resolved_head, local_head)
+        return resolved_head == local_head or is_ancestor(
+            review_root, resolved_head, local_head
+        )
     except ValueError:
         return False
 
 
-def github_review_scope(*, review_root: Path, base_ref: str | None, head_sha: str) -> dict[str, Any]:
+def github_review_scope(
+    *, review_root: Path, base_ref: str | None, head_sha: str
+) -> dict[str, Any]:
     scope: dict[str, Any] = {"reviewed_head": head_sha}
     normalized_base = str(base_ref or "").strip()
     if not normalized_base:
@@ -456,7 +579,9 @@ def github_review_scope(*, review_root: Path, base_ref: str | None, head_sha: st
 
 
 def _help_command() -> str:
-    return format_command([sys.executable, str(launcher_script_path(__file__)), "run", "--help"])
+    return format_command(
+        [sys.executable, str(launcher_script_path(__file__)), "run", "--help"]
+    )
 
 
 def inspect_existing_cycle(
@@ -498,14 +623,28 @@ def inspect_existing_cycle(
         anchor_since=anchor_since,
     )
     if items:
-        response_coverage_at = cycle_coverage_timestamp(items, head_sha=head_sha) or anchor_since
+        response_coverage_at = (
+            cycle_coverage_timestamp(items, head_sha=head_sha) or anchor_since
+        )
         if head_commit_at and head_commit_at > response_coverage_at:
             return None
-        if has_eyes_reaction(owner=owner, repo=repo, comment_id=anchor_id, bot_login=bot_login):
-            has_child_comments = any(str(item.get("kind") or "") == "review_comment" for item in items)
-            latest_response_activity_at = max((response_activity_timestamp(item) or anchor_since for item in items), default=anchor_since)
-            response_age_seconds = max(int((utc_now() - latest_response_activity_at).total_seconds()), 0)
-            if not has_child_comments and response_age_seconds < EXISTING_RESPONSE_SETTLE_SECONDS:
+        if has_eyes_reaction(
+            owner=owner, repo=repo, comment_id=anchor_id, bot_login=bot_login
+        ):
+            has_child_comments = any(
+                str(item.get("kind") or "") == "review_comment" for item in items
+            )
+            latest_response_activity_at = max(
+                (response_activity_timestamp(item) or anchor_since for item in items),
+                default=anchor_since,
+            )
+            response_age_seconds = max(
+                int((utc_now() - latest_response_activity_at).total_seconds()), 0
+            )
+            if (
+                not has_child_comments
+                and response_age_seconds < EXISTING_RESPONSE_SETTLE_SECONDS
+            ):
                 return {
                     "reason": "existing_request_has_eyes",
                     "request_comment_id": anchor_id,
@@ -520,7 +659,9 @@ def inspect_existing_cycle(
             "requested_at": anchor_since.isoformat().replace("+00:00", "Z"),
             "items": items,
         }
-    if has_eyes_reaction(owner=owner, repo=repo, comment_id=anchor_id, bot_login=bot_login):
+    if has_eyes_reaction(
+        owner=owner, repo=repo, comment_id=anchor_id, bot_login=bot_login
+    ):
         if head_commit_at and head_commit_at > anchor_since:
             return None
         return {
@@ -530,7 +671,9 @@ def inspect_existing_cycle(
             "requested_at": anchor_since.isoformat().replace("+00:00", "Z"),
             "items": [],
         }
-    if has_plus_one_reaction(owner=owner, repo=repo, comment_id=anchor_id, bot_login=bot_login):
+    if has_plus_one_reaction(
+        owner=owner, repo=repo, comment_id=anchor_id, bot_login=bot_login
+    ):
         if head_commit_at and head_commit_at > anchor_since:
             return None
         return {
@@ -567,7 +710,9 @@ def run_review_cycle(
     force: bool,
 ) -> dict[str, Any]:
     context = get_pr_context(owner, repo, pr_number)
-    emit_state_change("GitHub review can take up to 30m. Wait for wrapper output before acting.")
+    emit_state_change(
+        "GitHub review can take up to 30m. Wait for wrapper output before acting."
+    )
     deadline = utc_now() + timedelta(minutes=timeout_minutes)
     seen: set[str] = set()
     request_attempts = 0
@@ -613,7 +758,9 @@ def run_review_cycle(
             }
         elif existing_cycle["reason"] == "existing_request_has_response":
             if force:
-                emit_state_change("existing completed cycle found; forcing fresh request")
+                emit_state_change(
+                    "existing completed cycle found; forcing fresh request"
+                )
                 existing_cycle = None
             else:
                 emit_state_change("reusing existing completed cycle")
@@ -637,7 +784,14 @@ def run_review_cycle(
             emit_state_change("existing review request still active")
 
     if existing_cycle is None:
-        request = post_request(owner=owner, repo=repo, pr_number=pr_number, body=body, head_sha=context["head_sha"], bot_login=bot_login)
+        request = post_request(
+            owner=owner,
+            repo=repo,
+            pr_number=pr_number,
+            body=body,
+            head_sha=context["head_sha"],
+            bot_login=bot_login,
+        )
         request_attempts += 1
         anchor_id = request["request_comment_id"]
         request_comment_url = request["request_comment_url"]
@@ -647,7 +801,9 @@ def run_review_cycle(
     while utc_now() < deadline:
         now = utc_now()
         head_sha = get_pr_head_sha(owner, repo, pr_number)
-        if not eyes_confirmed and has_eyes_reaction(owner=owner, repo=repo, comment_id=anchor_id, bot_login=bot_login):
+        if not eyes_confirmed and has_eyes_reaction(
+            owner=owner, repo=repo, comment_id=anchor_id, bot_login=bot_login
+        ):
             eyes_confirmed = True
             emit_state_change("review in progress")
 
@@ -683,7 +839,9 @@ def run_review_cycle(
                     "items": collected_items,
                 }
 
-        if not collected_items and has_plus_one_reaction(owner=owner, repo=repo, comment_id=anchor_id, bot_login=bot_login):
+        if not collected_items and has_plus_one_reaction(
+            owner=owner, repo=repo, comment_id=anchor_id, bot_login=bot_login
+        ):
             emit_state_change("review completed without response body")
             return {
                 "status": "acknowledged_without_body",
@@ -703,15 +861,25 @@ def run_review_cycle(
             }
 
         if status_interval_seconds > 0:
-            if last_status_emit_at is None or int((now - last_status_emit_at).total_seconds()) >= status_interval_seconds:
-                seconds_since_request = max(int((now - anchor_since).total_seconds()), 0)
+            if (
+                last_status_emit_at is None
+                or int((now - last_status_emit_at).total_seconds())
+                >= status_interval_seconds
+            ):
+                seconds_since_request = max(
+                    int((now - anchor_since).total_seconds()), 0
+                )
                 minutes_since_request = max(1, seconds_since_request // 60)
                 emit_state_change(
                     f"OK {minutes_since_request}m: github eyes={'yes' if eyes_confirmed else 'no'} responses={len(collected_items)}"
                 )
                 last_status_emit_at = now
         seconds_since_request = int((now - anchor_since).total_seconds())
-        if not eyes_confirmed and request_attempts < max_request_attempts and seconds_since_request >= re_request_after_seconds:
+        if (
+            not eyes_confirmed
+            and request_attempts < max_request_attempts
+            and seconds_since_request >= re_request_after_seconds
+        ):
             existing_cycle = inspect_existing_cycle(
                 owner=owner,
                 repo=repo,
@@ -722,13 +890,18 @@ def run_review_cycle(
             )
             if existing_cycle:
                 anchor_id = existing_cycle["request_comment_id"]
-                request_comment_url = str(existing_cycle.get("request_comment_url") or "")
+                request_comment_url = str(
+                    existing_cycle.get("request_comment_url") or ""
+                )
                 anchor_since = parse_iso(existing_cycle["requested_at"])
                 if existing_cycle["reason"] == "existing_request_has_eyes":
                     eyes_confirmed = True
                     emit_state_change("review in progress")
                     continue
-                if existing_cycle["reason"] == "existing_request_acknowledged_without_body":
+                if (
+                    existing_cycle["reason"]
+                    == "existing_request_acknowledged_without_body"
+                ):
                     emit_state_change("reusing existing completed cycle")
                     return {
                         "status": "existing_completed_cycle",
@@ -738,18 +911,20 @@ def run_review_cycle(
                         "url": context["url"],
                         "head_sha": head_sha,
                         "request_attempts": request_attempts,
-                            "eyes_confirmed": eyes_confirmed,
-                            "request_comment_id": anchor_id,
-                            "request_comment_url": existing_cycle["request_comment_url"],
-                            "anchor_since": anchor_since.isoformat().replace("+00:00", "Z"),
-                            "suppressed_post_reason": existing_cycle["reason"],
-                            "completion_signal": "+1",
-                            "note": "A completed Codex review cycle already exists for the latest @codex review request, but GitHub only shows the bot acknowledgement reaction and no response body.",
+                        "eyes_confirmed": eyes_confirmed,
+                        "request_comment_id": anchor_id,
+                        "request_comment_url": existing_cycle["request_comment_url"],
+                        "anchor_since": anchor_since.isoformat().replace("+00:00", "Z"),
+                        "suppressed_post_reason": existing_cycle["reason"],
+                        "completion_signal": "+1",
+                        "note": "A completed Codex review cycle already exists for the latest @codex review request, but GitHub only shows the bot acknowledgement reaction and no response body.",
                         "items": [],
                     }
                 if existing_cycle["reason"] == "existing_request_has_response":
                     if force:
-                        emit_state_change("existing completed cycle found; forcing fresh request")
+                        emit_state_change(
+                            "existing completed cycle found; forcing fresh request"
+                        )
                     else:
                         emit_state_change("reusing existing completed cycle")
                         return {
@@ -762,14 +937,25 @@ def run_review_cycle(
                             "request_attempts": request_attempts,
                             "eyes_confirmed": eyes_confirmed,
                             "request_comment_id": anchor_id,
-                            "request_comment_url": existing_cycle["request_comment_url"],
-                            "anchor_since": anchor_since.isoformat().replace("+00:00", "Z"),
+                            "request_comment_url": existing_cycle[
+                                "request_comment_url"
+                            ],
+                            "anchor_since": anchor_since.isoformat().replace(
+                                "+00:00", "Z"
+                            ),
                             "suppressed_post_reason": existing_cycle["reason"],
                             "note": "A completed Codex review cycle already exists for the latest @codex review request. Decide whether that feedback was already addressed before rerunning. Use --force to post a fresh request anyway.",
                             "items": existing_cycle["items"],
                         }
                 emit_state_change("reposting review request after pickup timeout")
-            request = post_request(owner=owner, repo=repo, pr_number=pr_number, body=body, head_sha=head_sha, bot_login=bot_login)
+            request = post_request(
+                owner=owner,
+                repo=repo,
+                pr_number=pr_number,
+                body=body,
+                head_sha=head_sha,
+                bot_login=bot_login,
+            )
             request_attempts += 1
             anchor_id = request["request_comment_id"]
             request_comment_url = request["request_comment_url"]
@@ -821,12 +1007,21 @@ def cmd_run(args: argparse.Namespace) -> int:
         settle_seconds=DEFAULT_SETTLE_SECONDS,
         force=args.force,
     )
-    if payload["status"] in {"response_found", "acknowledged_without_body"} and cycle_has_review_body(payload):
+    if payload["status"] in {
+        "response_found",
+        "acknowledged_without_body",
+    } and cycle_has_review_body(payload):
         try:
             if review_root is None:
-                raise RuntimeError("no local review root available for workflow anchor recording")
-            if not local_checkout_contains_reviewed_head(review_root, str(payload["head_sha"])):
-                emit_state_change("skipping workflow anchor; local checkout does not contain the reviewed head")
+                raise RuntimeError(
+                    "no local review root available for workflow anchor recording"
+                )
+            if not local_checkout_contains_reviewed_head(
+                review_root, str(payload["head_sha"])
+            ):
+                emit_state_change(
+                    "skipping workflow anchor; local checkout does not contain the reviewed head"
+                )
                 emit_toon(public_cycle_payload(payload))
                 return 0
             output_refs = [
@@ -855,15 +1050,30 @@ def cmd_run(args: argparse.Namespace) -> int:
         except Exception as exc:  # pragma: no cover - warning path only
             if review_root is not None:
                 _record_anchor_warning(exc)
-    if review_root is not None and payload["status"] in {"response_found", "acknowledged_without_body", "existing_completed_cycle"}:
-        refresh_review_cost_report_best_effort(state_dir=Path(args.state_dir), review_cwd=review_root)
+    if review_root is not None and payload["status"] in {
+        "response_found",
+        "acknowledged_without_body",
+        "existing_completed_cycle",
+    }:
+        refresh_review_cost_report_best_effort(
+            state_dir=Path(args.state_dir), review_cwd=review_root
+        )
     emit_toon(public_cycle_payload(payload))
-    return 0 if payload["status"] in {"response_found", "acknowledged_without_body", "existing_completed_cycle"} else 2
+    return (
+        0
+        if payload["status"]
+        in {"response_found", "acknowledged_without_body", "existing_completed_cycle"}
+        else 2
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = AxiArgumentParser(description="Deterministic GitHub PR review request and anchored polling.")
-    sub = parser.add_subparsers(dest="command", required=True, parser_class=AxiArgumentParser)
+    parser = AxiArgumentParser(
+        description="Deterministic GitHub PR review request and anchored polling."
+    )
+    sub = parser.add_subparsers(
+        dest="command", required=True, parser_class=AxiArgumentParser
+    )
 
     run = sub.add_parser("run")
     run.add_argument("--cd")
@@ -871,7 +1081,9 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--repo")
     run.add_argument("--pr-number", type=int)
     run.add_argument("--bot-login", default=DEFAULT_BOT_LOGIN, help=argparse.SUPPRESS)
-    run.add_argument("--state-dir", default=str(default_state_dir()), help=argparse.SUPPRESS)
+    run.add_argument(
+        "--state-dir", default=str(default_state_dir()), help=argparse.SUPPRESS
+    )
     run.add_argument("--force", action="store_true")
 
     return parser

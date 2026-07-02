@@ -26,7 +26,9 @@ def test_emit_output_only_reports_timeout_without_returncode(capsys) -> None:
 
 
 def test_emit_output_only_treats_uninspectable_success_as_failure(capsys) -> None:
-    body = "I couldn't inspect the repository because local process execution is blocked."
+    body = (
+        "I couldn't inspect the repository because local process execution is blocked."
+    )
 
     exit_code = review_deslop.emit_output_only(
         tool_name="review-deslop",
@@ -52,7 +54,12 @@ def test_emit_output_only_treats_clean_text_as_success(capsys) -> None:
 def test_clean_detection_rejects_clean_phrase_with_findings() -> None:
     body = "No findings.\n\nReview result: findings"
 
-    assert review_deslop._deslop_output_clean({"final_message": body, "stdout": "", "stderr": ""}) is False
+    assert (
+        review_deslop._deslop_output_clean(
+            {"final_message": body, "stdout": "", "stderr": ""}
+        )
+        is False
+    )
 
 
 def test_static_cleanup_parser_keeps_high_confidence_touched_items() -> None:
@@ -66,45 +73,84 @@ def test_static_cleanup_parser_keeps_high_confidence_touched_items() -> None:
         ]
     )
 
-    suggestions = review_deslop._parse_static_cleanup_output(output, {"app.py": {1, 9, 12}})
+    suggestions = review_deslop._parse_static_cleanup_output(
+        output, {"app.py": {1, 9, 12}}
+    )
 
     assert suggestions == [
         review_deslop.StaticCleanupSuggestion("app.py", 1, "unused import 'os'", 90),
-        review_deslop.StaticCleanupSuggestion("app.py", 9, "unreachable code after 'return'", 100),
+        review_deslop.StaticCleanupSuggestion(
+            "app.py", 9, "unreachable code after 'return'", 100
+        ),
     ]
 
 
 def test_normalize_repo_path_preserves_dot_prefixed_paths() -> None:
-    assert review_deslop._normalize_repo_path("./.github/scripts/check.py") == ".github/scripts/check.py"
-    assert review_deslop._normalize_repo_path(".github\\scripts\\check.py") == ".github/scripts/check.py"
+    assert (
+        review_deslop._normalize_repo_path("./.github/scripts/check.py")
+        == ".github/scripts/check.py"
+    )
+    assert (
+        review_deslop._normalize_repo_path(".github\\scripts\\check.py")
+        == ".github/scripts/check.py"
+    )
 
 
-def test_static_cleanup_scan_skip_commit_modes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_static_cleanup_scan_skip_commit_modes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.setattr(
         review_deslop.subprocess,
         "Popen",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("commit mode must not scan the worktree")),
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("commit mode must not scan the worktree")
+        ),
     )
 
-    assert review_deslop._start_static_cleanup_scan(review_root=tmp_path, base=None, commit="abc123", commit_end=None) is None
-    assert review_deslop._start_static_cleanup_scan(review_root=tmp_path, base=None, commit="abc123", commit_end="def456") is None
+    assert (
+        review_deslop._start_static_cleanup_scan(
+            review_root=tmp_path, base=None, commit="abc123", commit_end=None
+        )
+        is None
+    )
+    assert (
+        review_deslop._start_static_cleanup_scan(
+            review_root=tmp_path, base=None, commit="abc123", commit_end="def456"
+        )
+        is None
+    )
 
 
-def test_static_cleanup_scan_skip_without_changed_python(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_static_cleanup_scan_skip_without_changed_python(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.setattr(review_deslop, "_changed_python_lines", lambda **kwargs: {})
     monkeypatch.setattr(
         review_deslop.subprocess,
         "Popen",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("non-python diffs must not scan")),
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("non-python diffs must not scan")
+        ),
     )
 
-    assert review_deslop._start_static_cleanup_scan(review_root=tmp_path, base="origin/main", commit=None, commit_end=None) is None
+    assert (
+        review_deslop._start_static_cleanup_scan(
+            review_root=tmp_path, base="origin/main", commit=None, commit_end=None
+        )
+        is None
+    )
 
 
-def test_static_cleanup_scan_starts_with_exact_tracked_paths(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_static_cleanup_scan_starts_with_exact_tracked_paths(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     captured: dict[str, object] = {}
-    monkeypatch.setattr(review_deslop, "_ensure_vulture_command", lambda: ["python", "-m", "vulture"])
-    monkeypatch.setattr(review_deslop, "_changed_python_lines", lambda **kwargs: {"pkg/app.py": {1}})
+    monkeypatch.setattr(
+        review_deslop, "_ensure_vulture_command", lambda: ["python", "-m", "vulture"]
+    )
+    monkeypatch.setattr(
+        review_deslop, "_changed_python_lines", lambda **kwargs: {"pkg/app.py": {1}}
+    )
 
     class FakeProcess:
         def poll(self):
@@ -124,11 +170,20 @@ def test_static_cleanup_scan_starts_with_exact_tracked_paths(monkeypatch: pytest
 
     monkeypatch.setattr(review_deslop.subprocess, "Popen", fake_popen)
 
-    scan = review_deslop._start_static_cleanup_scan(review_root=tmp_path, base="origin/main", commit=None, commit_end=None)
+    scan = review_deslop._start_static_cleanup_scan(
+        review_root=tmp_path, base="origin/main", commit=None, commit_end=None
+    )
 
     assert scan is not None
     assert captured["cwd"] == tmp_path
-    assert captured["command"] == ["python", "-m", "vulture", "pkg/app.py", "--min-confidence", "90"]
+    assert captured["command"] == [
+        "python",
+        "-m",
+        "vulture",
+        "pkg/app.py",
+        "--min-confidence",
+        "90",
+    ]
     assert captured["stdout"] != subprocess.PIPE
     assert captured["stderr"] != subprocess.PIPE
     assert review_deslop._collect_static_cleanup_scan(scan) == [
@@ -185,7 +240,9 @@ def test_static_cleanup_output_prefixes_successful_deslop_result() -> None:
         "elapsed_seconds": 1.0,
         "timed_out": False,
     }
-    suggestions = [review_deslop.StaticCleanupSuggestion("app.py", 1, "unused import 'os'", 90)]
+    suggestions = [
+        review_deslop.StaticCleanupSuggestion("app.py", 1, "unused import 'os'", 90)
+    ]
 
     updated = review_deslop._with_static_cleanup_output(result, suggestions)
 
@@ -195,20 +252,40 @@ def test_static_cleanup_output_prefixes_successful_deslop_result() -> None:
     )
 
 
-def test_main_uses_native_base_deslop_review(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_main_uses_native_base_deslop_review(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     captured: dict[str, object] = {}
 
     monkeypatch.setattr(review_deslop, "resolve_repo_root", lambda cd: tmp_path)
-    monkeypatch.setattr(review_deslop, "use_unsafe_windows_wsl_fallback", lambda *args, **kwargs: False)
-    monkeypatch.setattr(review_deslop, "ensure_clean_git_worktree", lambda *args, **kwargs: None)
-    monkeypatch.setattr(review_deslop, "effective_base_ref", lambda review_root, base: {"base": "origin/main", "requested_base": base})
+    monkeypatch.setattr(
+        review_deslop, "use_unsafe_windows_wsl_fallback", lambda *args, **kwargs: False
+    )
+    monkeypatch.setattr(
+        review_deslop, "ensure_clean_git_worktree", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        review_deslop,
+        "effective_base_ref",
+        lambda review_root, base: {"base": "origin/main", "requested_base": base},
+    )
     order: list[str] = []
-    monkeypatch.setattr(review_deslop, "_start_static_cleanup_scan", lambda **kwargs: order.append("start") or "scan")
-    monkeypatch.setattr(review_deslop, "_collect_static_cleanup_scan", lambda scan: order.append("collect") or [])
+    monkeypatch.setattr(
+        review_deslop,
+        "_start_static_cleanup_scan",
+        lambda **kwargs: order.append("start") or "scan",
+    )
+    monkeypatch.setattr(
+        review_deslop,
+        "_collect_static_cleanup_scan",
+        lambda scan: order.append("collect") or [],
+    )
     monkeypatch.setattr(
         review_deslop,
         "lens_model_config",
-        lambda name: SimpleNamespace(model="gpt-5.5", reasoning_effort="medium", service_tier=None),
+        lambda name: SimpleNamespace(
+            model="gpt-5.5", reasoning_effort="medium", service_tier=None
+        ),
     )
 
     def fake_run_codex_review(**kwargs):
@@ -231,7 +308,9 @@ def test_main_uses_native_base_deslop_review(monkeypatch: pytest.MonkeyPatch, tm
         return 0
 
     monkeypatch.setattr(review_deslop, "emit_result", fake_emit_result)
-    monkeypatch.setattr(sys, "argv", ["review_deslop.py", "--cd", str(tmp_path), "--base", "main"])
+    monkeypatch.setattr(
+        sys, "argv", ["review_deslop.py", "--cd", str(tmp_path), "--base", "main"]
+    )
 
     assert review_deslop.main() == 0
 
@@ -246,7 +325,9 @@ def test_main_uses_native_base_deslop_review(monkeypatch: pytest.MonkeyPatch, tm
     assert order == ["start", "review", "collect"]
 
 
-def test_main_stops_static_scan_when_review_launch_fails(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_main_stops_static_scan_when_review_launch_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     stopped: list[object] = []
     scan = review_deslop.StaticCleanupScan(
         process=object(),
@@ -256,36 +337,68 @@ def test_main_stops_static_scan_when_review_launch_fails(monkeypatch: pytest.Mon
     )
 
     monkeypatch.setattr(review_deslop, "resolve_repo_root", lambda cd: tmp_path)
-    monkeypatch.setattr(review_deslop, "use_unsafe_windows_wsl_fallback", lambda *args, **kwargs: False)
-    monkeypatch.setattr(review_deslop, "ensure_clean_git_worktree", lambda *args, **kwargs: None)
-    monkeypatch.setattr(review_deslop, "effective_base_ref", lambda review_root, base: {"base": "origin/main", "requested_base": base})
-    monkeypatch.setattr(review_deslop, "_start_static_cleanup_scan", lambda **kwargs: scan)
-    monkeypatch.setattr(review_deslop, "_stop_static_cleanup_scan", lambda active_scan: stopped.append(active_scan))
+    monkeypatch.setattr(
+        review_deslop, "use_unsafe_windows_wsl_fallback", lambda *args, **kwargs: False
+    )
+    monkeypatch.setattr(
+        review_deslop, "ensure_clean_git_worktree", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        review_deslop,
+        "effective_base_ref",
+        lambda review_root, base: {"base": "origin/main", "requested_base": base},
+    )
+    monkeypatch.setattr(
+        review_deslop, "_start_static_cleanup_scan", lambda **kwargs: scan
+    )
+    monkeypatch.setattr(
+        review_deslop,
+        "_stop_static_cleanup_scan",
+        lambda active_scan: stopped.append(active_scan),
+    )
     monkeypatch.setattr(
         review_deslop,
         "lens_model_config",
-        lambda name: SimpleNamespace(model="gpt-5.5", reasoning_effort="medium", service_tier=None),
+        lambda name: SimpleNamespace(
+            model="gpt-5.5", reasoning_effort="medium", service_tier=None
+        ),
     )
-    monkeypatch.setattr(review_deslop, "run_codex_review", lambda **kwargs: (_ for _ in ()).throw(ValueError("launch failed")))
+    monkeypatch.setattr(
+        review_deslop,
+        "run_codex_review",
+        lambda **kwargs: (_ for _ in ()).throw(ValueError("launch failed")),
+    )
     monkeypatch.setattr(review_deslop, "emit_error", lambda *args, **kwargs: 2)
-    monkeypatch.setattr(sys, "argv", ["review_deslop.py", "--cd", str(tmp_path), "--base", "main"])
+    monkeypatch.setattr(
+        sys, "argv", ["review_deslop.py", "--cd", str(tmp_path), "--base", "main"]
+    )
 
     assert review_deslop.main() == 2
     assert stopped == [scan]
 
 
-def test_main_uses_native_base_for_linear_commit_ranges(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_main_uses_native_base_for_linear_commit_ranges(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     captured: dict[str, object] = {}
 
     monkeypatch.setattr(review_deslop, "resolve_repo_root", lambda cd: tmp_path)
-    monkeypatch.setattr(review_deslop, "use_unsafe_windows_wsl_fallback", lambda *args, **kwargs: False)
-    monkeypatch.setattr(review_deslop, "ensure_clean_git_worktree", lambda *args, **kwargs: None)
-    monkeypatch.setattr(review_deslop, "_start_static_cleanup_scan", lambda **kwargs: None)
+    monkeypatch.setattr(
+        review_deslop, "use_unsafe_windows_wsl_fallback", lambda *args, **kwargs: False
+    )
+    monkeypatch.setattr(
+        review_deslop, "ensure_clean_git_worktree", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        review_deslop, "_start_static_cleanup_scan", lambda **kwargs: None
+    )
     monkeypatch.setattr(review_deslop, "_collect_static_cleanup_scan", lambda scan: [])
     monkeypatch.setattr(
         review_deslop,
         "lens_model_config",
-        lambda name: SimpleNamespace(model="gpt-5.5", reasoning_effort="medium", service_tier=None),
+        lambda name: SimpleNamespace(
+            model="gpt-5.5", reasoning_effort="medium", service_tier=None
+        ),
     )
 
     monkeypatch.setattr(
@@ -319,7 +432,9 @@ def test_main_uses_native_base_for_linear_commit_ranges(monkeypatch: pytest.Monk
         return 0
 
     monkeypatch.setattr(review_deslop, "emit_result", fake_emit_result)
-    monkeypatch.setattr(sys, "argv", ["review_deslop.py", "--commit", "abc123", "def456"])
+    monkeypatch.setattr(
+        sys, "argv", ["review_deslop.py", "--commit", "abc123", "def456"]
+    )
 
     assert review_deslop.main() == 0
 

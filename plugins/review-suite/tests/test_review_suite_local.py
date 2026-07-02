@@ -79,16 +79,20 @@ def test_reviewer_wait_line_uses_actual_count() -> None:
     )
 
 
-def test_normalize_record_review_cwd_value_matches_wsl_unc_and_native(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_normalize_record_review_cwd_value_matches_wsl_unc_and_native(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setenv("WSL_DISTRO_NAME", "Ubuntu")
 
-    assert normalize_record_review_cwd_value({"review_cwd_normalized": r"\\wsl.localhost\Ubuntu\home\alice\code\repo"}) == (
-        normalize_record_review_cwd_value({"review_cwd": "/home/alice/code/repo"})
-    )
+    assert normalize_record_review_cwd_value(
+        {"review_cwd_normalized": r"\\wsl.localhost\Ubuntu\home\alice\code\repo"}
+    ) == (normalize_record_review_cwd_value({"review_cwd": "/home/alice/code/repo"}))
 
 
-def _variant(variant_id: str, *, task_classes: list[str] | None = None) -> dict[str, object]:
+def _variant(
+    variant_id: str, *, task_classes: list[str] | None = None
+) -> dict[str, object]:
     return {
         "id": variant_id,
         "model": variant_id,
@@ -145,7 +149,9 @@ def test_write_round_compacts_finalized_storage(tmp_path: Path) -> None:
         },
     )
 
-    payload = json.loads((tmp_path / "rounds" / "round-1.json").read_text(encoding="utf-8"))
+    payload = json.loads(
+        (tmp_path / "rounds" / "round-1.json").read_text(encoding="utf-8")
+    )
     assert payload["requested_prompt"] == "large prompt"
     assert payload["runs"][0]["reviewer_output"] == "No findings."
     assert "stderr" not in payload["runs"][0]
@@ -172,7 +178,9 @@ def test_write_round_keeps_prompt_for_blocked_reroll(tmp_path: Path) -> None:
         },
     )
 
-    payload = json.loads((tmp_path / "rounds" / "round-1.json").read_text(encoding="utf-8"))
+    payload = json.loads(
+        (tmp_path / "rounds" / "round-1.json").read_text(encoding="utf-8")
+    )
     assert payload["requested_prompt"] == "reroll prompt"
     assert "stderr" not in payload["runs"][0]
 
@@ -196,16 +204,22 @@ def test_write_round_preserves_stderr_derived_classification(tmp_path: Path) -> 
         },
     )
 
-    run = json.loads((tmp_path / "rounds" / "round-1.json").read_text(encoding="utf-8"))["runs"][0]
+    run = json.loads(
+        (tmp_path / "rounds" / "round-1.json").read_text(encoding="utf-8")
+    )["runs"][0]
     assert run["grade_blocked"] is True
     assert run["grade_block_reason"] == "review_tooling_failure"
     assert "stderr" not in run
 
 
-def test_compact_round_files_cleans_existing_round_state_dirs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_compact_round_files_cleans_existing_round_state_dirs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     state_dir = tmp_path / "state"
     round_path = state_dir / "rounds" / "old.json"
-    orchestrator_path = state_dir / "orchestrator" / "review-rounds" / "rounds" / "old-orc.json"
+    orchestrator_path = (
+        state_dir / "orchestrator" / "review-rounds" / "rounds" / "old-orc.json"
+    )
     live_path = state_dir / "rounds" / "live.json"
     for path in (round_path, orchestrator_path, live_path):
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -216,7 +230,9 @@ def test_compact_round_files_cleans_existing_round_state_dirs(monkeypatch: pytes
                 "status": "completed",
                 "grading_required": True,
                 "requested_prompt": "keep for reroll",
-                "runs": [{"variant_id": "a", "reviewer_output": "body", "stderr": "raw"}],
+                "runs": [
+                    {"variant_id": "a", "reviewer_output": "body", "stderr": "raw"}
+                ],
             }
         ),
         encoding="utf-8",
@@ -228,13 +244,21 @@ def test_compact_round_files_cleans_existing_round_state_dirs(monkeypatch: pytes
                 "status": "completed",
                 "grading_required": False,
                 "requested_prompt": "drop",
-                "runs": [{"variant_id": "a", "reviewer_output": "body", "command": ["raw"]}],
+                "runs": [
+                    {"variant_id": "a", "reviewer_output": "body", "command": ["raw"]}
+                ],
             }
         ),
         encoding="utf-8",
     )
     live_path.write_text(
-        json.dumps({"round_id": "live", "status": "running", "runs": [{"variant_id": "a", "stderr": "raw"}]}),
+        json.dumps(
+            {
+                "round_id": "live",
+                "status": "running",
+                "runs": [{"variant_id": "a", "stderr": "raw"}],
+            }
+        ),
         encoding="utf-8",
     )
 
@@ -278,16 +302,26 @@ def test_normalize_service_tier_rejects_unknown_values() -> None:
 
 def test_variant_service_tier_rejects_unsupported_config() -> None:
     with pytest.raises(ValueError, match="does not support"):
-        variant_service_tier({"id": "gpt-5.4-mini-medium", "service_tier": "fast", "supported_service_tiers": []})
+        variant_service_tier(
+            {
+                "id": "gpt-5.4-mini-medium",
+                "service_tier": "fast",
+                "supported_service_tiers": [],
+            }
+        )
 
 
-def test_guard_no_stage_step_down_blocks_lower_tier_with_override_hint(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_guard_no_stage_step_down_blocks_lower_tier_with_override_hint(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.setattr(
         "review_suite_local.inspect_workflow_status",
         lambda **kwargs: {"current_stage_lane": "review_t2"},
     )
 
-    with pytest.raises(ValueError, match="Do not invent a lower-tier final-head requirement") as exc_info:
+    with pytest.raises(
+        ValueError, match="Do not invent a lower-tier final-head requirement"
+    ) as exc_info:
         guard_no_stage_step_down(
             lane="review_t1",
             review_cwd=tmp_path,
@@ -314,7 +348,12 @@ def test_format_cooldown_until_for_display_uses_local_offset() -> None:
     assert __import__("datetime").datetime.fromisoformat(rendered).tzinfo is not None
 
 
-def _operational_state(*, champion_ids: list[str], probation_ids: list[str], cooling: dict[str, dict[str, object]]) -> dict[str, object]:
+def _operational_state(
+    *,
+    champion_ids: list[str],
+    probation_ids: list[str],
+    cooling: dict[str, dict[str, object]],
+) -> dict[str, object]:
     return {
         "generated_at": "2026-04-12T00:00:00Z",
         "task_classes": {
@@ -378,7 +417,9 @@ def _record(
     }
 
 
-def test_classify_review_result_prefers_valid_output_over_stale_interruption_marker() -> None:
+def test_classify_review_result_prefers_valid_output_over_stale_interruption_marker() -> (
+    None
+):
     classification = _classify_review_result(
         reviewer_output="No findings.",
         stderr_text="WARN review was interrupted before a usable result was captured.",
@@ -391,7 +432,9 @@ def test_classify_review_result_prefers_valid_output_over_stale_interruption_mar
     assert classification["grade_block_reason"] is None
 
 
-def test_classify_review_result_prefers_valid_output_over_stale_capacity_marker() -> None:
+def test_classify_review_result_prefers_valid_output_over_stale_capacity_marker() -> (
+    None
+):
     classification = _classify_review_result(
         reviewer_output="No findings.",
         stderr_text="selected model is at capacity",
@@ -421,7 +464,10 @@ def test_terminal_review_command_requires_final_machine_line() -> None:
     assert terminal_review_command("No findings.\n\nReview result: clean") == "clean"
     assert terminal_review_command("P1 bug\n\nReview result: findings") == "findings"
     assert terminal_review_command("Review result: clean\n\nAdditional prose") is None
-    assert terminal_review_command("Review result: clean\n\nReview result: findings") is None
+    assert (
+        terminal_review_command("Review result: clean\n\nReview result: findings")
+        is None
+    )
     assert terminal_review_command("No findings.") is None
 
 
@@ -492,7 +538,9 @@ def test_classify_review_capture_marks_transport_stall() -> None:
     assert classification["grade_block_reason"] == "review_transport_stalled"
 
 
-def test_apply_capacity_cooldowns_handles_timeout_and_transport_stall(tmp_path: Path) -> None:
+def test_apply_capacity_cooldowns_handles_timeout_and_transport_stall(
+    tmp_path: Path,
+) -> None:
     state_dir = tmp_path / "state"
     round_payload = {
         "task_class": "pr_review",
@@ -518,17 +566,26 @@ def test_apply_capacity_cooldowns_handles_timeout_and_transport_stall(tmp_path: 
         ],
     }
 
-    updates = _apply_capacity_cooldowns(state_dir=state_dir, round_payload=round_payload)
-    state = json.loads((state_dir / "operational_state.json").read_text(encoding="utf-8"))
+    updates = _apply_capacity_cooldowns(
+        state_dir=state_dir, round_payload=round_payload
+    )
+    state = json.loads(
+        (state_dir / "operational_state.json").read_text(encoding="utf-8")
+    )
     cooldowns = state["task_classes"]["pr_review"]["cooldowns"]
 
-    assert [update["variant_id"] for update in updates] == ["model-timeout", "model-stall"]
+    assert [update["variant_id"] for update in updates] == [
+        "model-timeout",
+        "model-stall",
+    ]
     assert cooldowns["model-timeout"]["last_reason"] == "review_timed_out"
     assert cooldowns["model-stall"]["last_reason"] == "review_transport_stalled"
     assert "model-other" not in cooldowns
 
 
-def test_apply_capacity_cooldowns_keeps_cooldown_when_same_variant_also_completed(tmp_path: Path) -> None:
+def test_apply_capacity_cooldowns_keeps_cooldown_when_same_variant_also_completed(
+    tmp_path: Path,
+) -> None:
     state_dir = tmp_path / "state"
     round_payload = {
         "task_class": "pr_review",
@@ -548,21 +605,31 @@ def test_apply_capacity_cooldowns_keeps_cooldown_when_same_variant_also_complete
         ],
     }
 
-    updates = _apply_capacity_cooldowns(state_dir=state_dir, round_payload=round_payload)
-    state = json.loads((state_dir / "operational_state.json").read_text(encoding="utf-8"))
+    updates = _apply_capacity_cooldowns(
+        state_dir=state_dir, round_payload=round_payload
+    )
+    state = json.loads(
+        (state_dir / "operational_state.json").read_text(encoding="utf-8")
+    )
     cooldowns = state["task_classes"]["pr_review"]["cooldowns"]
 
     assert [update["variant_id"] for update in updates] == ["model-a"]
     assert cooldowns["model-a"]["last_reason"] == "review_transport_stalled"
 
 
-def test_ensure_clean_git_worktree_ignores_untracked_review_suite_scratch(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setattr("review_suite_local.meaningful_worktree_status_entries", lambda review_cwd: [])
+def test_ensure_clean_git_worktree_ignores_untracked_review_suite_scratch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        "review_suite_local.meaningful_worktree_status_entries", lambda review_cwd: []
+    )
 
     ensure_clean_git_worktree(tmp_path)
 
 
-def test_ensure_clean_git_worktree_still_blocks_other_untracked_files(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_ensure_clean_git_worktree_still_blocks_other_untracked_files(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.setattr(
         "review_suite_local.meaningful_worktree_status_entries",
         lambda review_cwd: [{"code": "??", "path": "todo.txt"}],
@@ -581,7 +648,9 @@ def test_ensure_clean_git_worktree_blocks_unrelated_dirty_files_for_base_review(
         lambda review_cwd: [{"code": " M", "path": "docs/notes.md"}],
     )
     with pytest.raises(ValueError, match="clean worktree"):
-        ensure_clean_git_worktree(tmp_path, review_scope={"base": "main", "merge_base": "base123"})
+        ensure_clean_git_worktree(
+            tmp_path, review_scope={"base": "main", "merge_base": "base123"}
+        )
 
 
 def test_ensure_clean_git_worktree_still_blocks_related_dirty_files_for_base_review(
@@ -594,7 +663,9 @@ def test_ensure_clean_git_worktree_still_blocks_related_dirty_files_for_base_rev
     )
 
     with pytest.raises(ValueError, match="clean worktree"):
-        ensure_clean_git_worktree(tmp_path, review_scope={"base": "main", "merge_base": "base123"})
+        ensure_clean_git_worktree(
+            tmp_path, review_scope={"base": "main", "merge_base": "base123"}
+        )
 
 
 def test_ensure_clean_git_worktree_blocks_unrelated_dirty_files_for_flagged_commit_review(
@@ -638,8 +709,15 @@ def test_ensure_clean_git_worktree_blocks_unrelated_dirty_files_for_unflagged_co
         )
 
 
-def test_running_status_line_compacts_alive_reviewers(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("review_suite_local.utc_now", lambda: __import__("datetime").datetime.fromisoformat("2026-04-13T12:00:42+00:00"))
+def test_running_status_line_compacts_alive_reviewers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "review_suite_local.utc_now",
+        lambda: __import__("datetime").datetime.fromisoformat(
+            "2026-04-13T12:00:42+00:00"
+        ),
+    )
 
     line = _running_status_line(
         [
@@ -652,7 +730,12 @@ def test_running_status_line_compacts_alive_reviewers(monkeypatch: pytest.Monkey
 
 
 def test_heartbeat_status_line_is_minimal(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("review_suite_local.utc_now", lambda: __import__("datetime").datetime.fromisoformat("2026-04-13T12:02:05+00:00"))
+    monkeypatch.setattr(
+        "review_suite_local.utc_now",
+        lambda: __import__("datetime").datetime.fromisoformat(
+            "2026-04-13T12:02:05+00:00"
+        ),
+    )
 
     line = _heartbeat_status_line(
         [
@@ -664,7 +747,9 @@ def test_heartbeat_status_line_is_minimal(monkeypatch: pytest.MonkeyPatch) -> No
     assert line == "OK 2m: Alpha,Bravo"
 
 
-def test_transport_stalled_requires_reconnect_exhaustion_and_quiet_artifacts(tmp_path: Path) -> None:
+def test_transport_stalled_requires_reconnect_exhaustion_and_quiet_artifacts(
+    tmp_path: Path,
+) -> None:
     stdout = tmp_path / "review.stdout"
     stderr = tmp_path / "review.stderr"
     stdout.write_text("", encoding="utf-8")
@@ -679,25 +764,36 @@ def test_transport_stalled_requires_reconnect_exhaustion_and_quiet_artifacts(tmp
     os_utime(stdout, (old_time, old_time))
     os_utime(stderr, (old_time, old_time))
 
-    assert _transport_stalled(
-        {"stdout_path": str(stdout), "stderr_path": str(stderr)},
-        now_epoch=old_time + 181.0,
-    ) == "http_fallback_no_output"
+    assert (
+        _transport_stalled(
+            {"stdout_path": str(stdout), "stderr_path": str(stderr)},
+            now_epoch=old_time + 181.0,
+        )
+        == "http_fallback_no_output"
+    )
 
     os_utime(stderr, (recent_time, recent_time))
-    assert _transport_stalled(
-        {"stdout_path": str(stdout), "stderr_path": str(stderr)},
-        now_epoch=recent_time + 10.0,
-    ) is None
+    assert (
+        _transport_stalled(
+            {"stdout_path": str(stdout), "stderr_path": str(stderr)},
+            now_epoch=recent_time + 10.0,
+        )
+        is None
+    )
 
     stdout.write_text("No findings.\n", encoding="utf-8")
-    assert _transport_stalled(
-        {"stdout_path": str(stdout), "stderr_path": str(stderr)},
-        now_epoch=old_time + 1000.0,
-    ) is None
+    assert (
+        _transport_stalled(
+            {"stdout_path": str(stdout), "stderr_path": str(stderr)},
+            now_epoch=old_time + 1000.0,
+        )
+        is None
+    )
 
 
-def test_transport_hung_after_output_requires_quiet_captured_stdout(tmp_path: Path) -> None:
+def test_transport_hung_after_output_requires_quiet_captured_stdout(
+    tmp_path: Path,
+) -> None:
     stdout = tmp_path / "review.stdout"
     stderr = tmp_path / "review.stderr"
     stdout.write_text("No findings.\n", encoding="utf-8")
@@ -708,25 +804,36 @@ def test_transport_hung_after_output_requires_quiet_captured_stdout(tmp_path: Pa
     os_utime(stdout, (old_time, old_time))
     os_utime(stderr, (old_time, old_time))
 
-    assert _transport_hung_after_output(
-        {"stdout_path": str(stdout), "stderr_path": str(stderr)},
-        now_epoch=old_time + 181.0,
-    ) == "output_captured_process_still_running"
+    assert (
+        _transport_hung_after_output(
+            {"stdout_path": str(stdout), "stderr_path": str(stderr)},
+            now_epoch=old_time + 181.0,
+        )
+        == "output_captured_process_still_running"
+    )
 
     os_utime(stdout, (recent_time, recent_time))
-    assert _transport_hung_after_output(
-        {"stdout_path": str(stdout), "stderr_path": str(stderr)},
-        now_epoch=recent_time + 10.0,
-    ) is None
+    assert (
+        _transport_hung_after_output(
+            {"stdout_path": str(stdout), "stderr_path": str(stderr)},
+            now_epoch=recent_time + 10.0,
+        )
+        is None
+    )
 
     stdout.write_text("", encoding="utf-8")
-    assert _transport_hung_after_output(
-        {"stdout_path": str(stdout), "stderr_path": str(stderr)},
-        now_epoch=old_time + 1000.0,
-    ) is None
+    assert (
+        _transport_hung_after_output(
+            {"stdout_path": str(stdout), "stderr_path": str(stderr)},
+            now_epoch=old_time + 1000.0,
+        )
+        is None
+    )
 
 
-def test_print_transport_events_streams_reconnect_lines_once(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_print_transport_events_streams_reconnect_lines_once(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     stderr = tmp_path / "review.stderr"
     stderr.write_text(
         "noise\n"
@@ -755,7 +862,9 @@ def test_collect_round_results_stops_transport_stalled_live_reviewer(
     stdout = tmp_path / "review.stdout"
     stderr = tmp_path / "review.stderr"
     stdout.write_text("", encoding="utf-8")
-    stderr.write_text("ERROR: Reconnecting... 5/5\nfalling back to HTTP\n", encoding="utf-8")
+    stderr.write_text(
+        "ERROR: Reconnecting... 5/5\nfalling back to HTTP\n", encoding="utf-8"
+    )
     old_time = 1000.0
     __import__("os").utime(stdout, (old_time, old_time))
     __import__("os").utime(stderr, (old_time, old_time))
@@ -764,11 +873,21 @@ def test_collect_round_results_stops_transport_stalled_live_reviewer(
     monkeypatch.setattr("review_suite_local.time.monotonic", lambda: 2000.0)
     monkeypatch.setattr("review_suite_local.time.time", lambda: old_time + 181.0)
     monkeypatch.setattr("review_suite_local.time.sleep", lambda seconds: None)
-    monkeypatch.setattr("review_suite_local._process_is_running", lambda pid: int(pid) not in killed)
-    monkeypatch.setattr("review_suite_local._terminate_process_tree", lambda pid: killed.add(int(pid)))
-    monkeypatch.setattr("review_suite_local.find_review_child_thread", lambda **kwargs: None)
-    monkeypatch.setattr("review_suite_local.find_thread_by_title", lambda **kwargs: None)
-    monkeypatch.setattr("review_suite_local._apply_capacity_cooldowns", lambda **kwargs: [])
+    monkeypatch.setattr(
+        "review_suite_local._process_is_running", lambda pid: int(pid) not in killed
+    )
+    monkeypatch.setattr(
+        "review_suite_local._terminate_process_tree", lambda pid: killed.add(int(pid))
+    )
+    monkeypatch.setattr(
+        "review_suite_local.find_review_child_thread", lambda **kwargs: None
+    )
+    monkeypatch.setattr(
+        "review_suite_local.find_thread_by_title", lambda **kwargs: None
+    )
+    monkeypatch.setattr(
+        "review_suite_local._apply_capacity_cooldowns", lambda **kwargs: []
+    )
     monkeypatch.setattr("review_suite_local._cleanup_run_artifacts", lambda run: None)
 
     result = collect_round_results(
@@ -825,11 +944,21 @@ def test_collect_round_results_stops_transport_hung_after_output_as_completed(
     monkeypatch.setattr("review_suite_local.time.monotonic", lambda: 2000.0)
     monkeypatch.setattr("review_suite_local.time.time", lambda: old_time + 181.0)
     monkeypatch.setattr("review_suite_local.time.sleep", lambda seconds: None)
-    monkeypatch.setattr("review_suite_local._process_is_running", lambda pid: int(pid) not in killed)
-    monkeypatch.setattr("review_suite_local._terminate_process_tree", lambda pid: killed.add(int(pid)))
-    monkeypatch.setattr("review_suite_local.find_review_child_thread", lambda **kwargs: None)
-    monkeypatch.setattr("review_suite_local.find_thread_by_title", lambda **kwargs: None)
-    monkeypatch.setattr("review_suite_local._apply_capacity_cooldowns", lambda **kwargs: [])
+    monkeypatch.setattr(
+        "review_suite_local._process_is_running", lambda pid: int(pid) not in killed
+    )
+    monkeypatch.setattr(
+        "review_suite_local._terminate_process_tree", lambda pid: killed.add(int(pid))
+    )
+    monkeypatch.setattr(
+        "review_suite_local.find_review_child_thread", lambda **kwargs: None
+    )
+    monkeypatch.setattr(
+        "review_suite_local.find_thread_by_title", lambda **kwargs: None
+    )
+    monkeypatch.setattr(
+        "review_suite_local._apply_capacity_cooldowns", lambda **kwargs: []
+    )
     monkeypatch.setattr("review_suite_local._cleanup_run_artifacts", lambda run: None)
 
     result = collect_round_results(
@@ -859,7 +988,10 @@ def test_collect_round_results_stops_transport_hung_after_output_as_completed(
     )
 
     captured = capsys.readouterr()
-    assert "bravo transport hung after output (output_captured_process_still_running)" in captured.err
+    assert (
+        "bravo transport hung after output (output_captured_process_still_running)"
+        in captured.err
+    )
     assert "Running:" not in captured.err
     assert "OK " in captured.err
     assert ": bravo" in captured.err
@@ -877,7 +1009,9 @@ def test_print_stall_warnings_flags_heartbeat_only_review(
     rollout_path.write_text("", encoding="utf-8")
     monkeypatch.setattr(
         "review_suite_local.utc_now",
-        lambda: __import__("datetime").datetime.fromisoformat("2026-04-13T12:20:00+00:00"),
+        lambda: __import__("datetime").datetime.fromisoformat(
+            "2026-04-13T12:20:00+00:00"
+        ),
     )
     monkeypatch.setattr(
         "review_suite_local._live_review_thread",
@@ -886,7 +1020,9 @@ def test_print_stall_warnings_flags_heartbeat_only_review(
     monkeypatch.setattr(
         "review_suite_local.rollout_activity_summary",
         lambda path: {
-            "last_event_at": __import__("datetime").datetime.fromisoformat("2026-04-13T12:19:00+00:00"),
+            "last_event_at": __import__("datetime").datetime.fromisoformat(
+                "2026-04-13T12:19:00+00:00"
+            ),
             "last_meaningful_at": None,
             "last_meaningful_type": None,
         },
@@ -894,7 +1030,9 @@ def test_print_stall_warnings_flags_heartbeat_only_review(
     warned: set[str] = set()
 
     _print_stall_warnings(
-        active_runs=[{"slot": "bravo", "variant_id": "v1", "started_at": "2026-04-13T12:00:00Z"}],
+        active_runs=[
+            {"slot": "bravo", "variant_id": "v1", "started_at": "2026-04-13T12:00:00Z"}
+        ],
         indexed={"v1": {"model": "gpt-test", "reasoning_effort": "xhigh"}},
         sqlite_path=tmp_path / "state.sqlite",
         review_cwd=tmp_path,
@@ -915,7 +1053,9 @@ def test_print_stall_warnings_flags_empty_rollout(
     rollout_path.write_text("", encoding="utf-8")
     monkeypatch.setattr(
         "review_suite_local.utc_now",
-        lambda: __import__("datetime").datetime.fromisoformat("2026-04-13T12:20:00+00:00"),
+        lambda: __import__("datetime").datetime.fromisoformat(
+            "2026-04-13T12:20:00+00:00"
+        ),
     )
     monkeypatch.setattr(
         "review_suite_local._live_review_thread",
@@ -924,7 +1064,9 @@ def test_print_stall_warnings_flags_empty_rollout(
     warned: set[str] = set()
 
     _print_stall_warnings(
-        active_runs=[{"slot": "bravo", "variant_id": "v1", "started_at": "2026-04-13T12:00:00Z"}],
+        active_runs=[
+            {"slot": "bravo", "variant_id": "v1", "started_at": "2026-04-13T12:00:00Z"}
+        ],
         indexed={"v1": {"model": "gpt-test", "reasoning_effort": "xhigh"}},
         sqlite_path=tmp_path / "state.sqlite",
         review_cwd=tmp_path,
@@ -945,7 +1087,9 @@ def test_print_stall_warnings_suppresses_recent_visible_activity(
     rollout_path.write_text("", encoding="utf-8")
     monkeypatch.setattr(
         "review_suite_local.utc_now",
-        lambda: __import__("datetime").datetime.fromisoformat("2026-04-13T12:20:00+00:00"),
+        lambda: __import__("datetime").datetime.fromisoformat(
+            "2026-04-13T12:20:00+00:00"
+        ),
     )
     monkeypatch.setattr(
         "review_suite_local._live_review_thread",
@@ -954,15 +1098,21 @@ def test_print_stall_warnings_suppresses_recent_visible_activity(
     monkeypatch.setattr(
         "review_suite_local.rollout_activity_summary",
         lambda path: {
-            "last_event_at": __import__("datetime").datetime.fromisoformat("2026-04-13T12:19:00+00:00"),
-            "last_meaningful_at": __import__("datetime").datetime.fromisoformat("2026-04-13T12:15:00+00:00"),
+            "last_event_at": __import__("datetime").datetime.fromisoformat(
+                "2026-04-13T12:19:00+00:00"
+            ),
+            "last_meaningful_at": __import__("datetime").datetime.fromisoformat(
+                "2026-04-13T12:15:00+00:00"
+            ),
             "last_meaningful_type": "reasoning",
         },
     )
     warned: set[str] = set()
 
     _print_stall_warnings(
-        active_runs=[{"slot": "bravo", "variant_id": "v1", "started_at": "2026-04-13T12:00:00Z"}],
+        active_runs=[
+            {"slot": "bravo", "variant_id": "v1", "started_at": "2026-04-13T12:00:00Z"}
+        ],
         indexed={"v1": {"model": "gpt-test", "reasoning_effort": "xhigh"}},
         sqlite_path=tmp_path / "state.sqlite",
         review_cwd=tmp_path,
@@ -982,7 +1132,12 @@ def test_live_review_thread_does_not_return_parent_launcher_when_child_missing(
     stderr_path.write_text("session id: launcher-thread\n", encoding="utf-8")
     monkeypatch.setattr(
         "review_suite_local.find_thread_by_id",
-        lambda **_: {"id": "launcher-thread", "source": "{}", "cwd": str(tmp_path), "title": "review-title"},
+        lambda **_: {
+            "id": "launcher-thread",
+            "source": "{}",
+            "cwd": str(tmp_path),
+            "title": "review-title",
+        },
     )
     monkeypatch.setattr("review_suite_local.find_review_child_thread", lambda **_: None)
     monkeypatch.setattr("review_suite_local.find_thread_by_title", lambda **_: None)
@@ -1015,7 +1170,11 @@ def test_live_review_thread_accepts_direct_matching_review_thread_without_child(
         "title": "review-title",
         "model": "gpt-test",
         "reasoning_effort": "xhigh",
-        "created_at": int(__import__("datetime").datetime.fromisoformat("2026-04-13T12:00:01+00:00").timestamp()),
+        "created_at": int(
+            __import__("datetime")
+            .datetime.fromisoformat("2026-04-13T12:00:01+00:00")
+            .timestamp()
+        ),
     }
     monkeypatch.setattr("review_suite_local.find_thread_by_id", lambda **_: candidate)
     monkeypatch.setattr("review_suite_local.find_review_child_thread", lambda **_: None)
@@ -1049,7 +1208,11 @@ def test_live_review_thread_rejects_stale_direct_matching_review_thread(
         "title": "review-title",
         "model": "gpt-test",
         "reasoning_effort": "xhigh",
-        "created_at": int(__import__("datetime").datetime.fromisoformat("2026-04-13T11:59:00+00:00").timestamp()),
+        "created_at": int(
+            __import__("datetime")
+            .datetime.fromisoformat("2026-04-13T11:59:00+00:00")
+            .timestamp()
+        ),
     }
     monkeypatch.setattr("review_suite_local.find_thread_by_id", lambda **_: candidate)
     monkeypatch.setattr("review_suite_local.find_review_child_thread", lambda **_: None)
@@ -1081,10 +1244,16 @@ def test_live_review_thread_rejects_title_only_direct_matching_thread(
         "title": "review-title",
         "model": "gpt-test",
         "reasoning_effort": "xhigh",
-        "created_at": int(__import__("datetime").datetime.fromisoformat("2026-04-13T12:00:10+00:00").timestamp()),
+        "created_at": int(
+            __import__("datetime")
+            .datetime.fromisoformat("2026-04-13T12:00:10+00:00")
+            .timestamp()
+        ),
     }
     monkeypatch.setattr("review_suite_local.find_review_child_thread", lambda **_: None)
-    monkeypatch.setattr("review_suite_local.find_thread_by_title", lambda **_: candidate)
+    monkeypatch.setattr(
+        "review_suite_local.find_thread_by_title", lambda **_: candidate
+    )
 
     thread = _live_review_thread(
         run={
@@ -1114,7 +1283,9 @@ def test_output_isatty_requires_stdout_tty(monkeypatch: pytest.MonkeyPatch) -> N
     assert output_isatty() is False
 
 
-def test_find_blocking_rounds_for_caller_ignores_dismissed_and_completed_blocked_rounds(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_find_blocking_rounds_for_caller_ignores_dismissed_and_completed_blocked_rounds(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.setattr(
         "review_suite_local.iter_round_payloads",
         lambda state_dir: [
@@ -1147,7 +1318,9 @@ def test_find_blocking_rounds_for_caller_ignores_dismissed_and_completed_blocked
             },
         ],
     )
-    monkeypatch.setattr("review_suite_local.round_has_live_reviewer_process", lambda payload: False)
+    monkeypatch.setattr(
+        "review_suite_local.round_has_live_reviewer_process", lambda payload: False
+    )
 
     blocking = find_blocking_rounds_for_caller(
         state_dir=tmp_path,
@@ -1159,12 +1332,36 @@ def test_find_blocking_rounds_for_caller_ignores_dismissed_and_completed_blocked
 
 
 def test_reviewer_completion_status_never_classifies_review_content() -> None:
-    assert reviewer_completion_status({"reviewer_output": "Full review", "status_summary": "summary", "review_status": "completed"}) == "completed"
-    assert reviewer_completion_status({"reviewer_output": "P2 - bug", "review_status": "completed"}) == "completed"
-    assert reviewer_completion_status({"review_status": "transport_stalled", "grade_block_reason": "review_transport_stalled"}) == "review_transport_stalled"
+    assert (
+        reviewer_completion_status(
+            {
+                "reviewer_output": "Full review",
+                "status_summary": "summary",
+                "review_status": "completed",
+            }
+        )
+        == "completed"
+    )
+    assert (
+        reviewer_completion_status(
+            {"reviewer_output": "P2 - bug", "review_status": "completed"}
+        )
+        == "completed"
+    )
+    assert (
+        reviewer_completion_status(
+            {
+                "review_status": "transport_stalled",
+                "grade_block_reason": "review_transport_stalled",
+            }
+        )
+        == "review_transport_stalled"
+    )
 
 
-def test_maybe_retry_capacity_run_emits_retry_notice(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys) -> None:
+def test_maybe_retry_capacity_run_emits_retry_notice(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys
+) -> None:
     launches: list[dict[str, object]] = []
 
     monkeypatch.setattr(
@@ -1225,8 +1422,13 @@ def test_launch_reviewer_process_writes_prompt_for_prompted_base_mode(
 
     monkeypatch.setattr("review_suite_local.subprocess.Popen", fake_popen)
     monkeypatch.setattr("review_suite_local.time.monotonic", lambda: 12.5)
-    monkeypatch.setattr("review_suite_local.utc_now_iso", lambda: "2026-04-21T18:30:00Z")
-    monkeypatch.setattr("review_suite_core.lens_runtime.isolated_runtime_user_config_overrides", lambda: [])
+    monkeypatch.setattr(
+        "review_suite_local.utc_now_iso", lambda: "2026-04-21T18:30:00Z"
+    )
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime.isolated_runtime_user_config_overrides",
+        lambda: [],
+    )
     monkeypatch.setattr(
         "review_suite_core.lens_runtime.validated_linear_review_range",
         lambda cwd, start_ref, end_ref, label: None,
@@ -1252,7 +1454,10 @@ def test_launch_reviewer_process_writes_prompt_for_prompted_base_mode(
     assert command[-1] == "-"
     assert 'approval_policy="never"' in command
     assert len(proc.stdin.writes) == 1
-    assert "Review only for concrete technical merge-readiness risks" in proc.stdin.writes[0]
+    assert (
+        "Review only for concrete technical merge-readiness risks"
+        in proc.stdin.writes[0]
+    )
     assert "manual prompt" in proc.stdin.writes[0]
     assert "base ref `main`" in proc.stdin.writes[0]
     assert "BEGIN DIFF" not in proc.stdin.writes[0]
@@ -1342,7 +1547,9 @@ def test_aggregate_records_tracks_finding_rates_and_low_quality_losses() -> None
     summary = aggregate_records(
         roster=roster,
         records=records,
-        operational_state=_operational_state(champion_ids=[], probation_ids=[], cooling={}),
+        operational_state=_operational_state(
+            champion_ids=[], probation_ids=[], cooling={}
+        ),
     )
 
     rows = {
@@ -1382,7 +1589,9 @@ def test_aggregate_records_counts_ungraded_exposure_without_grading_metrics() ->
                 "runs": [{"variant_id": "alpha-model"}, {"variant_id": "bravo-model"}],
             }
         ],
-        operational_state=_operational_state(champion_ids=[], probation_ids=[], cooling={}),
+        operational_state=_operational_state(
+            champion_ids=[], probation_ids=[], cooling={}
+        ),
     )
 
     rows = {
@@ -1400,7 +1609,9 @@ def test_aggregate_records_counts_ungraded_exposure_without_grading_metrics() ->
     assert summary["task_classes"]["phase_review"]["recent_runs"] == []
 
 
-def test_ungraded_round_exposure_records_include_pending_but_skip_graded(tmp_path: Path) -> None:
+def test_ungraded_round_exposure_records_include_pending_but_skip_graded(
+    tmp_path: Path,
+) -> None:
     write_round(
         tmp_path,
         {
@@ -1440,8 +1651,13 @@ def test_ungraded_round_exposure_records_include_pending_but_skip_graded(tmp_pat
     ]
 
 
-def test_cleanup_stale_ungraded_rounds_dismisses_old_non_live_round(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setattr("review_suite_local.utc_now", lambda: datetime(2026, 5, 3, 12, 0, tzinfo=timezone.utc))
+def test_cleanup_stale_ungraded_rounds_dismisses_old_non_live_round(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        "review_suite_local.utc_now",
+        lambda: datetime(2026, 5, 3, 12, 0, tzinfo=timezone.utc),
+    )
     monkeypatch.setattr("review_suite_local._process_is_running", lambda pid: False)
     write_round(
         tmp_path,
@@ -1463,14 +1679,21 @@ def test_cleanup_stale_ungraded_rounds_dismisses_old_non_live_round(monkeypatch:
             "reason": "auto_stale_ungraded_round_24h",
         }
     ]
-    payload = json.loads((tmp_path / "rounds" / "old-running-round.json").read_text(encoding="utf-8"))
+    payload = json.loads(
+        (tmp_path / "rounds" / "old-running-round.json").read_text(encoding="utf-8")
+    )
     assert payload["status"] == "dismissed"
     assert payload["dismissed_previous_status"] == "running"
     assert "_round_file_path" not in payload
 
 
-def test_ungraded_round_exposure_records_auto_skips_stale_rounds(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setattr("review_suite_local.utc_now", lambda: datetime(2026, 5, 3, 12, 0, tzinfo=timezone.utc))
+def test_ungraded_round_exposure_records_auto_skips_stale_rounds(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        "review_suite_local.utc_now",
+        lambda: datetime(2026, 5, 3, 12, 0, tzinfo=timezone.utc),
+    )
     monkeypatch.setattr("review_suite_local._process_is_running", lambda pid: False)
     write_round(
         tmp_path,
@@ -1485,12 +1708,19 @@ def test_ungraded_round_exposure_records_auto_skips_stale_rounds(monkeypatch: py
 
     assert ungraded_round_exposure_records(tmp_path) == []
 
-    payload = json.loads((tmp_path / "rounds" / "old-pending-round.json").read_text(encoding="utf-8"))
+    payload = json.loads(
+        (tmp_path / "rounds" / "old-pending-round.json").read_text(encoding="utf-8")
+    )
     assert payload["status"] == "dismissed"
 
 
-def test_cleanup_stale_ungraded_rounds_keeps_live_round(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setattr("review_suite_local.utc_now", lambda: datetime(2026, 5, 3, 12, 0, tzinfo=timezone.utc))
+def test_cleanup_stale_ungraded_rounds_keeps_live_round(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        "review_suite_local.utc_now",
+        lambda: datetime(2026, 5, 3, 12, 0, tzinfo=timezone.utc),
+    )
     monkeypatch.setattr("review_suite_local._process_is_running", lambda pid: True)
     write_round(
         tmp_path,
@@ -1504,7 +1734,9 @@ def test_cleanup_stale_ungraded_rounds_keeps_live_round(monkeypatch: pytest.Monk
     )
 
     assert cleanup_stale_ungraded_rounds(tmp_path) == []
-    payload = json.loads((tmp_path / "rounds" / "old-live-round.json").read_text(encoding="utf-8"))
+    payload = json.loads(
+        (tmp_path / "rounds" / "old-live-round.json").read_text(encoding="utf-8")
+    )
     assert payload["status"] == "running"
 
 
@@ -1529,7 +1761,9 @@ def test_select_pair_explores_least_exposed_under_sampled_variant_first() -> Non
 
     payload = select_pair(
         roster=roster,
-        operational_state=_operational_state(champion_ids=[], probation_ids=[], cooling={}),
+        operational_state=_operational_state(
+            champion_ids=[], probation_ids=[], cooling={}
+        ),
         records=records,
         task_class="pr_review",
         review_cwd=None,
@@ -1539,7 +1773,9 @@ def test_select_pair_explores_least_exposed_under_sampled_variant_first() -> Non
     assert payload["runs"][0]["variant_id"] in {"gpt-5.5-low", "gpt-5.5-medium"}
 
 
-def test_select_pair_uses_scramble_even_when_champion_metadata_exists(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_select_pair_uses_scramble_even_when_champion_metadata_exists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     roster = _roster(
         _variant("champion"),
         _variant("acting-high"),
@@ -1580,7 +1816,9 @@ def test_select_pair_uses_scramble_even_when_champion_metadata_exists(monkeypatc
     assert len(payload["runs"]) == 2
 
 
-def test_select_pair_does_not_require_acting_champion_after_cleanup(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_select_pair_does_not_require_acting_champion_after_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     roster = _roster(
         _variant("champion"),
         _variant("low-quality"),
@@ -1636,7 +1874,9 @@ def test_select_pair_true_scramble_rolls_both_slots_uniformly() -> None:
 
     payload = select_pair(
         roster=roster,
-        operational_state=_operational_state(champion_ids=[], probation_ids=[], cooling={}),
+        operational_state=_operational_state(
+            champion_ids=[], probation_ids=[], cooling={}
+        ),
         records=records,
         task_class="phase_review",
         review_cwd=None,
@@ -1669,7 +1909,9 @@ def test_select_pair_slight_bias_rolls_both_slots_from_same_elo_weighted_pool(
 
     payload = select_pair(
         roster=roster,
-        operational_state=_operational_state(champion_ids=[], probation_ids=[], cooling={}),
+        operational_state=_operational_state(
+            champion_ids=[], probation_ids=[], cooling={}
+        ),
         records=[],
         task_class="phase_review",
         review_cwd=None,
@@ -1689,7 +1931,9 @@ def test_select_pair_rejects_unknown_selection_mode() -> None:
     with pytest.raises(ValueError, match="unknown selection_mode"):
         select_pair(
             roster=roster,
-            operational_state=_operational_state(champion_ids=[], probation_ids=[], cooling={}),
+            operational_state=_operational_state(
+                champion_ids=[], probation_ids=[], cooling={}
+            ),
             records=[],
             task_class="phase_review",
             review_cwd=None,
@@ -1697,7 +1941,9 @@ def test_select_pair_rejects_unknown_selection_mode() -> None:
         )
 
 
-def test_reroll_candidates_fall_back_to_acting_champion_pool(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_reroll_candidates_fall_back_to_acting_champion_pool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     roster = _roster(
         _variant("champion"),
         _variant("acting-high"),
@@ -1737,7 +1983,9 @@ def test_reroll_candidates_fall_back_to_acting_champion_pool(monkeypatch: pytest
     assert [variant["id"] for variant in candidates] == ["acting-high", "acting-low"]
 
 
-def test_build_reroll_slot_payload_pins_top_acting_champion(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_build_reroll_slot_payload_pins_top_acting_champion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     roster = _roster(
         _variant("champion"),
         _variant("acting-high"),
@@ -1805,7 +2053,9 @@ def test_build_reroll_slot_payload_pins_top_acting_champion(monkeypatch: pytest.
     assert payload["selection_fallback_reason"] == "champion_pool_unavailable"
 
 
-def test_write_reports_includes_recent_match_history_and_model_header(tmp_path: Path) -> None:
+def test_write_reports_includes_recent_match_history_and_model_header(
+    tmp_path: Path,
+) -> None:
     state_dir = tmp_path / "state"
     rounds_dir = state_dir / "rounds"
     rounds_dir.mkdir(parents=True)
@@ -1813,7 +2063,11 @@ def test_write_reports_includes_recent_match_history_and_model_header(tmp_path: 
     for idx in range(11):
         task_class = "phase_review" if idx % 2 == 0 else "pr_review"
         alpha = "gpt-5.4-mini-xhigh" if task_class == "phase_review" else "gpt-5.4-low"
-        beta = "gpt-5.3-codex-medium" if task_class == "phase_review" else "gpt-5.4-mini-high"
+        beta = (
+            "gpt-5.3-codex-medium"
+            if task_class == "phase_review"
+            else "gpt-5.4-mini-high"
+        )
         winner = alpha if idx % 3 else "tie"
         round_id = f"{task_class}-round-{idx}"
         records.append(
@@ -1865,18 +2119,30 @@ def test_write_reports_includes_recent_match_history_and_model_header(tmp_path: 
         },
     }
 
-    summary = aggregate_records(roster=roster, records=records, operational_state=operational_state)
+    summary = aggregate_records(
+        roster=roster, records=records, operational_state=operational_state
+    )
     write_reports(state_dir, summary)
 
     leaderboard = (state_dir / "leaderboard.md").read_text(encoding="utf-8")
 
-    assert "| model | elo | samples | W/T/L | found/opp | found % | missed % | low-quality % | sec | tok/job | cost/job |" in leaderboard
+    assert (
+        "| model | elo | samples | W/T/L | found/opp | found % | missed % | low-quality % | sec | tok/job | cost/job |"
+        in leaderboard
+    )
     assert "## match history" in leaderboard
-    assert "| review | repo | model alpha | elo alpha | delta alpha | delta beta | elo beta | model beta |" in leaderboard
+    assert (
+        "| review | repo | model alpha | elo alpha | delta alpha | delta beta | elo beta | model beta |"
+        in leaderboard
+    )
     assert "## review_t1" in leaderboard
     assert "## review_t3" in leaderboard
     assert "| review_t1 | repo-10 | gpt-5.4-mini-xhigh (W) |" in leaderboard
-    repo_9_line = next(line for line in leaderboard.splitlines() if line.startswith("| review_t3 | repo-9 |"))
+    repo_9_line = next(
+        line
+        for line in leaderboard.splitlines()
+        if line.startswith("| review_t3 | repo-9 |")
+    )
     assert "gpt-5.4-low (T) |" in repo_9_line
     assert "gpt-5.4-mini-high (T) |" in repo_9_line
     assert "(W)" not in repo_9_line
@@ -1931,8 +2197,13 @@ def test_write_reports_match_history_uses_configured_k_factor(tmp_path: Path) ->
         },
     }
 
-    summary = aggregate_records(roster=roster, records=[record], operational_state=operational_state)
+    summary = aggregate_records(
+        roster=roster, records=[record], operational_state=operational_state
+    )
     write_reports(state_dir, summary)
 
     leaderboard = (state_dir / "leaderboard.md").read_text(encoding="utf-8")
-    assert "| review_t1 | repo-k | gpt-5.4-mini-xhigh (W) | 1500.0 | +5.0 | -5.0 | 1500.0 | gpt-5.3-codex-medium (L) |" in leaderboard
+    assert (
+        "| review_t1 | repo-k | gpt-5.4-mini-xhigh (W) | 1500.0 | +5.0 | -5.0 | 1500.0 | gpt-5.3-codex-medium (L) |"
+        in leaderboard
+    )

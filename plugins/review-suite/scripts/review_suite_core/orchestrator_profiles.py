@@ -103,7 +103,11 @@ def _optional_bool(value: Any, *, field: str) -> bool:
 def _parse_model_label(value: Any, *, field: str) -> tuple[str, str, str | None]:
     label = _non_empty_text(value, field=field)
     with_tier = label.rsplit("-", 2)
-    if len(with_tier) == 3 and with_tier[1] in SUPPORTED_REASONING_EFFORTS and with_tier[2] in SUPPORTED_SERVICE_TIERS:
+    if (
+        len(with_tier) == 3
+        and with_tier[1] in SUPPORTED_REASONING_EFFORTS
+        and with_tier[2] in SUPPORTED_SERVICE_TIERS
+    ):
         model = with_tier[0].strip()
         if not model:
             raise ValueError(f"{field} must include a model name")
@@ -115,7 +119,9 @@ def _parse_model_label(value: Any, *, field: str) -> tuple[str, str, str | None]
             raise ValueError(f"{field} must include a model name")
         return model, without_tier[1], None
     efforts = ", ".join(sorted(SUPPORTED_REASONING_EFFORTS))
-    raise ValueError(f"{field} must look like model-effort where effort is one of: {efforts}")
+    raise ValueError(
+        f"{field} must look like model-effort where effort is one of: {efforts}"
+    )
 
 
 def _model_from_step(
@@ -127,64 +133,86 @@ def _model_from_step(
     model_ref = str(raw_step.get("model_ref") or "").strip()
     if model_ref:
         if "model" in raw_step or "reasoning_effort" in raw_step:
-            raise ValueError(f"{field} must use either model_ref or model/reasoning_effort")
+            raise ValueError(
+                f"{field} must use either model_ref or model/reasoning_effort"
+            )
         return _parse_model_label(
             stable_defaults.get(model_ref),
             field=f"orchestrator.stable_defaults.{model_ref}",
         )
     model = _non_empty_text(raw_step.get("model"), field=f"{field}.model")
-    effort = _non_empty_text(raw_step.get("reasoning_effort"), field=f"{field}.reasoning_effort")
+    effort = _non_empty_text(
+        raw_step.get("reasoning_effort"), field=f"{field}.reasoning_effort"
+    )
     if effort not in SUPPORTED_REASONING_EFFORTS:
-        raise ValueError(f"{field}.reasoning_effort must be one of: {', '.join(sorted(SUPPORTED_REASONING_EFFORTS))}")
+        raise ValueError(
+            f"{field}.reasoning_effort must be one of: {', '.join(sorted(SUPPORTED_REASONING_EFFORTS))}"
+        )
     return model, effort, None
 
 
-def _service_tier(raw_step: dict[str, Any], *, default: str | None, field: str) -> str | None:
+def _service_tier(
+    raw_step: dict[str, Any], *, default: str | None, field: str
+) -> str | None:
     service_tier = str(raw_step.get("service_tier") or default or "").strip() or None
     if service_tier and service_tier not in SUPPORTED_SERVICE_TIERS:
-        raise ValueError(f"{field}.service_tier must be one of: {', '.join(sorted(SUPPORTED_SERVICE_TIERS))}")
+        raise ValueError(
+            f"{field}.service_tier must be one of: {', '.join(sorted(SUPPORTED_SERVICE_TIERS))}"
+        )
     return service_tier
 
 
 def _normalize_mode(mode: str) -> str:
     normalized = str(mode or "").strip()
     if normalized not in SUPPORTED_MODES:
-        raise ValueError(f"orchestrator mode must be one of: {', '.join(SUPPORTED_MODES)}")
+        raise ValueError(
+            f"orchestrator mode must be one of: {', '.join(SUPPORTED_MODES)}"
+        )
     return normalized
 
 
 def _normalize_selection(selection: str) -> str:
     normalized = str(selection or "").strip()
     if normalized not in SUPPORTED_SELECTIONS:
-        raise ValueError(f"orchestrator selection must be one of: {', '.join(SUPPORTED_SELECTIONS)}")
+        raise ValueError(
+            f"orchestrator selection must be one of: {', '.join(SUPPORTED_SELECTIONS)}"
+        )
     return normalized
 
 
 def _normalize_step_kind(value: Any, *, field: str) -> str:
     kind = str(value or "review").strip() or "review"
     if kind not in SUPPORTED_STEP_KINDS:
-        raise ValueError(f"{field}.kind must be one of: {', '.join(SUPPORTED_STEP_KINDS)}")
+        raise ValueError(
+            f"{field}.kind must be one of: {', '.join(SUPPORTED_STEP_KINDS)}"
+        )
     return kind
 
 
 def _normalize_gate(value: Any, *, field: str) -> str:
     gate = _non_empty_text(value, field=f"{field}.gate")
     if gate not in SUPPORTED_GATE_TASK_CLASSES:
-        raise ValueError(f"{field}.gate must be one of: {', '.join(SUPPORTED_GATE_TASK_CLASSES)}")
+        raise ValueError(
+            f"{field}.gate must be one of: {', '.join(SUPPORTED_GATE_TASK_CLASSES)}"
+        )
     return gate
 
 
 def _normalize_arena_lane(value: Any, *, field: str) -> str:
     lane = _non_empty_text(value, field=f"{field}.lane")
     if lane not in SUPPORTED_ARENA_LANES:
-        raise ValueError(f"{field}.lane must be one of: {', '.join(SUPPORTED_ARENA_LANES)}")
+        raise ValueError(
+            f"{field}.lane must be one of: {', '.join(SUPPORTED_ARENA_LANES)}"
+        )
     return lane
 
 
 def _normalize_arena_task_class(value: Any, *, field: str) -> str:
     task_class = _non_empty_text(value, field=f"{field}.task_class")
     if task_class not in SUPPORTED_ARENA_TASK_CLASSES:
-        raise ValueError(f"{field}.task_class must be one of: {', '.join(SUPPORTED_ARENA_TASK_CLASSES)}")
+        raise ValueError(
+            f"{field}.task_class must be one of: {', '.join(SUPPORTED_ARENA_TASK_CLASSES)}"
+        )
     return task_class
 
 
@@ -193,7 +221,9 @@ def _normalize_arena_pair(raw_step: dict[str, Any], *, field: str) -> tuple[str,
     task_class = _normalize_arena_task_class(raw_step.get("task_class"), field=field)
     expected_lane = ARENA_LANES_BY_TASK_CLASS[task_class]
     if lane != expected_lane:
-        raise ValueError(f"{field}.lane must be {expected_lane} for task_class {task_class}")
+        raise ValueError(
+            f"{field}.lane must be {expected_lane} for task_class {task_class}"
+        )
     return lane, task_class
 
 
@@ -220,7 +250,9 @@ def _config_bool_ref(config: dict[str, Any], ref: str, *, field: str) -> bool:
     return value
 
 
-def _step_enabled(raw_step: dict[str, Any], *, config: dict[str, Any], field: str) -> bool:
+def _step_enabled(
+    raw_step: dict[str, Any], *, config: dict[str, Any], field: str
+) -> bool:
     enabled_ref = str(raw_step.get("enabled_ref") or "").strip()
     if not enabled_ref:
         return True
@@ -237,21 +269,34 @@ def _loop_count(
 ) -> int:
     if not _step_enabled(raw_step, config=config, field=field):
         return 0
-    allow_zero = _normalize_step_kind(raw_step.get("kind"), field=field) == "arena" or "enabled_ref" in raw_step
+    allow_zero = (
+        _normalize_step_kind(raw_step.get("kind"), field=field) == "arena"
+        or "enabled_ref" in raw_step
+    )
     if allow_zero:
-        loops = _non_negative_int(stable_defaults.get(loop_ref), field=f"orchestrator.stable_defaults.{loop_ref}")
+        loops = _non_negative_int(
+            stable_defaults.get(loop_ref),
+            field=f"orchestrator.stable_defaults.{loop_ref}",
+        )
     else:
-        loops = _positive_int(stable_defaults.get(loop_ref), field=f"orchestrator.stable_defaults.{loop_ref}")
+        loops = _positive_int(
+            stable_defaults.get(loop_ref),
+            field=f"orchestrator.stable_defaults.{loop_ref}",
+        )
 
     subtract_ref = str(raw_step.get("subtract_loop_ref") or "").strip()
     if subtract_ref:
         subtract_if = str(raw_step.get("subtract_if") or "").strip()
-        if not subtract_if or _config_bool_ref(config, subtract_if, field=f"{field}.subtract_if"):
+        if not subtract_if or _config_bool_ref(
+            config, subtract_if, field=f"{field}.subtract_if"
+        ):
             loops -= _non_negative_int(
                 stable_defaults.get(subtract_ref),
                 field=f"orchestrator.stable_defaults.{subtract_ref}",
             )
-        min_loops = _positive_int(raw_step.get("min_loops", 1), field=f"{field}.min_loops")
+        min_loops = _positive_int(
+            raw_step.get("min_loops", 1), field=f"{field}.min_loops"
+        )
         loops = max(min_loops, loops)
     return loops
 
@@ -267,7 +312,9 @@ def _normalize_step(
     if not isinstance(raw_step, dict):
         raise ValueError(f"{field} must be an object")
     kind = _normalize_step_kind(raw_step.get("kind"), field=field)
-    name = f"{_non_empty_text(raw_step.get('name'), field=f'{field}.name')}{name_suffix}"
+    name = (
+        f"{_non_empty_text(raw_step.get('name'), field=f'{field}.name')}{name_suffix}"
+    )
     if kind == "gate":
         return OrchestratorProfileStep(
             kind=kind,
@@ -282,11 +329,19 @@ def _normalize_step(
             lane=lane,
             task_class=task_class,
         )
-    model, effort, default_service_tier = _model_from_step(raw_step, stable_defaults=stable_defaults, field=field)
-    rerun_on_findings = _optional_bool(raw_step.get("rerun_on_findings"), field=f"{field}.rerun_on_findings")
-    max_review_rounds = _optional_positive_int(raw_step.get("max_review_rounds"), field=f"{field}.max_review_rounds")
+    model, effort, default_service_tier = _model_from_step(
+        raw_step, stable_defaults=stable_defaults, field=field
+    )
+    rerun_on_findings = _optional_bool(
+        raw_step.get("rerun_on_findings"), field=f"{field}.rerun_on_findings"
+    )
+    max_review_rounds = _optional_positive_int(
+        raw_step.get("max_review_rounds"), field=f"{field}.max_review_rounds"
+    )
     if rerun_on_findings and max_review_rounds is not None:
-        raise ValueError(f"{field} cannot combine rerun_on_findings with max_review_rounds")
+        raise ValueError(
+            f"{field} cannot combine rerun_on_findings with max_review_rounds"
+        )
     return OrchestratorProfileStep(
         kind=kind,
         name=name,
@@ -311,7 +366,9 @@ def _normalize_steps(
     while index < len(raw_steps):
         loop_ref = _raw_loop_ref(raw_steps[index])
         if not loop_ref:
-            if isinstance(raw_steps[index], dict) and not _step_enabled(raw_steps[index], config=config, field=f"{field}[{index}]"):
+            if isinstance(raw_steps[index], dict) and not _step_enabled(
+                raw_steps[index], config=config, field=f"{field}[{index}]"
+            ):
                 index += 1
                 continue
             steps.append(
@@ -331,7 +388,8 @@ def _normalize_steps(
         enabled_block = [
             (raw_index, raw_step)
             for raw_index, raw_step in block
-            if not isinstance(raw_step, dict) or _step_enabled(raw_step, config=config, field=f"{field}[{raw_index}]")
+            if not isinstance(raw_step, dict)
+            or _step_enabled(raw_step, config=config, field=f"{field}[{raw_index}]")
         ]
         if not enabled_block:
             continue
@@ -369,7 +427,9 @@ def _normalize_profile(
         raise ValueError(f"orchestrator.profiles.{profile}.{mode} must be an object")
     raw_steps = raw_profile.get("steps")
     if not isinstance(raw_steps, list) or not raw_steps:
-        raise ValueError(f"orchestrator.profiles.{profile}.{mode}.steps must contain at least one step")
+        raise ValueError(
+            f"orchestrator.profiles.{profile}.{mode}.steps must contain at least one step"
+        )
     steps = _normalize_steps(
         raw_steps,
         field=f"orchestrator.profiles.{profile}.{mode}.steps",
@@ -389,7 +449,9 @@ def _validate_calibration_policy(orchestrator: dict[str, Any]) -> None:
     if not isinstance(raw_calibration, dict):
         raise ValueError("orchestrator.calibration must be an object")
     if bool(raw_calibration.get("auto_promotion_enabled", False)):
-        raise ValueError("orchestrator.calibration.auto_promotion_enabled must be false")
+        raise ValueError(
+            "orchestrator.calibration.auto_promotion_enabled must be false"
+        )
 
 
 def _stable_defaults(orchestrator: dict[str, Any]) -> dict[str, Any]:
@@ -399,7 +461,9 @@ def _stable_defaults(orchestrator: dict[str, Any]) -> dict[str, Any]:
     return raw_defaults
 
 
-def load_orchestrator_profiles(config: dict[str, Any]) -> dict[str, dict[str, OrchestratorProfile]]:
+def load_orchestrator_profiles(
+    config: dict[str, Any],
+) -> dict[str, dict[str, OrchestratorProfile]]:
     orchestrator = config.get("orchestrator") or {}
     if not isinstance(orchestrator, dict):
         raise ValueError("orchestrator config must be an object")
@@ -445,7 +509,9 @@ def resolve_orchestrator_profile(
 
     profile = profiles[effective_selection].get(requested_mode)
     if profile is None:
-        raise ValueError(f"missing orchestrator {effective_selection} profile for mode {requested_mode}")
+        raise ValueError(
+            f"missing orchestrator {effective_selection} profile for mode {requested_mode}"
+        )
     return OrchestratorProfileResolution(
         requested_mode=requested_mode,
         effective_mode=profile.mode,

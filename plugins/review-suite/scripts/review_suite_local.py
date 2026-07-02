@@ -80,12 +80,29 @@ GRADE_BASIS_VALUES = (
 )
 TERMINAL_REVIEW_COMMANDS = {"clean", "findings"}
 TERMINAL_REVIEW_RESULT_PREFIX = "Review result:"
-GARBAGE_FINDING_LOSS_BASES = {"false_positive_loss", "hallucinated_finding_loss", "fringe_finding_loss"}
+GARBAGE_FINDING_LOSS_BASES = {
+    "false_positive_loss",
+    "hallucinated_finding_loss",
+    "fringe_finding_loss",
+}
 LOW_QUALITY_LOSS_BASES = GARBAGE_FINDING_LOSS_BASES | {"better_finding_validity"}
-MISSED_BUG_LOSS_BASES = {"valid_findings_vs_none", "more_valid_findings", "better_bug_coverage"}
-VALID_FINDING_WIN_BASES = {"valid_findings_vs_none", "more_valid_findings", "better_finding_validity", "better_bug_coverage"}
+MISSED_BUG_LOSS_BASES = {
+    "valid_findings_vs_none",
+    "more_valid_findings",
+    "better_bug_coverage",
+}
+VALID_FINDING_WIN_BASES = {
+    "valid_findings_vs_none",
+    "more_valid_findings",
+    "better_finding_validity",
+    "better_bug_coverage",
+}
 BUG_OPPORTUNITY_BASES = VALID_FINDING_WIN_BASES | {"tie_both_useful"}
-BOTH_REVIEWERS_FOUND_BASES = {"more_valid_findings", "better_bug_coverage", "tie_both_useful"}
+BOTH_REVIEWERS_FOUND_BASES = {
+    "more_valid_findings",
+    "better_bug_coverage",
+    "tie_both_useful",
+}
 PUBLIC_REVIEWER_LABELS = ("alpha", "bravo", "charlie", "delta", "echo", "foxtrot")
 CAPACITY_COOLDOWN_SECONDS = (30 * 60, 2 * 60 * 60, 6 * 60 * 60, 12 * 60 * 60)
 CAPACITY_RETRY_DELAY_SECONDS = 10
@@ -126,7 +143,10 @@ def pending_launch_ready(
 
 
 def includes_deep_review_effort(items: list[dict[str, Any]]) -> bool:
-    return any(str(item.get("reasoning_effort") or "").strip().lower() in DEEP_REVIEW_EFFORTS for item in items)
+    return any(
+        str(item.get("reasoning_effort") or "").strip().lower() in DEEP_REVIEW_EFFORTS
+        for item in items
+    )
 
 
 def print_deep_review_wait_note() -> None:
@@ -137,7 +157,9 @@ def print_deep_review_wait_note() -> None:
     )
 
 
-def load_custom_instructions(*, instructions: str | None, instructions_file: str | None) -> str | None:
+def load_custom_instructions(
+    *, instructions: str | None, instructions_file: str | None
+) -> str | None:
     if instructions is not None and instructions_file is not None:
         raise ValueError("use either --instructions or --instructions-file")
     if instructions_file is not None:
@@ -154,7 +176,9 @@ def load_custom_instructions(*, instructions: str | None, instructions_file: str
     return payload
 
 
-def normalize_commit_spec(commit_values: list[str] | None) -> tuple[str | None, str | None]:
+def normalize_commit_spec(
+    commit_values: list[str] | None,
+) -> tuple[str | None, str | None]:
     if not commit_values:
         return None, None
     if len(commit_values) == 1:
@@ -230,19 +254,27 @@ def _base_review_scope(*, review_cwd: Path, base: str) -> tuple[dict[str, Any], 
     return review_scope, target_label
 
 
-def _ensure_base_review_has_committed_diff_or_clean_worktree(*, review_cwd: Path, base: str, merge_base: str) -> None:
-    if not has_committed_diff(review_cwd, merge_base, "HEAD") and has_worktree_changes(review_cwd):
+def _ensure_base_review_has_committed_diff_or_clean_worktree(
+    *, review_cwd: Path, base: str, merge_base: str
+) -> None:
+    if not has_committed_diff(review_cwd, merge_base, "HEAD") and has_worktree_changes(
+        review_cwd
+    ):
         raise ValueError(
             f"base review found no committed diff against `{base}`, but the worktree has uncommitted changes. "
             "Commit the intended review changes or stash unrelated worktree changes, then rerun the emitted review.py command."
         )
 
 
-def _combined_review_instructions(*, standard_instructions: str, custom_instructions: str | None) -> str:
+def _combined_review_instructions(
+    *, standard_instructions: str, custom_instructions: str | None
+) -> str:
     instruction_text = standard_instructions.strip()
     if not instruction_text:
         raise ValueError("manual review mode requires built-in instructions")
-    custom_instruction_text = "" if custom_instructions is None else custom_instructions.strip()
+    custom_instruction_text = (
+        "" if custom_instructions is None else custom_instructions.strip()
+    )
     if not custom_instruction_text:
         return instruction_text
     terminal_instruction = terminal_review_result_instruction()
@@ -296,7 +328,9 @@ def build_local_review_request(
             ),
             target_label=target_label,
         )
-    review_scope, target_label = _base_review_scope(review_cwd=review_cwd, base=str(base))
+    review_scope, target_label = _base_review_scope(
+        review_cwd=review_cwd, base=str(base)
+    )
     _ensure_base_review_has_committed_diff_or_clean_worktree(
         review_cwd=review_cwd,
         base=str(review_scope["base"]),
@@ -360,7 +394,10 @@ def guard_branch_signoff_lane(
     if recommendation not in {"review-followup", "coherence-review", "full-review"}:
         return
     recommended_lane = str(status.get("recommended_lane") or "").strip()
-    if recommended_lane == lane and recommendation in {"coherence-review", "full-review"}:
+    if recommended_lane == lane and recommendation in {
+        "coherence-review",
+        "full-review",
+    }:
         return
     note = str(status.get("note") or "").strip()
     command = _review_status_command(
@@ -404,7 +441,12 @@ def guard_no_stage_step_down(
         )
     except ValueError:
         return
-    current_stage_lane = str(status.get("current_stage_lane") or status.get("recommended_lane") or status.get("last_reviewed_lane") or "").strip()
+    current_stage_lane = str(
+        status.get("current_stage_lane")
+        or status.get("recommended_lane")
+        or status.get("last_reviewed_lane")
+        or ""
+    ).strip()
     current_stage_rank = LOCAL_REVIEW_LANE_STAGE_RANK.get(current_stage_lane)
     if current_stage_rank is None or lane_rank >= current_stage_rank:
         return
@@ -434,6 +476,7 @@ def default_rubric_path() -> Path:
 
 def default_state_dir() -> Path:
     return ensure_state_dir()
+
 
 def ensure_state_dir() -> Path:
     canonical = Path.home() / ".codex" / "state" / "review-suite"
@@ -500,7 +543,9 @@ def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
 
 
 @contextmanager
-def state_lock(state_dir: Path, name: str, *, timeout_seconds: int = 30, poll_seconds: float = 0.1):
+def state_lock(
+    state_dir: Path, name: str, *, timeout_seconds: int = 30, poll_seconds: float = 0.1
+):
     locks_dir = state_dir / ".locks"
     locks_dir.mkdir(parents=True, exist_ok=True)
     lock_path = locks_dir / f"{name}.lock"
@@ -535,7 +580,9 @@ def load_roster(path: Path) -> dict[str, Any]:
             raise ValueError(f"variant {variant_id} has invalid state: {state}")
         for task_class in variant.get("task_classes", []):
             if task_class not in TASK_CLASSES:
-                raise ValueError(f"variant {variant_id} has invalid task_class: {task_class}")
+                raise ValueError(
+                    f"variant {variant_id} has invalid task_class: {task_class}"
+                )
     return roster
 
 
@@ -582,10 +629,18 @@ def _parse_timestamp(value: str | None) -> datetime | None:
 def _payload_reference_time(payload: dict[str, Any]) -> datetime | None:
     timestamps = [
         _parse_timestamp(str(payload.get(key) or ""))
-        for key in ("review_completed_at", "review_started_at", "sampled_at", "recorded_at", "round_started_at")
+        for key in (
+            "review_completed_at",
+            "review_started_at",
+            "sampled_at",
+            "recorded_at",
+            "round_started_at",
+        )
     ]
     timestamps = [
-        timestamp if timestamp.tzinfo is not None else timestamp.replace(tzinfo=timezone.utc)
+        timestamp
+        if timestamp.tzinfo is not None
+        else timestamp.replace(tzinfo=timezone.utc)
         for timestamp in timestamps
         if timestamp is not None
     ]
@@ -594,7 +649,9 @@ def _payload_reference_time(payload: dict[str, Any]) -> datetime | None:
     file_path = str(payload.get("_round_file_path") or "").strip()
     if file_path:
         try:
-            return datetime.fromtimestamp(Path(file_path).stat().st_mtime, tz=timezone.utc)
+            return datetime.fromtimestamp(
+                Path(file_path).stat().st_mtime, tz=timezone.utc
+            )
         except OSError:
             pass
     return None
@@ -607,7 +664,9 @@ def format_cooldown_until_for_display(value: object) -> str:
     return timestamp.astimezone().isoformat(timespec="seconds")
 
 
-def _prune_expired_cooldowns(payload: dict[str, Any], *, now: datetime | None = None) -> None:
+def _prune_expired_cooldowns(
+    payload: dict[str, Any], *, now: datetime | None = None
+) -> None:
     now = now or utc_now()
     for task_class in TASK_CLASSES:
         slot = payload["task_classes"].setdefault(task_class, {})
@@ -619,13 +678,19 @@ def _prune_expired_cooldowns(payload: dict[str, Any], *, now: datetime | None = 
                 active[str(variant_id)] = {
                     "until": until.isoformat().replace("+00:00", "Z"),
                     "failure_count": int((entry or {}).get("failure_count", 1) or 1),
-                    "last_reason": str((entry or {}).get("last_reason") or "selected_model_at_capacity"),
-                    "last_triggered_at": str((entry or {}).get("last_triggered_at") or ""),
+                    "last_reason": str(
+                        (entry or {}).get("last_reason") or "selected_model_at_capacity"
+                    ),
+                    "last_triggered_at": str(
+                        (entry or {}).get("last_triggered_at") or ""
+                    ),
                 }
         slot["cooldowns"] = active
 
 
-def _active_cooldowns(operational_state: dict[str, Any], task_class: str) -> dict[str, dict[str, Any]]:
+def _active_cooldowns(
+    operational_state: dict[str, Any], task_class: str
+) -> dict[str, dict[str, Any]]:
     _prune_expired_cooldowns(operational_state)
     return dict(operational_state["task_classes"][task_class].get("cooldowns") or {})
 
@@ -647,7 +712,9 @@ MARKED_COOLDOWN_BLOCK_REASONS = {
 }
 
 
-def _cooldown_unavailability_message(*, task_class: str, cooling: dict[str, dict[str, Any]], needed: int) -> str:
+def _cooldown_unavailability_message(
+    *, task_class: str, cooling: dict[str, dict[str, Any]], needed: int
+) -> str:
     details = ", ".join(
         f"{variant_id} until {format_cooldown_until_for_display(entry.get('until'))}"
         for variant_id, entry in sorted(cooling.items())
@@ -675,13 +742,17 @@ def task_class_config(roster: dict[str, Any], task_class: str) -> dict[str, Any]
 
 def configured_pair_selection_mode(roster: dict[str, Any], task_class: str) -> str:
     task_config = task_class_config(roster, task_class)
-    raw_mode = task_config.get("selection_mode", (roster.get("settings") or {}).get("selection_mode", "legacy"))
+    raw_mode = task_config.get(
+        "selection_mode", (roster.get("settings") or {}).get("selection_mode", "legacy")
+    )
     mode = str(raw_mode or "legacy").strip()
     if mode == "scramble":
         return "legacy"
     if mode not in PAIR_SELECTION_MODES:
         allowed = ", ".join(PAIR_SELECTION_MODES)
-        raise ValueError(f"unknown selection_mode for {task_class}: {mode!r}; expected one of: {allowed}")
+        raise ValueError(
+            f"unknown selection_mode for {task_class}: {mode!r}; expected one of: {allowed}"
+        )
     return mode
 
 
@@ -714,17 +785,27 @@ def initial_weight(
 
 
 def bootstrap_target_samples(variant: dict[str, Any], settings: dict[str, Any]) -> int:
-    return int(variant.get("bootstrap_target_samples", settings.get("default_bootstrap_target_samples", 8)))
+    return int(
+        variant.get(
+            "bootstrap_target_samples",
+            settings.get("default_bootstrap_target_samples", 8),
+        )
+    )
 
 
-def relative_underuse_target(variants: list[dict[str, Any]], sample_counts: dict[str, int], settings: dict[str, Any]) -> float | None:
+def relative_underuse_target(
+    variants: list[dict[str, Any]],
+    sample_counts: dict[str, int],
+    settings: dict[str, Any],
+) -> float | None:
     ratio = float(settings.get("relative_underuse_ratio", 0.0) or 0.0)
     if ratio <= 0.0:
         return None
     established_counts = [
         sample_counts.get(variant["id"], 0)
         for variant in variants
-        if sample_counts.get(variant["id"], 0) >= bootstrap_target_samples(variant, settings)
+        if sample_counts.get(variant["id"], 0)
+        >= bootstrap_target_samples(variant, settings)
     ]
     if not established_counts:
         return None
@@ -750,11 +831,15 @@ def is_under_sampled(
     settings: dict[str, Any],
     variants: list[dict[str, Any]],
 ) -> bool:
-    return sample_counts.get(variant["id"], 0) < effective_underuse_target(variant, variants, sample_counts, settings)
+    return sample_counts.get(variant["id"], 0) < effective_underuse_target(
+        variant, variants, sample_counts, settings
+    )
 
 
 def probation_min_samples(settings: dict[str, Any]) -> int:
-    return int(settings.get("probation_min_samples", settings.get("promotion_min_samples", 20)))
+    return int(
+        settings.get("probation_min_samples", settings.get("promotion_min_samples", 20))
+    )
 
 
 def probation_max_elo(settings: dict[str, Any]) -> float:
@@ -771,16 +856,26 @@ def _acting_champion_variants(
 ) -> list[dict[str, Any]]:
     settings = roster.get("settings", {})
     min_samples = int(settings.get("promotion_min_samples", 20))
-    probation_ids = set(str(item) for item in (operational_state["task_classes"][task_class].get("probation_variant_ids") or []))
+    probation_ids = set(
+        str(item)
+        for item in (
+            operational_state["task_classes"][task_class].get("probation_variant_ids")
+            or []
+        )
+    )
     indexed = variant_index(roster)
     available_ids = {variant["id"] for variant in available_variants}
-    leaderboard = aggregate_records(roster=roster, records=records, operational_state=operational_state)["task_classes"][
-        task_class
-    ]["leaderboard"]
+    leaderboard = aggregate_records(
+        roster=roster, records=records, operational_state=operational_state
+    )["task_classes"][task_class]["leaderboard"]
     acting: list[dict[str, Any]] = []
     for row in leaderboard:
         variant_id = str(row.get("variant_id") or "")
-        if not variant_id or variant_id not in available_ids or variant_id in probation_ids:
+        if (
+            not variant_id
+            or variant_id not in available_ids
+            or variant_id in probation_ids
+        ):
             continue
         if int(row.get("sample_count", 0) or 0) < min_samples:
             continue
@@ -841,7 +936,10 @@ def pick_custom_weighted_without_replacement(
     available = variants[:]
     chosen: list[dict[str, Any]] = []
     for _ in range(count):
-        weights = [max(float(weights_by_variant_id.get(variant["id"], 1.0)), 0.01) for variant in available]
+        weights = [
+            max(float(weights_by_variant_id.get(variant["id"], 1.0)), 0.01)
+            for variant in available
+        ]
         total = sum(weights)
         roll = rng.uniform(0.0, total)
         upto = 0.0
@@ -886,10 +984,15 @@ def variant_service_tier(variant: dict[str, Any]) -> str | None:
         return None
     if "supported_service_tiers" not in variant:
         return service_tier
-    supported = {normalize_service_tier(item) for item in list(variant.get("supported_service_tiers") or [])}
+    supported = {
+        normalize_service_tier(item)
+        for item in list(variant.get("supported_service_tiers") or [])
+    }
     supported.discard(None)
     if service_tier not in supported:
-        raise ValueError(f"variant {variant.get('id') or variant.get('model') or '<unknown>'} does not support service_tier={service_tier}")
+        raise ValueError(
+            f"variant {variant.get('id') or variant.get('model') or '<unknown>'} does not support service_tier={service_tier}"
+        )
     return service_tier
 
 
@@ -935,7 +1038,9 @@ def format_cost_cents(value: float | None) -> str:
 
 
 def total_usage_tokens(usage: dict[str, Any]) -> int:
-    return int(usage.get("input_tokens", 0) or 0) + int(usage.get("output_tokens", 0) or 0)
+    return int(usage.get("input_tokens", 0) or 0) + int(
+        usage.get("output_tokens", 0) or 0
+    )
 
 
 def rounds_dir(state_dir: Path) -> Path:
@@ -965,7 +1070,15 @@ def compact_round_payload_for_storage(payload: dict[str, Any]) -> dict[str, Any]
         run["status_summary"] = classification["status_summary"]
         run["grade_blocked"] = classification["grade_blocked"]
         run["grade_block_reason"] = classification["grade_block_reason"]
-        for key in ("command", "stdout", "stderr", "stdout_path", "stderr_path", "final_message_path", "stderr_progress_offset"):
+        for key in (
+            "command",
+            "stdout",
+            "stderr",
+            "stdout_path",
+            "stderr_path",
+            "final_message_path",
+            "stderr_progress_offset",
+        ):
             run.pop(key, None)
     return compacted
 
@@ -985,7 +1098,9 @@ def _compact_round_file(path: Path, *, apply: bool) -> tuple[int, int, bool] | N
 
 
 def compact_round_files(state_dir: Path, *, apply: bool = False) -> dict[str, Any]:
-    dirs = unique_round_state_dirs([state_dir, state_dir / ORCHESTRATOR_ROUND_STATE_DIR])
+    dirs = unique_round_state_dirs(
+        [state_dir, state_dir / ORCHESTRATOR_ROUND_STATE_DIR]
+    )
     result = {"checked": 0, "changed": 0, "before_b": 0, "after_b": 0}
     for round_state_dir in dirs:
         directory = rounds_dir(round_state_dir)
@@ -1021,10 +1136,14 @@ def normalize_review_cwd_value(review_cwd: Path | str | None) -> str | None:
 
 
 def normalize_record_review_cwd_value(payload: dict[str, Any]) -> str | None:
-    return normalize_review_cwd_value(payload.get("review_cwd_normalized")) or normalize_review_cwd_value(payload.get("review_cwd"))
+    return normalize_review_cwd_value(
+        payload.get("review_cwd_normalized")
+    ) or normalize_review_cwd_value(payload.get("review_cwd"))
 
 
-def resolve_caller_id(explicit_caller_id: str | None = None) -> tuple[str | None, str | None]:
+def resolve_caller_id(
+    explicit_caller_id: str | None = None,
+) -> tuple[str | None, str | None]:
     explicit = (explicit_caller_id or "").strip()
     if explicit:
         return explicit, "arg"
@@ -1087,7 +1206,12 @@ def unique_round_state_dirs(paths: list[Path]) -> list[Path]:
 
 def _rerolled_round_sort_key(payload: dict[str, Any]) -> tuple[str, str]:
     return (
-        str(payload.get("sampled_at") or payload.get("started_at") or payload.get("completed_at") or ""),
+        str(
+            payload.get("sampled_at")
+            or payload.get("started_at")
+            or payload.get("completed_at")
+            or ""
+        ),
         str(payload.get("round_id") or ""),
     )
 
@@ -1100,7 +1224,9 @@ def latest_rerolled_round_payload(
 ) -> tuple[str, dict[str, Any], Path]:
     current_id = round_id
     current_payload = dict(payload)
-    current_state_dir = unique_round_state_dirs(search_dirs)[0] if search_dirs else Path(".")
+    current_state_dir = (
+        unique_round_state_dirs(search_dirs)[0] if search_dirs else Path(".")
+    )
     seen = {current_id}
     while True:
         replacements: list[tuple[Path, dict[str, Any]]] = []
@@ -1108,11 +1234,14 @@ def latest_rerolled_round_payload(
             replacements.extend(
                 (candidate_dir, dict(candidate_payload))
                 for candidate_payload in iter_round_payloads(candidate_dir)
-                if str(candidate_payload.get("rerolled_from_round_id") or "").strip() == current_id
+                if str(candidate_payload.get("rerolled_from_round_id") or "").strip()
+                == current_id
             )
         if not replacements:
             return current_id, current_payload, current_state_dir
-        current_state_dir, current_payload = max(replacements, key=lambda item: _rerolled_round_sort_key(item[1]))
+        current_state_dir, current_payload = max(
+            replacements, key=lambda item: _rerolled_round_sort_key(item[1])
+        )
         recorded_state_dir = str(current_payload.get("round_state_dir") or "").strip()
         if recorded_state_dir:
             current_state_dir = Path(recorded_state_dir)
@@ -1189,7 +1318,9 @@ def cleanup_stale_ungraded_rounds(
     return cleaned
 
 
-def find_pending_rounds_for_caller(*, state_dir: Path, caller_id: str | None, review_cwd: Path | str | None) -> list[dict[str, Any]]:
+def find_pending_rounds_for_caller(
+    *, state_dir: Path, caller_id: str | None, review_cwd: Path | str | None
+) -> list[dict[str, Any]]:
     cleanup_stale_ungraded_rounds(state_dir)
     normalized_review_cwd = normalize_review_cwd_value(review_cwd)
     caller = (caller_id or "").strip()
@@ -1204,11 +1335,20 @@ def find_pending_rounds_for_caller(*, state_dir: Path, caller_id: str | None, re
         if not round_needs_caller_grade(payload):
             continue
         pending.append(payload)
-    pending.sort(key=lambda item: str(item.get("review_completed_at") or item.get("sampled_at") or item.get("round_id") or ""))
+    pending.sort(
+        key=lambda item: str(
+            item.get("review_completed_at")
+            or item.get("sampled_at")
+            or item.get("round_id")
+            or ""
+        )
+    )
     return pending
 
 
-def find_blocking_rounds_for_caller(*, state_dir: Path, caller_id: str | None, review_cwd: Path | str | None) -> list[dict[str, Any]]:
+def find_blocking_rounds_for_caller(
+    *, state_dir: Path, caller_id: str | None, review_cwd: Path | str | None
+) -> list[dict[str, Any]]:
     cleanup_stale_ungraded_rounds(state_dir)
     normalized_review_cwd = normalize_review_cwd_value(review_cwd)
     caller = (caller_id or "").strip()
@@ -1221,9 +1361,20 @@ def find_blocking_rounds_for_caller(*, state_dir: Path, caller_id: str | None, r
         if normalize_record_review_cwd_value(payload) != normalized_review_cwd:
             continue
         status = str(payload.get("status") or "")
-        if round_needs_caller_grade(payload) or status in {"sampled", "running"} or round_has_live_reviewer_process(payload):
+        if (
+            round_needs_caller_grade(payload)
+            or status in {"sampled", "running"}
+            or round_has_live_reviewer_process(payload)
+        ):
             blocking.append(payload)
-    blocking.sort(key=lambda item: str(item.get("review_completed_at") or item.get("sampled_at") or item.get("round_id") or ""))
+    blocking.sort(
+        key=lambda item: str(
+            item.get("review_completed_at")
+            or item.get("sampled_at")
+            or item.get("round_id")
+            or ""
+        )
+    )
     return blocking
 
 
@@ -1261,7 +1412,12 @@ def _elapsed_seconds_for_runs(runs: list[dict[str, Any]]) -> int:
         started_at = run.get("started_at")
         if not started_at:
             continue
-        value = int((utc_now() - datetime.fromisoformat(str(started_at).replace("Z", "+00:00"))).total_seconds())
+        value = int(
+            (
+                utc_now()
+                - datetime.fromisoformat(str(started_at).replace("Z", "+00:00"))
+            ).total_seconds()
+        )
         elapsed = max(elapsed, value)
     return elapsed
 
@@ -1341,7 +1497,9 @@ def _transport_stall_signal(stderr_text: str) -> str | None:
     return None
 
 
-def _transport_stalled(run: dict[str, Any], *, now_epoch: float | None = None) -> str | None:
+def _transport_stalled(
+    run: dict[str, Any], *, now_epoch: float | None = None
+) -> str | None:
     if _stdout_has_content(run):
         return None
     stderr_text = _stderr_text_for_run(run)
@@ -1357,7 +1515,9 @@ def _transport_stalled(run: dict[str, Any], *, now_epoch: float | None = None) -
     return signal
 
 
-def _transport_hung_after_output(run: dict[str, Any], *, now_epoch: float | None = None) -> str | None:
+def _transport_hung_after_output(
+    run: dict[str, Any], *, now_epoch: float | None = None
+) -> str | None:
     if not _stdout_has_content(run):
         return None
     last_activity = _artifact_activity_epoch(run)
@@ -1386,13 +1546,16 @@ def _terminate_process_tree(pid: int | None) -> None:
         pass
 
 
-def _transport_event_lines(stderr_text: str, *, start_offset: int) -> tuple[list[str], int]:
+def _transport_event_lines(
+    stderr_text: str, *, start_offset: int
+) -> tuple[list[str], int]:
     offset = max(0, int(start_offset or 0))
     chunk = stderr_text[offset:]
     lines = [
         line.strip()
         for line in chunk.splitlines()
-        if line.strip() and any(pattern in line for pattern in TRANSPORT_RECONNECT_PATTERNS)
+        if line.strip()
+        and any(pattern in line for pattern in TRANSPORT_RECONNECT_PATTERNS)
     ]
     return lines, len(stderr_text)
 
@@ -1405,11 +1568,15 @@ def _print_transport_events(active_runs: list[dict[str, Any]]) -> bool:
             continue
         stderr_text = _stderr_text_for_run(run)
         start_offset = int(run.get("stderr_progress_offset", 0) or 0)
-        lines, next_offset = _transport_event_lines(stderr_text, start_offset=start_offset)
+        lines, next_offset = _transport_event_lines(
+            stderr_text, start_offset=start_offset
+        )
         run["stderr_progress_offset"] = next_offset
         label = public_reviewer_label(slot)
         for line in lines:
-            print(f"[review-suite] {label} transport: {line}", file=sys.stderr, flush=True)
+            print(
+                f"[review-suite] {label} transport: {line}", file=sys.stderr, flush=True
+            )
             printed = True
     return printed
 
@@ -1431,15 +1598,21 @@ def _live_review_thread(
     session_id = extract_session_id(stderr_text)
     review_cwd_text = str(review_cwd)
     started_at = _started_at_epoch_seconds(run.get("started_at"))
-    created_after = max(0, started_at - 5) if started_at is not None else int(time.time()) - 5
+    created_after = (
+        max(0, started_at - 5) if started_at is not None else int(time.time()) - 5
+    )
     title = str(run.get("title") or "")
     model = str(variant["model"])
     reasoning_effort = str(variant["reasoning_effort"])
 
-    def is_direct_review_thread(candidate: dict[str, Any], *, require_session_match: bool) -> bool:
+    def is_direct_review_thread(
+        candidate: dict[str, Any], *, require_session_match: bool
+    ) -> bool:
         if str(candidate.get("source") or "") == REVIEW_SUBAGENT_SOURCE:
             return True
-        if require_session_match and str(candidate.get("id") or "") != str(session_id or ""):
+        if require_session_match and str(candidate.get("id") or "") != str(
+            session_id or ""
+        ):
             return False
         if not require_session_match:
             return False
@@ -1454,7 +1627,8 @@ def _live_review_thread(
             and str(candidate.get("title") or "") == title
             and str(candidate.get("cwd") or "") == review_cwd_text
             and str(candidate.get("model") or "").lower() == model.lower()
-            and str(candidate.get("reasoning_effort") or "").lower() == reasoning_effort.lower()
+            and str(candidate.get("reasoning_effort") or "").lower()
+            == reasoning_effort.lower()
         )
 
     if session_id:
@@ -1519,7 +1693,9 @@ def _print_stall_warnings(
         slot = str(run.get("slot") or "")
         if not slot or slot in warned_slots:
             continue
-        variant = dict(run.get("variant") or indexed.get(str(run.get("variant_id") or ""), {}))
+        variant = dict(
+            run.get("variant") or indexed.get(str(run.get("variant_id") or ""), {})
+        )
         if not variant:
             continue
         thread = _live_review_thread(
@@ -1535,7 +1711,9 @@ def _print_stall_warnings(
         if not rollout_path.is_file():
             continue
         activity = rollout_activity_summary(rollout_path)
-        last_meaningful_at = activity.get("last_meaningful_at") or _run_started_at_datetime(run)
+        last_meaningful_at = activity.get(
+            "last_meaningful_at"
+        ) or _run_started_at_datetime(run)
         if last_meaningful_at is None:
             continue
         idle_seconds = int((now - last_meaningful_at).total_seconds())
@@ -1575,7 +1753,10 @@ def reviewer_output_heading(run: dict[str, Any]) -> str:
 
 
 def _print_live_completed_run(run: dict[str, Any]) -> None:
-    write_text(f"{reviewer_output_heading(run)} {reviewer_completion_status(run)}", stream=sys.stderr)
+    write_text(
+        f"{reviewer_output_heading(run)} {reviewer_completion_status(run)}",
+        stream=sys.stderr,
+    )
 
 
 def final_display_body(run: dict[str, Any]) -> str:
@@ -1626,7 +1807,9 @@ def public_task_name(task_class: str) -> str:
 
 
 def repo_name_from_round_payload(payload: dict[str, Any]) -> str:
-    review_cwd = str(payload.get("review_cwd") or payload.get("review_cwd_normalized") or "").strip()
+    review_cwd = str(
+        payload.get("review_cwd") or payload.get("review_cwd_normalized") or ""
+    ).strip()
     if not review_cwd:
         return "-"
     trimmed = review_cwd.rstrip("\\/")
@@ -1649,8 +1832,12 @@ def round_repo_name(state_dir: Path, round_id: str, cache: dict[str, str]) -> st
     return name
 
 
-def recent_match_history(state_dir: Path, *, k_factor: float, limit: int = 10) -> list[dict[str, Any]]:
-    ratings_by_task: dict[str, dict[str, float]] = {task_class: {} for task_class in TASK_CLASSES}
+def recent_match_history(
+    state_dir: Path, *, k_factor: float, limit: int = 10
+) -> list[dict[str, Any]]:
+    ratings_by_task: dict[str, dict[str, float]] = {
+        task_class: {} for task_class in TASK_CLASSES
+    }
     repo_cache: dict[str, str] = {}
     history: list[dict[str, Any]] = []
     for record in read_jsonl(state_dir / RUN_LOG_FILENAME):
@@ -1675,35 +1862,51 @@ def recent_match_history(state_dir: Path, *, k_factor: float, limit: int = 10) -
         ratings = ratings_by_task.setdefault(task_class, {})
         alpha_before = float(ratings.get(alpha_model, 1500.0))
         beta_before = float(ratings.get(beta_model, 1500.0))
-        alpha_after, beta_after = update_elo(alpha_before, beta_before, result, k_factor)
+        alpha_after, beta_after = update_elo(
+            alpha_before, beta_before, result, k_factor
+        )
         ratings[alpha_model] = alpha_after
         ratings[beta_model] = beta_after
         history.append(
             {
                 "recorded_at": str(record.get("recorded_at") or ""),
                 "review": review_label(task_class),
-                "repo": round_repo_name(state_dir, str(record.get("round_id") or ""), repo_cache),
+                "repo": round_repo_name(
+                    state_dir, str(record.get("round_id") or ""), repo_cache
+                ),
                 "model_alpha": alpha_model,
-                "outcome_alpha": "win" if result == "a" else "loss" if result == "b" else "tie",
+                "outcome_alpha": "win"
+                if result == "a"
+                else "loss"
+                if result == "b"
+                else "tie",
                 "elo_alpha": alpha_before,
                 "delta_alpha": alpha_after - alpha_before,
                 "delta_beta": beta_after - beta_before,
                 "elo_beta": beta_before,
                 "model_beta": beta_model,
-                "outcome_beta": "win" if result == "b" else "loss" if result == "a" else "tie",
+                "outcome_beta": "win"
+                if result == "b"
+                else "loss"
+                if result == "a"
+                else "tie",
             }
         )
     history.sort(key=lambda row: row["recorded_at"], reverse=True)
     return history[:limit]
 
 
-def public_round_payload(payload: dict[str, Any], *, task_name: str | None = None) -> dict[str, Any]:
+def public_round_payload(
+    payload: dict[str, Any], *, task_name: str | None = None
+) -> dict[str, Any]:
     return {
         "round_id": payload["round_id"],
         "task": task_name or public_task_name(str(payload["task_class"])),
         "status": payload.get("status"),
         "sampled_at": payload.get("sampled_at"),
-        "reviewers": [public_reviewer_label(run["slot"]) for run in payload.get("runs", [])],
+        "reviewers": [
+            public_reviewer_label(run["slot"]) for run in payload.get("runs", [])
+        ],
     }
 
 
@@ -1755,7 +1958,9 @@ def _run_is_finalized(run: dict[str, Any]) -> bool:
     return False
 
 
-def public_round_result(payload: dict[str, Any], *, output_slots: set[str] | None = None) -> dict[str, Any]:
+def public_round_result(
+    payload: dict[str, Any], *, output_slots: set[str] | None = None
+) -> dict[str, Any]:
     run_summaries = []
     for run in payload.get("runs", []):
         classification = _classification_for_run(run)
@@ -1779,7 +1984,9 @@ def public_round_result(payload: dict[str, Any], *, output_slots: set[str] | Non
         result["cooldowns"] = [
             {
                 "variant": str(update.get("variant_id") or ""),
-                "until": format_cooldown_until_for_display(update.get("cooldown_until")),
+                "until": format_cooldown_until_for_display(
+                    update.get("cooldown_until")
+                ),
                 "reason": update.get("reason"),
                 "failures": update.get("failure_count"),
             }
@@ -1794,13 +2001,19 @@ def _report_settings_snapshot(settings: dict[str, Any]) -> dict[str, Any]:
         "promotion_min_samples": int(settings.get("promotion_min_samples", 20)),
         "promotion_min_elo": float(settings.get("promotion_min_elo", 1550.0)),
         "promotion_champion_group_window": float(
-            settings.get("promotion_champion_group_window", settings.get("promotion_min_elo_lead", 25.0))
+            settings.get(
+                "promotion_champion_group_window",
+                settings.get("promotion_min_elo_lead", 25.0),
+            )
         ),
     }
 
 
 def _probation_variant_ids(
-    *, leaderboard: list[dict[str, Any]], champion_ids: set[str], settings: dict[str, Any]
+    *,
+    leaderboard: list[dict[str, Any]],
+    champion_ids: set[str],
+    settings: dict[str, Any],
 ) -> list[str]:
     min_samples = probation_min_samples(settings)
     max_elo = probation_max_elo(settings)
@@ -1833,7 +2046,6 @@ def select_pair(
 ) -> dict[str, Any]:
     settings = roster.get("settings", {})
     excluded_variant_ids = excluded_variant_ids or set()
-    indexed = variant_index(roster)
     all_variants = [
         variant
         for variant in eligible_variants(roster, task_class)
@@ -1843,7 +2055,11 @@ def select_pair(
     variants = [variant for variant in all_variants if variant["id"] not in cooling]
     if len(variants) < 2:
         if len(all_variants) >= 2 and cooling:
-            raise ValueError(_cooldown_unavailability_message(task_class=task_class, cooling=cooling, needed=2))
+            raise ValueError(
+                _cooldown_unavailability_message(
+                    task_class=task_class, cooling=cooling, needed=2
+                )
+            )
         raise ValueError(f"need at least two active variants for {task_class}")
     counts = summarize_counts(records, task_class)
     state = operational_state["task_classes"][task_class]
@@ -1864,7 +2080,9 @@ def select_pair(
             seed=seed,
         )
     elif selection_mode == "true_scramble":
-        selected, selection_pairing = _select_true_scramble_pair(variants=variants, seed=seed)
+        selected, selection_pairing = _select_true_scramble_pair(
+            variants=variants, seed=seed
+        )
     else:
         leaderboard = aggregate_records(
             roster=roster,
@@ -1923,10 +2141,18 @@ def _select_scramble_pair(
     ]
     if under_sampled:
         lowest_exposure = min(counts.get(variant["id"], 0) for variant in under_sampled)
-        under_sampled = [variant for variant in under_sampled if counts.get(variant["id"], 0) == lowest_exposure]
+        under_sampled = [
+            variant
+            for variant in under_sampled
+            if counts.get(variant["id"], 0) == lowest_exposure
+        ]
     if not under_sampled:
-        preferred_variants = [variant for variant in variants if variant["id"] not in probation_id_set]
-        probation_variants = [variant for variant in variants if variant["id"] in probation_id_set]
+        preferred_variants = [
+            variant for variant in variants if variant["id"] not in probation_id_set
+        ]
+        probation_variants = [
+            variant for variant in variants if variant["id"] in probation_id_set
+        ]
         if preferred_variants:
             anchor = pick_weighted_without_replacement(
                 preferred_variants,
@@ -1937,14 +2163,19 @@ def _select_scramble_pair(
                 relative_target=underuse_target,
             )[0]
             remaining_preferred = [
-                variant for variant in preferred_variants if variant["id"] != anchor["id"]
+                variant
+                for variant in preferred_variants
+                if variant["id"] != anchor["id"]
             ]
-            probation_probe_ratio = float(settings.get("scramble_probation_probe_ratio", 0.15))
+            probation_probe_ratio = float(
+                settings.get("scramble_probation_probe_ratio", 0.15)
+            )
             want_probation_probe = bool(probation_variants) and (
                 not remaining_preferred
                 or (
                     probation_probe_ratio > 0.0
-                    and random.Random(_seed_with_offset(seed, 100)).random() < probation_probe_ratio
+                    and random.Random(_seed_with_offset(seed, 100)).random()
+                    < probation_probe_ratio
                 )
             )
             if want_probation_probe:
@@ -1969,7 +2200,9 @@ def _select_scramble_pair(
                 return [anchor, second], "scramble_weighted"
         highest_sample_count = max(counts.get(variant["id"], 0) for variant in variants)
         anchor_pool = [
-            variant for variant in variants if counts.get(variant["id"], 0) == highest_sample_count
+            variant
+            for variant in variants
+            if counts.get(variant["id"], 0) == highest_sample_count
         ]
         anchor = pick_weighted_without_replacement(
             anchor_pool,
@@ -1979,7 +2212,9 @@ def _select_scramble_pair(
             _seed_with_offset(seed, 103),
             relative_target=underuse_target,
         )[0]
-        remaining_variants = [variant for variant in variants if variant["id"] != anchor["id"]]
+        remaining_variants = [
+            variant for variant in variants if variant["id"] != anchor["id"]
+        ]
         second = pick_weighted_without_replacement(
             remaining_variants,
             counts,
@@ -2006,14 +2241,27 @@ def _select_scramble_pair(
     ]
     pairing = "scramble_exploration_vs_rest"
     if not rest_pool:
-        degraded_pool = [variant for variant in variants if variant["id"] != exploration["id"] and variant["id"] not in probation_id_set]
+        degraded_pool = [
+            variant
+            for variant in variants
+            if variant["id"] != exploration["id"]
+            and variant["id"] not in probation_id_set
+        ]
         if not degraded_pool:
-            degraded_pool = [variant for variant in variants if variant["id"] != exploration["id"]]
+            degraded_pool = [
+                variant for variant in variants if variant["id"] != exploration["id"]
+            ]
         if not degraded_pool:
-            raise ValueError("scramble sampling requires at least two eligible variants")
-        highest_sample_count = max(counts.get(variant["id"], 0) for variant in degraded_pool)
+            raise ValueError(
+                "scramble sampling requires at least two eligible variants"
+            )
+        highest_sample_count = max(
+            counts.get(variant["id"], 0) for variant in degraded_pool
+        )
         rest_pool = [
-            variant for variant in degraded_pool if counts.get(variant["id"], 0) == highest_sample_count
+            variant
+            for variant in degraded_pool
+            if counts.get(variant["id"], 0) == highest_sample_count
         ]
         pairing = "scramble_exploration_vs_best_available"
     stability = pick_weighted_without_replacement(
@@ -2042,14 +2290,19 @@ def _select_slight_bias_pair(
     settings: dict[str, Any],
     seed: int | None,
 ) -> tuple[list[dict[str, Any]], str]:
-    ratings = {str(row.get("variant_id")): float(row.get("elo", 1500.0) or 1500.0) for row in leaderboard}
+    ratings = {
+        str(row.get("variant_id")): float(row.get("elo", 1500.0) or 1500.0)
+        for row in leaderboard
+    }
     active_ratings = [ratings.get(variant["id"], 1500.0) for variant in variants]
     center = statistics.mean(active_ratings) if active_ratings else 1500.0
     strength = max(float(settings.get("slight_bias_elo_weight", 0.15) or 0.0), 0.0)
     scale = max(float(settings.get("slight_bias_elo_scale", 400.0) or 400.0), 1.0)
     weights = {}
     for variant in variants:
-        normalized_delta = max(min((ratings.get(variant["id"], 1500.0) - center) / scale, 1.0), -1.0)
+        normalized_delta = max(
+            min((ratings.get(variant["id"], 1500.0) - center) / scale, 1.0), -1.0
+        )
         weights[variant["id"]] = 1.0 + (strength * normalized_delta)
     selected = pick_custom_weighted_without_replacement(variants, weights, 2, seed)
     return selected, "slight_bias_elo_weighted"
@@ -2079,7 +2332,9 @@ def _select_champion_pair(
     seed: int | None,
     anchor_override: dict[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], str]:
-    champion_pool = [indexed[variant_id] for variant_id in champion_ids if variant_id in indexed]
+    champion_pool = [
+        indexed[variant_id] for variant_id in champion_ids if variant_id in indexed
+    ]
     probation_id_set = set(probation_ids)
     underuse_target = relative_underuse_target(reference_variants, counts, settings)
     if anchor_override is not None:
@@ -2141,7 +2396,9 @@ def _select_champion_pair(
             relative_target=underuse_target,
         )[0]
         return [anchor, opponent], "champion_vs_fallback"
-    chosen_name = _pick_weighted_pool([(name, weight) for name, _, weight in pools], _seed_with_offset(seed, 11))
+    chosen_name = _pick_weighted_pool(
+        [(name, weight) for name, _, weight in pools], _seed_with_offset(seed, 11)
+    )
     chosen_pool = next(pool for name, pool, _ in pools if name == chosen_name)
     opponent = pick_weighted_without_replacement(
         chosen_pool,
@@ -2173,9 +2430,18 @@ def _reroll_candidate_variants(
     cooling = _active_cooldowns(operational_state, task_class)
     variants = [variant for variant in all_variants if variant["id"] not in cooling]
     counts = summarize_counts(records, task_class)
-    probation_ids = set(str(item) for item in (operational_state["task_classes"][task_class].get("probation_variant_ids") or []))
+    probation_ids = set(
+        str(item)
+        for item in (
+            operational_state["task_classes"][task_class].get("probation_variant_ids")
+            or []
+        )
+    )
     if round_payload.get("selection_mode") == "champion":
-        champion_ids = set(str(item) for item in (round_payload.get("selection_champion_variant_ids") or []))
+        champion_ids = set(
+            str(item)
+            for item in (round_payload.get("selection_champion_variant_ids") or [])
+        )
         pairing = str(round_payload.get("selection_pairing") or "")
         if slot == "alpha" or pairing == "champion_vs_champion":
             pool = [variant for variant in variants if variant["id"] in champion_ids]
@@ -2206,7 +2472,8 @@ def _reroll_candidate_variants(
             fallback = [
                 variant
                 for variant in variants
-                if variant["id"] not in champion_ids and variant["id"] not in probation_ids
+                if variant["id"] not in champion_ids
+                and variant["id"] not in probation_ids
             ]
             if fallback:
                 return fallback
@@ -2223,61 +2490,93 @@ def _reroll_candidate_variants(
             fallback = [
                 variant
                 for variant in variants
-                if variant["id"] not in champion_ids and variant["id"] not in probation_ids
+                if variant["id"] not in champion_ids
+                and variant["id"] not in probation_ids
             ]
             if fallback:
                 return fallback
         if pairing == "champion_vs_probation":
             if slot == "alpha":
-                pool = [variant for variant in variants if variant["id"] in champion_ids]
+                pool = [
+                    variant for variant in variants if variant["id"] in champion_ids
+                ]
             else:
                 pool = [
                     variant
                     for variant in variants
-                    if variant["id"] not in champion_ids and variant["id"] in probation_ids
+                    if variant["id"] not in champion_ids
+                    and variant["id"] in probation_ids
                 ]
             if pool:
                 return pool
             if slot != "alpha":
-                fallback = [variant for variant in variants if variant["id"] not in champion_ids]
+                fallback = [
+                    variant for variant in variants if variant["id"] not in champion_ids
+                ]
                 if fallback:
                     return fallback
     if round_payload.get("selection_mode") in {"scramble", "legacy"}:
         pairing = str(round_payload.get("selection_pairing") or "")
         if pairing == "scramble_weighted_vs_probation":
             if slot == "alpha":
-                pool = [variant for variant in variants if variant["id"] not in probation_ids]
+                pool = [
+                    variant
+                    for variant in variants
+                    if variant["id"] not in probation_ids
+                ]
                 if pool:
                     return pool
             if slot == "bravo":
-                pool = [variant for variant in variants if variant["id"] in probation_ids]
+                pool = [
+                    variant for variant in variants if variant["id"] in probation_ids
+                ]
                 if pool:
                     return pool
         if pairing == "scramble_weighted":
-            pool = [variant for variant in variants if variant["id"] not in probation_ids]
+            pool = [
+                variant for variant in variants if variant["id"] not in probation_ids
+            ]
             if pool:
                 return pool
         if pairing == "scramble_weighted_best_available" and slot == "alpha":
             if variants:
-                highest_sample_count = max(counts.get(variant["id"], 0) for variant in variants)
-                pool = [variant for variant in variants if counts.get(variant["id"], 0) == highest_sample_count]
+                highest_sample_count = max(
+                    counts.get(variant["id"], 0) for variant in variants
+                )
+                pool = [
+                    variant
+                    for variant in variants
+                    if counts.get(variant["id"], 0) == highest_sample_count
+                ]
                 if pool:
                     return pool
             raise ValueError(
                 f"no compatible best-available reroll variants remain for {task_class} ({pairing}, {slot})"
             )
         if pairing == "scramble_exploration_vs_best_available" and slot == "bravo":
-            preferred = [variant for variant in variants if variant["id"] not in probation_ids]
+            preferred = [
+                variant for variant in variants if variant["id"] not in probation_ids
+            ]
             if preferred:
-                highest_sample_count = max(counts.get(variant["id"], 0) for variant in preferred)
+                highest_sample_count = max(
+                    counts.get(variant["id"], 0) for variant in preferred
+                )
                 pool = [
-                    variant for variant in preferred if counts.get(variant["id"], 0) == highest_sample_count
+                    variant
+                    for variant in preferred
+                    if counts.get(variant["id"], 0) == highest_sample_count
                 ]
                 if pool:
                     return pool
             if variants:
-                highest_sample_count = max(counts.get(variant["id"], 0) for variant in variants)
-                pool = [variant for variant in variants if counts.get(variant["id"], 0) == highest_sample_count]
+                highest_sample_count = max(
+                    counts.get(variant["id"], 0) for variant in variants
+                )
+                pool = [
+                    variant
+                    for variant in variants
+                    if counts.get(variant["id"], 0) == highest_sample_count
+                ]
                 if pool:
                     return pool
         if slot == "alpha":
@@ -2289,27 +2588,42 @@ def _reroll_candidate_variants(
             ]
             if pool:
                 return pool
-            pool = [variant for variant in variants if variant["id"] not in probation_ids]
+            pool = [
+                variant for variant in variants if variant["id"] not in probation_ids
+            ]
             if pool:
                 return pool
         if slot == "bravo":
             if pairing == "scramble_exploration_vs_best_available":
-                preferred = [variant for variant in variants if variant["id"] not in probation_ids]
+                preferred = [
+                    variant
+                    for variant in variants
+                    if variant["id"] not in probation_ids
+                ]
                 if preferred:
-                    highest_sample_count = max(counts.get(variant["id"], 0) for variant in preferred)
+                    highest_sample_count = max(
+                        counts.get(variant["id"], 0) for variant in preferred
+                    )
                     pool = [
-                        variant for variant in preferred if counts.get(variant["id"], 0) == highest_sample_count
+                        variant
+                        for variant in preferred
+                        if counts.get(variant["id"], 0) == highest_sample_count
                     ]
                     if pool:
                         return pool
             pool = [
                 variant
                 for variant in variants
-                if not is_under_sampled(variant, counts, settings, all_variants) and variant["id"] not in probation_ids
+                if not is_under_sampled(variant, counts, settings, all_variants)
+                and variant["id"] not in probation_ids
             ]
             if pool:
                 return pool
-            pool = [variant for variant in variants if not is_under_sampled(variant, counts, settings, all_variants)]
+            pool = [
+                variant
+                for variant in variants
+                if not is_under_sampled(variant, counts, settings, all_variants)
+            ]
             if pool:
                 return pool
     return variants
@@ -2334,7 +2648,11 @@ def select_replacement_variant(
     variants = [variant for variant in all_variants if variant["id"] not in cooling]
     if not variants:
         if all_variants and cooling:
-            raise ValueError(_cooldown_unavailability_message(task_class=task_class, cooling=cooling, needed=1))
+            raise ValueError(
+                _cooldown_unavailability_message(
+                    task_class=task_class, cooling=cooling, needed=1
+                )
+            )
         raise ValueError(f"no eligible replacement variants remain for {task_class}")
     counts = summarize_counts(records, task_class)
     return pick_weighted_without_replacement(
@@ -2357,7 +2675,9 @@ def build_reroll_slot_payload(
     seed: int | None,
 ) -> dict[str, Any]:
     if round_payload.get("status") != "completed":
-        raise ValueError(f"round {round_payload['round_id']} must be completed before rerolling a slot")
+        raise ValueError(
+            f"round {round_payload['round_id']} must be completed before rerolling a slot"
+        )
     slot = str(slot).strip().lower()
     indexed_runs = {str(run["slot"]): run for run in round_payload.get("runs", [])}
     if slot not in indexed_runs:
@@ -2368,7 +2688,9 @@ def build_reroll_slot_payload(
     survivor_slot = "bravo" if slot == "alpha" else "alpha"
     survivor = indexed_runs.get(survivor_slot)
     if survivor is None:
-        raise ValueError(f"round {round_payload['round_id']} is missing {survivor_slot}")
+        raise ValueError(
+            f"round {round_payload['round_id']} is missing {survivor_slot}"
+        )
     excluded_variant_ids: set[str] = set()
     if not bool(replacement_source.get("grade_blocked")):
         excluded_variant_ids.add(str(replacement_source["variant_id"]))
@@ -2383,7 +2705,9 @@ def build_reroll_slot_payload(
         excluded_variant_ids=excluded_variant_ids,
     )
     if not replacement_candidates:
-        raise ValueError(f"no eligible replacement variants remain for {round_payload['task_class']}")
+        raise ValueError(
+            f"no eligible replacement variants remain for {round_payload['task_class']}"
+        )
     counts = summarize_counts(records, str(round_payload["task_class"]))
     settings = roster.get("settings", {})
     reference_variants = [
@@ -2391,12 +2715,21 @@ def build_reroll_slot_payload(
         for variant in eligible_variants(roster, str(round_payload["task_class"]))
         if variant["id"] not in excluded_variant_ids
     ]
-    champion_id_set = set(str(item) for item in (round_payload.get("selection_champion_variant_ids") or []))
+    champion_id_set = set(
+        str(item)
+        for item in (round_payload.get("selection_champion_variant_ids") or [])
+    )
     if (
         round_payload.get("selection_mode") == "champion"
-        and (slot == "alpha" or str(round_payload.get("selection_pairing") or "") == "champion_vs_champion")
+        and (
+            slot == "alpha"
+            or str(round_payload.get("selection_pairing") or "")
+            == "champion_vs_champion"
+        )
         and replacement_candidates
-        and all(variant["id"] not in champion_id_set for variant in replacement_candidates)
+        and all(
+            variant["id"] not in champion_id_set for variant in replacement_candidates
+        )
     ):
         replacement_variant = replacement_candidates[0]
     else:
@@ -2406,7 +2739,9 @@ def build_reroll_slot_payload(
             settings,
             1,
             seed,
-            relative_target=relative_underuse_target(reference_variants, counts, settings),
+            relative_target=relative_underuse_target(
+                reference_variants, counts, settings
+            ),
         )[0]
     survivor_run = _finalized_run_summary(survivor)
     replacement_run = {
@@ -2424,12 +2759,16 @@ def build_reroll_slot_payload(
     return {
         "round_id": make_round_id(
             str(round_payload["task_class"]),
-            review_cwd=Path(str(round_payload.get("review_cwd"))) if round_payload.get("review_cwd") else None,
+            review_cwd=Path(str(round_payload.get("review_cwd")))
+            if round_payload.get("review_cwd")
+            else None,
         ),
         "task_class": round_payload["task_class"],
         "selection_mode": round_payload.get("selection_mode"),
         "selection_pairing": round_payload.get("selection_pairing"),
-        "selection_champion_variant_ids": list(round_payload.get("selection_champion_variant_ids") or []),
+        "selection_champion_variant_ids": list(
+            round_payload.get("selection_champion_variant_ids") or []
+        ),
         "selection_anchor_kind": (
             (
                 "champion"
@@ -2479,7 +2818,9 @@ def append_record_if_new(state_dir: Path, record: dict[str, Any]) -> bool:
         record = compact_benchmark_record(record)
         existing_records = read_jsonl(state_dir / RUN_LOG_FILENAME)
         identity = record_identity_key(record)
-        if any(record_identity_key(existing) == identity for existing in existing_records):
+        if any(
+            record_identity_key(existing) == identity for existing in existing_records
+        ):
             return False
         append_jsonl(state_dir / RUN_LOG_FILENAME, record)
         return True
@@ -2493,16 +2834,22 @@ def normalize_grade_basis(value: str, rubric: dict[str, Any]) -> str:
     return basis
 
 
-def ensure_clean_git_worktree(review_cwd: Path, *, review_scope: dict[str, Any] | None = None) -> None:
+def ensure_clean_git_worktree(
+    review_cwd: Path, *, review_scope: dict[str, Any] | None = None
+) -> None:
     try:
         dirty_entries = meaningful_worktree_status_entries(review_cwd)
     except ValueError as exc:
-        raise ValueError(f"review-suite requires a git repo with committed changes ready for review: {exc}") from exc
+        raise ValueError(
+            f"review-suite requires a git repo with committed changes ready for review: {exc}"
+        ) from exc
     if not dirty_entries:
         return
     raise ValueError(
         "review-suite requires a clean worktree. Commit intended review changes or stash unrelated worktree changes, then rerun."
     )
+
+
 def extract_session_id(text: str) -> str | None:
     marker = "session id:"
     for line in text.splitlines():
@@ -2519,7 +2866,9 @@ def _started_at_epoch_seconds(value: Any) -> int | None:
     if not value:
         return None
     try:
-        return int(datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp())
+        return int(
+            datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
+        )
     except ValueError:
         return None
 
@@ -2536,7 +2885,9 @@ def _capacity_interruption_detected(*, stderr_text: str, reviewer_output: str) -
 def _review_interrupted_detected(*, stderr_text: str, reviewer_output: str) -> bool:
     output_first_line = _first_nonempty_line(reviewer_output)
     if output_first_line:
-        return _normalize_review_text(output_first_line).startswith("review was interrupted")
+        return _normalize_review_text(output_first_line).startswith(
+            "review was interrupted"
+        )
     return "review was interrupted" in (stderr_text or "").lower()
 
 
@@ -2573,14 +2924,24 @@ def _review_output_summary(reviewer_output: str) -> str | None:
 
 
 def terminal_review_command(reviewer_output: str) -> str | None:
-    lines = [line.strip() for line in str(reviewer_output or "").splitlines() if line.strip()]
+    lines = [
+        line.strip() for line in str(reviewer_output or "").splitlines() if line.strip()
+    ]
     if not lines:
         return None
     final_line = lines[-1]
-    result_lines = [line for line in lines if line.lower().startswith(TERMINAL_REVIEW_RESULT_PREFIX.lower())]
+    result_lines = [
+        line
+        for line in lines
+        if line.lower().startswith(TERMINAL_REVIEW_RESULT_PREFIX.lower())
+    ]
     if result_lines != [final_line]:
         return None
-    match = re.fullmatch(rf"{re.escape(TERMINAL_REVIEW_RESULT_PREFIX)}\s*(clean|findings)", final_line, flags=re.IGNORECASE)
+    match = re.fullmatch(
+        rf"{re.escape(TERMINAL_REVIEW_RESULT_PREFIX)}\s*(clean|findings)",
+        final_line,
+        flags=re.IGNORECASE,
+    )
     if match is None:
         return None
     command = match.group(1).lower()
@@ -2595,9 +2956,15 @@ def _classify_review_result(
     thread_id: str | None,
 ) -> dict[str, Any]:
     output = (reviewer_output or "").strip()
-    capacity = _capacity_interruption_detected(stderr_text=stderr_text, reviewer_output=output)
-    interrupted = _review_interrupted_detected(stderr_text=stderr_text, reviewer_output=output)
-    if capacity and (not output or interrupted or "selected model is at capacity" in output.lower()):
+    capacity = _capacity_interruption_detected(
+        stderr_text=stderr_text, reviewer_output=output
+    )
+    interrupted = _review_interrupted_detected(
+        stderr_text=stderr_text, reviewer_output=output
+    )
+    if capacity and (
+        not output or interrupted or "selected model is at capacity" in output.lower()
+    ):
         return {
             "review_status": "interrupted_capacity",
             "status_summary": "selected_model_at_capacity",
@@ -2680,7 +3047,11 @@ def classify_review_capture(
 def _classification_for_run(run: dict[str, Any]) -> dict[str, Any]:
     existing_status = run.get("review_status")
     if existing_status:
-        if existing_status in {"completed", "completed_findings", "completed_no_findings"} and _tooling_failure_detected(
+        if existing_status in {
+            "completed",
+            "completed_findings",
+            "completed_no_findings",
+        } and _tooling_failure_detected(
             stderr_text=str(run.get("stderr") or ""),
             reviewer_output=str(run.get("reviewer_output") or ""),
         ):
@@ -2690,13 +3061,20 @@ def _classification_for_run(run: dict[str, Any]) -> dict[str, Any]:
                 session_id=str(run.get("session_id") or "") or None,
                 thread_id=str(run.get("thread_id") or "") or None,
             )
-        if existing_status in {"completed", "completed_findings", "completed_no_findings"}:
+        if existing_status in {
+            "completed",
+            "completed_findings",
+            "completed_no_findings",
+        }:
             return {
                 "review_status": "completed",
-                "status_summary": run.get("status_summary") or _review_output_summary(str(run.get("reviewer_output") or "")) or "Review completed.",
+                "status_summary": run.get("status_summary")
+                or _review_output_summary(str(run.get("reviewer_output") or ""))
+                or "Review completed.",
                 "grade_blocked": False,
                 "grade_block_reason": None,
-                "terminal_command": run.get("terminal_command") or terminal_review_command(str(run.get("reviewer_output") or "")),
+                "terminal_command": run.get("terminal_command")
+                or terminal_review_command(str(run.get("reviewer_output") or "")),
             }
         return {
             "review_status": existing_status,
@@ -2718,10 +3096,20 @@ def _read_review_artifacts(
     stderr_path: Path,
     final_message_path: Path | None = None,
 ) -> tuple[str, str]:
-    stderr_text = stderr_path.read_text(encoding="utf-8", errors="replace").strip() if stderr_path.exists() else ""
-    reviewer_output = stdout_path.read_text(encoding="utf-8", errors="replace").strip() if stdout_path.exists() else ""
+    stderr_text = (
+        stderr_path.read_text(encoding="utf-8", errors="replace").strip()
+        if stderr_path.exists()
+        else ""
+    )
+    reviewer_output = (
+        stdout_path.read_text(encoding="utf-8", errors="replace").strip()
+        if stdout_path.exists()
+        else ""
+    )
     if final_message_path is not None and final_message_path.exists():
-        final_message = final_message_path.read_text(encoding="utf-8", errors="replace").strip()
+        final_message = final_message_path.read_text(
+            encoding="utf-8", errors="replace"
+        ).strip()
         if final_message:
             reviewer_output = final_message
     return stderr_text, reviewer_output
@@ -2753,7 +3141,9 @@ def collect_completed_review_capture(
     thread = None
     launcher_thread = None
     started_after = _started_at_epoch_seconds(started_at)
-    created_after = max(0, started_after - 5) if started_after is not None else int(time.time()) - 5
+    created_after = (
+        max(0, started_after - 5) if started_after is not None else int(time.time()) - 5
+    )
     if session_id:
         for attempt in range(6):
             candidate = find_thread_by_id(sqlite_path=sqlite_path, thread_id=session_id)
@@ -2831,7 +3221,13 @@ def collect_completed_review_capture(
     )
     elapsed_seconds = None
     if started_at:
-        elapsed_seconds = round((utc_now() - datetime.fromisoformat(str(started_at).replace("Z", "+00:00"))).total_seconds(), 3)
+        elapsed_seconds = round(
+            (
+                utc_now()
+                - datetime.fromisoformat(str(started_at).replace("Z", "+00:00"))
+            ).total_seconds(),
+            3,
+        )
     return {
         "slot": slot,
         "variant_id": variant_id,
@@ -2883,7 +3279,9 @@ def _summarize_live_run(item: dict[str, Any]) -> dict[str, Any]:
     return summary
 
 
-def _apply_capacity_cooldowns(*, state_dir: Path, round_payload: dict[str, Any]) -> list[dict[str, Any]]:
+def _apply_capacity_cooldowns(
+    *, state_dir: Path, round_payload: dict[str, Any]
+) -> list[dict[str, Any]]:
     updates: list[dict[str, Any]] = []
     with state_lock(state_dir, "operational-state"):
         state_path = state_dir / OPERATIONAL_STATE_FILENAME
@@ -2902,12 +3300,15 @@ def _apply_capacity_cooldowns(*, state_dir: Path, round_payload: dict[str, Any])
                 continue
             block_reason = str(classification.get("grade_block_reason") or "")
             if block_reason in COOLDOWN_BLOCK_REASONS or (
-                bool(run.get("cooldown_eligible")) and block_reason in MARKED_COOLDOWN_BLOCK_REASONS
+                bool(run.get("cooldown_eligible"))
+                and block_reason in MARKED_COOLDOWN_BLOCK_REASONS
             ):
                 triggered_variants.add(variant_id)
                 current = cooldowns.get(variant_id) or {}
                 failure_count = int(current.get("failure_count", 0) or 0) + 1
-                until = now + timedelta(seconds=_capacity_cooldown_seconds(failure_count))
+                until = now + timedelta(
+                    seconds=_capacity_cooldown_seconds(failure_count)
+                )
                 cooldowns[variant_id] = {
                     "until": until.isoformat().replace("+00:00", "Z"),
                     "failure_count": failure_count,
@@ -2939,7 +3340,9 @@ def _apply_capacity_cooldowns(*, state_dir: Path, round_payload: dict[str, Any])
     return updates
 
 
-def _review_run_title(*, round_id: str, slot: str, variant_id: str, capacity_retry_attempts: int = 0) -> str:
+def _review_run_title(
+    *, round_id: str, slot: str, variant_id: str, capacity_retry_attempts: int = 0
+) -> str:
     title = f"review-suite::{round_id}::{slot}::{variant_id}"
     if capacity_retry_attempts <= 0:
         return title
@@ -3039,7 +3442,9 @@ def _collect_completed_run_from_artifacts(
         started_at=str(item.get("started_at") or "") or None,
         sqlite_path=sqlite_path,
         review_cwd=review_cwd,
-        final_message_path=Path(str(item["final_message_path"])) if item.get("final_message_path") else None,
+        final_message_path=Path(str(item["final_message_path"]))
+        if item.get("final_message_path")
+        else None,
         transport_stalled=transport_stalled,
     )
 
@@ -3094,7 +3499,9 @@ def _maybe_retry_capacity_run(
         review_cwd=review_cwd,
         prompt=str(round_payload.get("requested_prompt") or ""),
         review_scope=deepcopy(round_payload.get("review_scope") or {}),
-        allow_unsafe_windows_wsl_fallback=bool(round_payload.get("allow_unsafe_windows_wsl_fallback")),
+        allow_unsafe_windows_wsl_fallback=bool(
+            round_payload.get("allow_unsafe_windows_wsl_fallback")
+        ),
     )
     write_round(state_dir, round_payload)
     return True
@@ -3147,7 +3554,9 @@ def launch_round(
     indexed = variant_index(roster)
     review_cwd = review_cwd.resolve()
     if round_payload.get("status") not in {"sampled", "failed"}:
-        raise ValueError(f"round {round_payload['round_id']} is already {round_payload.get('status')}")
+        raise ValueError(
+            f"round {round_payload['round_id']} is already {round_payload.get('status')}"
+        )
     if review_scope.get("base"):
         ensure_clean_git_worktree(review_cwd, review_scope=review_scope)
 
@@ -3157,7 +3566,9 @@ def launch_round(
     running_payload["review_cwd"] = str(review_cwd)
     running_payload["review_started_at"] = review_started_at
     running_payload["review_scope"] = review_scope
-    running_payload["allow_unsafe_windows_wsl_fallback"] = allow_unsafe_windows_wsl_fallback
+    running_payload["allow_unsafe_windows_wsl_fallback"] = (
+        allow_unsafe_windows_wsl_fallback
+    )
     running_payload["progress_interval_seconds"] = progress_interval_seconds
     if use_unsafe_windows_wsl_fallback(review_cwd, allow_unsafe_windows_wsl_fallback):
         print(
@@ -3180,13 +3591,17 @@ def launch_round(
         )
         running_run = deepcopy(run)
         running_payload["runs"] = [
-            running_run if existing["slot"] == running_run["slot"] else deepcopy(existing)
+            running_run
+            if existing["slot"] == running_run["slot"]
+            else deepcopy(existing)
             for existing in running_payload["runs"]
         ]
         write_round(state_dir, running_payload)
     if prompt:
         running_payload["requested_prompt"] = prompt
-    if not any(run.get("pid") for run in running_payload["runs"] if not _run_is_finalized(run)):
+    if not any(
+        run.get("pid") for run in running_payload["runs"] if not _run_is_finalized(run)
+    ):
         running_payload["status"] = "completed"
         running_payload["review_completed_at"] = utc_now_iso()
     write_round(state_dir, running_payload)
@@ -3212,7 +3627,9 @@ def _process_is_running(pid: int | None) -> bool:
             return False
         return f'"{int(pid)}"' in output or f",{int(pid)}," in output
     try:
-        with open(f"/proc/{int(pid)}/status", encoding="utf-8", errors="replace") as handle:
+        with open(
+            f"/proc/{int(pid)}/status", encoding="utf-8", errors="replace"
+        ) as handle:
             for line in handle:
                 if not line.startswith("State:"):
                     continue
@@ -3244,7 +3661,9 @@ def round_has_live_reviewer_process(round_payload: dict[str, Any]) -> bool:
 
 
 def _reviewer_wait_line(round_payload: dict[str, Any]) -> str:
-    count = len([run for run in list(round_payload.get("runs") or []) if isinstance(run, dict)])
+    count = len(
+        [run for run in list(round_payload.get("runs") or []) if isinstance(run, dict)]
+    )
     label = "reviewer" if count == 1 else "reviewers"
     return f"[review-suite] waiting for {count} {label}; wrapper is active as long as output streams, do not stop it prematurely"
 
@@ -3269,7 +3688,9 @@ def collect_round_results(
     live_completion_statuses: dict[str, str] = {}
     print(_reviewer_wait_line(round_payload), file=sys.stderr, flush=True)
     while True:
-        alive = [run for run in round_payload["runs"] if _process_is_running(run.get("pid"))]
+        alive = [
+            run for run in round_payload["runs"] if _process_is_running(run.get("pid"))
+        ]
         restarted_capacity_run = False
         for item in round_payload["runs"]:
             slot = str(item["slot"])
@@ -3304,7 +3725,9 @@ def collect_round_results(
             item.update(terminal_summary)
             write_round(state_dir, round_payload)
             _print_live_completed_run(terminal_summary)
-            live_completion_statuses[slot] = reviewer_completion_status(terminal_summary)
+            live_completion_statuses[slot] = reviewer_completion_status(
+                terminal_summary
+            )
             announced_terminal_states.add(slot)
         if restarted_capacity_run:
             continue
@@ -3351,11 +3774,15 @@ def collect_round_results(
     completed_runs: list[dict[str, Any]] = []
     for item in round_payload["runs"]:
         if _run_is_finalized(item):
-            completed_runs.append(_strip_live_run_transient_fields(_finalized_run_summary(item)))
+            completed_runs.append(
+                _strip_live_run_transient_fields(_finalized_run_summary(item))
+            )
             _cleanup_run_artifacts(item)
             continue
         if not item.get("stderr_path") or not item.get("stdout_path"):
-            completed_runs.append(_strip_live_run_transient_fields(_finalized_run_summary(item)))
+            completed_runs.append(
+                _strip_live_run_transient_fields(_finalized_run_summary(item))
+            )
             continue
         completed_runs.append(
             _collect_completed_run_from_artifacts(
@@ -3370,9 +3797,13 @@ def collect_round_results(
     round_payload = deepcopy(round_payload)
     round_payload["status"] = "completed"
     round_payload["review_completed_at"] = utc_now_iso()
-    round_payload["live_completion_statuses"] = dict(sorted(live_completion_statuses.items()))
+    round_payload["live_completion_statuses"] = dict(
+        sorted(live_completion_statuses.items())
+    )
     round_payload["runs"] = completed_runs
-    cooldown_updates = _apply_capacity_cooldowns(state_dir=state_dir, round_payload=round_payload)
+    cooldown_updates = _apply_capacity_cooldowns(
+        state_dir=state_dir, round_payload=round_payload
+    )
     if cooldown_updates:
         round_payload["cooldown_updates"] = cooldown_updates
         for update in cooldown_updates:
@@ -3484,7 +3915,13 @@ def build_record_from_grade(
     bravo["grader_notes"] = bravo_note or shared_note or "bravo"
     alpha["cost_usd"] = compute_cost_usd(alpha_variant, alpha.get("usage", {}))
     bravo["cost_usd"] = compute_cost_usd(bravo_variant, bravo.get("usage", {}))
-    if winner not in {"alpha", "bravo", "tie", alpha["variant_id"], bravo["variant_id"]}:
+    if winner not in {
+        "alpha",
+        "bravo",
+        "tie",
+        alpha["variant_id"],
+        bravo["variant_id"],
+    }:
         raise ValueError("winner must be alpha, bravo, tie, or a concrete variant id")
     if winner == "alpha":
         winner_variant_id = alpha["variant_id"]
@@ -3495,7 +3932,9 @@ def build_record_from_grade(
     if winner_variant_id == "tie" and not basis.startswith("tie_"):
         raise ValueError("winner tie requires --basis tie_clean or tie_both_useful")
     if winner_variant_id != "tie" and basis.startswith("tie_"):
-        raise ValueError(f"{basis} requires --winner tie; use alpha or bravo only with non-tie basis values")
+        raise ValueError(
+            f"{basis} requires --winner tie; use alpha or bravo only with non-tie basis values"
+        )
     recorded_at = utc_now_iso()
     return compact_benchmark_record(
         {
@@ -3515,7 +3954,9 @@ def expected_score(rating_a: float, rating_b: float) -> float:
     return 1.0 / (1.0 + math.pow(10.0, (rating_b - rating_a) / 400.0))
 
 
-def update_elo(current_a: float, current_b: float, result: str, k_factor: float) -> tuple[float, float]:
+def update_elo(
+    current_a: float, current_b: float, result: str, k_factor: float
+) -> tuple[float, float]:
     if result == "a":
         score_a, score_b = 1.0, 0.0
     elif result == "b":
@@ -3534,7 +3975,9 @@ def record_grade_basis(record: dict[str, Any]) -> str:
     basis = str((record.get("pairwise_outcome") or {}).get("basis") or "").strip()
     if basis:
         return basis
-    if record.get("score_schema") or any(run.get("scores") for run in list(record.get("runs") or [])):
+    if record.get("score_schema") or any(
+        run.get("scores") for run in list(record.get("runs") or [])
+    ):
         return LEGACY_GRADE_BASIS
     return LEGACY_GRADE_BASIS
 
@@ -3545,7 +3988,11 @@ def percentage(numerator: int | float, denominator: int | float) -> float | None
     return round((float(numerator) / float(denominator)) * 100.0, 3)
 
 
-def aggregate_records(roster: dict[str, Any], records: list[dict[str, Any]], operational_state: dict[str, Any]) -> dict[str, Any]:
+def aggregate_records(
+    roster: dict[str, Any],
+    records: list[dict[str, Any]],
+    operational_state: dict[str, Any],
+) -> dict[str, Any]:
     settings = roster.get("settings", {})
     k_factor = float(settings.get("elo_k_factor", 24))
     summary: dict[str, Any] = {
@@ -3584,7 +4031,9 @@ def aggregate_records(roster: dict[str, Any], records: list[dict[str, Any]], ope
             is_graded_record = winner in {left, right, "tie"}
             if is_graded_record and left in ratings and right in ratings:
                 result = "tie" if winner == "tie" else ("a" if winner == left else "b")
-                ratings[left], ratings[right] = update_elo(ratings[left], ratings[right], result, k_factor)
+                ratings[left], ratings[right] = update_elo(
+                    ratings[left], ratings[right], result, k_factor
+                )
             for run in record_runs:
                 variant_id = run["variant_id"]
                 if variant_id not in metrics:
@@ -3609,7 +4058,9 @@ def aggregate_records(roster: dict[str, Any], records: list[dict[str, Any]], ope
                     outcome = "loss"
                 if basis in BUG_OPPORTUNITY_BASES:
                     bucket["finding_opportunity_count"] += 1
-                if (outcome == "win" and basis in VALID_FINDING_WIN_BASES) or basis in BOTH_REVIEWERS_FOUND_BASES:
+                if (
+                    outcome == "win" and basis in VALID_FINDING_WIN_BASES
+                ) or basis in BOTH_REVIEWERS_FOUND_BASES:
                     bucket["valid_finding_count"] += 1
                 if outcome == "loss" and basis in MISSED_BUG_LOSS_BASES:
                     bucket["missed_bug_loss_count"] += 1
@@ -3649,17 +4100,44 @@ def aggregate_records(roster: dict[str, Any], records: list[dict[str, Any]], ope
                     "wtl": f"{bucket['win_count']}/{bucket['tie_count']}/{bucket['loss_count']}",
                     "finding_opportunity_count": bucket["finding_opportunity_count"],
                     "valid_finding_count": bucket["valid_finding_count"],
-                    "valid_finding_rate": percentage(bucket["valid_finding_count"], bucket["finding_opportunity_count"]),
+                    "valid_finding_rate": percentage(
+                        bucket["valid_finding_count"],
+                        bucket["finding_opportunity_count"],
+                    ),
                     "missed_bug_loss_count": bucket["missed_bug_loss_count"],
-                    "missed_bug_loss_rate": percentage(bucket["missed_bug_loss_count"], bucket["finding_opportunity_count"]),
+                    "missed_bug_loss_rate": percentage(
+                        bucket["missed_bug_loss_count"],
+                        bucket["finding_opportunity_count"],
+                    ),
                     "low_quality_loss_count": bucket["low_quality_loss_count"],
-                    "low_quality_loss_rate": percentage(bucket["low_quality_loss_count"], sample_count),
-                    "median_elapsed_seconds": round(statistics.median(bucket["elapsed_values"]), 3) if bucket["elapsed_values"] else None,
-                    "median_total_tokens": round(statistics.median(bucket["total_token_values"]), 1) if bucket["total_token_values"] else None,
-                    "median_cost_usd": round(statistics.median(bucket["cost_values"]), 6) if bucket["cost_values"] else None,
+                    "low_quality_loss_rate": percentage(
+                        bucket["low_quality_loss_count"], sample_count
+                    ),
+                    "median_elapsed_seconds": round(
+                        statistics.median(bucket["elapsed_values"]), 3
+                    )
+                    if bucket["elapsed_values"]
+                    else None,
+                    "median_total_tokens": round(
+                        statistics.median(bucket["total_token_values"]), 1
+                    )
+                    if bucket["total_token_values"]
+                    else None,
+                    "median_cost_usd": round(
+                        statistics.median(bucket["cost_values"]), 6
+                    )
+                    if bucket["cost_values"]
+                    else None,
                 }
             )
-        leaderboard.sort(key=lambda row: (row["elo"], row["valid_finding_rate"] or 0.0, row["sample_count"]), reverse=True)
+        leaderboard.sort(
+            key=lambda row: (
+                row["elo"],
+                row["valid_finding_rate"] or 0.0,
+                row["sample_count"],
+            ),
+            reverse=True,
+        )
         summary["task_classes"][task_class] = {
             "operational": operational_state["task_classes"][task_class],
             "leaderboard": leaderboard,
@@ -3674,7 +4152,9 @@ def write_reports(state_dir: Path, summary: dict[str, Any]) -> None:
     k_factor = float(report_settings.get("elo_k_factor", 24.0))
     champion_min_samples = int(report_settings.get("promotion_min_samples", 20))
     champion_min_elo = float(report_settings.get("promotion_min_elo", 1550.0))
-    champion_group_window = float(report_settings.get("promotion_champion_group_window", 25.0))
+    champion_group_window = float(
+        report_settings.get("promotion_champion_group_window", 25.0)
+    )
     lines = ["# Review Arena Leaderboard", ""]
     for task_class in TASK_CLASSES:
         task = summary["task_classes"][task_class]
@@ -3682,7 +4162,9 @@ def write_reports(state_dir: Path, summary: dict[str, Any]) -> None:
         champion_ids = list(op.get("champion_variant_ids") or [])
         lines.append(f"## {public_task_name(task_class)}")
         lines.append("")
-        lines.append(f"- Champion: `{', '.join(champion_ids) if champion_ids else 'none'}`")
+        lines.append(
+            f"- Champion: `{', '.join(champion_ids) if champion_ids else 'none'}`"
+        )
         cooldowns = op.get("cooldowns") or {}
         if cooldowns:
             joined = "; ".join(
@@ -3691,7 +4173,9 @@ def write_reports(state_dir: Path, summary: dict[str, Any]) -> None:
             )
             lines.append(f"- Cooldowns: {joined}")
         lines.append("")
-        lines.append("| model | elo | samples | W/T/L | found/opp | found % | missed % | low-quality % | sec | tok/job | cost/job |")
+        lines.append(
+            "| model | elo | samples | W/T/L | found/opp | found % | missed % | low-quality % | sec | tok/job | cost/job |"
+        )
         lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
         for row in task["leaderboard"]:
             lines.append(
@@ -3712,7 +4196,9 @@ def write_reports(state_dir: Path, summary: dict[str, Any]) -> None:
     lines.append("")
     lines.append("## match history")
     lines.append("")
-    lines.append("| review | repo | model alpha | elo alpha | delta alpha | delta beta | elo beta | model beta |")
+    lines.append(
+        "| review | repo | model alpha | elo alpha | delta alpha | delta beta | elo beta | model beta |"
+    )
     lines.append("|---|---|---|---:|---:|---:|---:|---|")
     for row in recent_match_history(state_dir, k_factor=k_factor, limit=10):
         lines.append(
@@ -3724,11 +4210,18 @@ def write_reports(state_dir: Path, summary: dict[str, Any]) -> None:
     _atomic_write_text(state_dir / "leaderboard.md", "\n".join(lines) + "\n")
 
 
-def promote(roster: dict[str, Any], summary: dict[str, Any], operational_state: dict[str, Any]) -> dict[str, Any]:
+def promote(
+    roster: dict[str, Any], summary: dict[str, Any], operational_state: dict[str, Any]
+) -> dict[str, Any]:
     settings = roster["settings"]
     min_samples = int(settings["promotion_min_samples"])
     min_elo = float(settings.get("promotion_min_elo", 1550.0))
-    champion_group_window = float(settings.get("promotion_champion_group_window", settings.get("promotion_min_elo_lead", 25.0)))
+    champion_group_window = float(
+        settings.get(
+            "promotion_champion_group_window",
+            settings.get("promotion_min_elo_lead", 25.0),
+        )
+    )
     state = deepcopy(operational_state)
     state["generated_at"] = utc_now_iso()
     for task_class in TASK_CLASSES:
@@ -3742,8 +4235,7 @@ def promote(roster: dict[str, Any], summary: dict[str, Any], operational_state: 
         eligible = [
             row
             for row in leaderboard
-            if row["sample_count"] >= min_samples
-            and float(row["elo"]) >= min_elo
+            if row["sample_count"] >= min_samples and float(row["elo"]) >= min_elo
         ]
         champion_id_set: set[str] = set()
         if not eligible:

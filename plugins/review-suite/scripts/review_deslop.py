@@ -10,7 +10,10 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from review_suite_runtime_bootstrap import bootstrap_from_installed_cache, launcher_script_path
+from review_suite_runtime_bootstrap import (
+    bootstrap_from_installed_cache,
+    launcher_script_path,
+)
 
 bootstrap_from_installed_cache(__file__)
 
@@ -69,7 +72,9 @@ class StaticCleanupScan:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = AxiArgumentParser(description="Review Deslop post-implementation review wrapper.")
+    parser = AxiArgumentParser(
+        description="Review Deslop post-implementation review wrapper."
+    )
     parser.add_argument("--cd")
     parser.add_argument("--base", default="main")
     parser.add_argument("--commit", nargs="+")
@@ -80,10 +85,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _help_command() -> str:
-    return format_command([sys.executable, str(launcher_script_path(__file__)), "--help"])
+    return format_command(
+        [sys.executable, str(launcher_script_path(__file__)), "--help"]
+    )
 
 
-def normalize_commit_spec(commit_values: list[str] | None) -> tuple[str | None, str | None]:
+def normalize_commit_spec(
+    commit_values: list[str] | None,
+) -> tuple[str | None, str | None]:
     if not commit_values:
         return None, None
     if len(commit_values) == 1:
@@ -100,7 +109,11 @@ def build_prompt(
     commit_end: str | None,
     focus: str | None,
 ) -> str:
-    focus_block = f"\nPay extra attention to this focus area:\n- {focus.strip()}\n" if focus else ""
+    focus_block = (
+        f"\nPay extra attention to this focus area:\n- {focus.strip()}\n"
+        if focus
+        else ""
+    )
     if commit and commit_end:
         target_block = (
             f"Review the commit range `{commit}..{commit_end}` in the current repository.\n"
@@ -112,7 +125,9 @@ def build_prompt(
             "Inspect that commit and adjacent touched paths, not the whole branch diff.\n\n"
         )
     else:
-        target_block = f"Review the current repository changes against base branch `{base}`.\n\n"
+        target_block = (
+            f"Review the current repository changes against base branch `{base}`.\n\n"
+        )
     return (
         target_block
         + "Prefer the smallest correct shape.\n\n"
@@ -129,7 +144,9 @@ def build_prompt(
     )
 
 
-def _git_output(review_root: Path, args: list[str], *, timeout_seconds: int = 20) -> str:
+def _git_output(
+    review_root: Path, args: list[str], *, timeout_seconds: int = 20
+) -> str:
     try:
         proc = subprocess.run(
             ["git", *args],
@@ -146,12 +163,23 @@ def _git_output(review_root: Path, args: list[str], *, timeout_seconds: int = 20
     return str(proc.stdout or "")
 
 
-def _git_lines(review_root: Path, args: list[str], *, timeout_seconds: int = 20) -> list[str]:
-    return [line.strip() for line in _git_output(review_root, args, timeout_seconds=timeout_seconds).splitlines() if line.strip()]
+def _git_lines(
+    review_root: Path, args: list[str], *, timeout_seconds: int = 20
+) -> list[str]:
+    return [
+        line.strip()
+        for line in _git_output(
+            review_root, args, timeout_seconds=timeout_seconds
+        ).splitlines()
+        if line.strip()
+    ]
 
 
 def _changed_python_lines(*, review_root: Path, base: str) -> dict[str, set[int]]:
-    diff = _git_output(review_root, ["diff", "--unified=0", "--find-renames", f"{base}...HEAD", "--", "*.py"])
+    diff = _git_output(
+        review_root,
+        ["diff", "--unified=0", "--find-renames", f"{base}...HEAD", "--", "*.py"],
+    )
     changed: dict[str, set[int]] = {}
     current_path: str | None = None
     for line in diff.splitlines():
@@ -236,7 +264,12 @@ def _start_static_cleanup_scan(
     )
     try:
         process = subprocess.Popen(
-            [*command, *sorted(changed_lines), "--min-confidence", str(STATIC_CLEANUP_MIN_CONFIDENCE)],
+            [
+                *command,
+                *sorted(changed_lines),
+                "--min-confidence",
+                str(STATIC_CLEANUP_MIN_CONFIDENCE),
+            ],
             cwd=review_root,
             text=True,
             stdout=stdout_handle,
@@ -279,7 +312,9 @@ def _stop_static_cleanup_scan(scan: StaticCleanupScan) -> None:
         _unlink_quietly(scan.stderr_path)
 
 
-def _collect_static_cleanup_scan(scan: StaticCleanupScan | None) -> list[StaticCleanupSuggestion]:
+def _collect_static_cleanup_scan(
+    scan: StaticCleanupScan | None,
+) -> list[StaticCleanupSuggestion]:
     if not scan:
         return []
     if scan.process.poll() is None:
@@ -300,7 +335,9 @@ def _collect_static_cleanup_scan(scan: StaticCleanupScan | None) -> list[StaticC
     return _parse_static_cleanup_output(output, scan.changed_lines)
 
 
-def _parse_static_cleanup_output(output: str, changed_lines: dict[str, set[int]]) -> list[StaticCleanupSuggestion]:
+def _parse_static_cleanup_output(
+    output: str, changed_lines: dict[str, set[int]]
+) -> list[StaticCleanupSuggestion]:
     suggestions: list[StaticCleanupSuggestion] = []
     for line in output.splitlines():
         match = VULTURE_OUTPUT_RE.match(line.strip())
@@ -312,7 +349,9 @@ def _parse_static_cleanup_output(output: str, changed_lines: dict[str, set[int]]
             continue
         confidence = int(match.group("confidence"))
         message = match.group("message").strip()
-        if confidence >= 100 or (confidence >= 90 and "unused import" in message.lower()):
+        if confidence >= 100 or (
+            confidence >= 90 and "unused import" in message.lower()
+        ):
             suggestions.append(
                 StaticCleanupSuggestion(
                     path=path,
@@ -326,7 +365,9 @@ def _parse_static_cleanup_output(output: str, changed_lines: dict[str, set[int]]
     return suggestions
 
 
-def _render_static_cleanup_items(suggestions: list[StaticCleanupSuggestion]) -> list[str]:
+def _render_static_cleanup_items(
+    suggestions: list[StaticCleanupSuggestion],
+) -> list[str]:
     return [
         f"Low - {suggestion.path}:{suggestion.line} - {suggestion.message}. Fix: {_static_cleanup_fix_suggestion(suggestion.message)}"
         for suggestion in suggestions[:STATIC_CLEANUP_LIMIT]
@@ -351,7 +392,9 @@ def _render_static_cleanup_section(suggestions: list[StaticCleanupSuggestion]) -
     return "Static cleanup suggestions:\n" + "\n".join(f"- {item}" for item in items)
 
 
-def _with_static_cleanup_output(result: dict[str, object], suggestions: list[StaticCleanupSuggestion]) -> dict[str, object]:
+def _with_static_cleanup_output(
+    result: dict[str, object], suggestions: list[StaticCleanupSuggestion]
+) -> dict[str, object]:
     section = _render_static_cleanup_section(suggestions)
     if not section or _result_returncode(result) != 0:
         return result
@@ -364,18 +407,30 @@ def _with_static_cleanup_output(result: dict[str, object], suggestions: list[Sta
 
 
 def _review_output_text(result: dict[str, object]) -> str:
-    return "\n".join(str(result.get(key) or "") for key in ("final_message", "stdout", "stderr"))
+    return "\n".join(
+        str(result.get(key) or "") for key in ("final_message", "stdout", "stderr")
+    )
 
 
 def _deslop_output_unusable(result: dict[str, object]) -> bool:
-    text = _review_output_text(result).lower().replace(chr(0x2019), "'").replace(chr(0xFFFD), "'")
+    text = (
+        _review_output_text(result)
+        .lower()
+        .replace(chr(0x2019), "'")
+        .replace(chr(0xFFFD), "'")
+    )
     return any(marker in text for marker in UNUSABLE_REVIEW_MARKERS)
 
 
 def _deslop_output_clean(result: dict[str, object]) -> bool:
-    text = _review_output_text(result).replace(chr(0x2019), "'").replace(chr(0xFFFD), "'")
+    text = (
+        _review_output_text(result).replace(chr(0x2019), "'").replace(chr(0xFFFD), "'")
+    )
     compact = " ".join(text.lower().split()).rstrip(".")
-    return terminal_review_command(text) == "clean" or compact in {"no findings", "no concrete findings"}
+    return terminal_review_command(text) == "clean" or compact in {
+        "no findings",
+        "no concrete findings",
+    }
 
 
 def _with_effective_returncode(result: dict[str, object]) -> dict[str, object]:
@@ -398,7 +453,11 @@ def emit_output_only(*, tool_name: str, result: dict[str, object]) -> int:
     returncode = _result_returncode(result)
     body = str(result.get("final_message") or "").strip()
     if not body and returncode != 0:
-        body = f"{tool_name} run timed out" if result.get("timed_out") else f"{tool_name} run failed"
+        body = (
+            f"{tool_name} run timed out"
+            if result.get("timed_out")
+            else f"{tool_name} run failed"
+        )
     if body:
         write_text(body)
     return returncode

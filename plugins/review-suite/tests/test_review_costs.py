@@ -39,10 +39,14 @@ def test_cost_cwd_matching_understands_wsl_unc_and_native(monkeypatch) -> None:
 
     canonical = "wsl:ubuntu:/home/alice/code/repo"
 
-    assert _cheap_cwd_key(r"\\wsl.localhost\Ubuntu\home\alice\code\repo") == _cheap_cwd_key("/home/alice/code/repo")
+    assert _cheap_cwd_key(
+        r"\\wsl.localhost\Ubuntu\home\alice\code\repo"
+    ) == _cheap_cwd_key("/home/alice/code/repo")
     assert _cheap_cwd_key("/home/alice/code/repo") == canonical
     assert "/home/alice/code/repo" in _cwd_query_candidates({canonical})
-    assert "//wsl.localhost/ubuntu/home/alice/code/repo" in _cwd_query_candidates({canonical})
+    assert "//wsl.localhost/ubuntu/home/alice/code/repo" in _cwd_query_candidates(
+        {canonical}
+    )
 
 
 def test_repo_from_worktree_folder_folds_wt_suffixes() -> None:
@@ -58,12 +62,20 @@ def test_repo_from_worktree_folder_applies_explicit_overrides() -> None:
 
 
 def test_record_lane_accepts_followup_spellings() -> None:
-    assert _record_lane({"public_task": "review-followup", "task_class": "phase_review"}) == "review_followup"
-    assert _record_lane({"public_task": "review_followup", "task_class": "phase_review"}) == "review_followup"
+    assert (
+        _record_lane({"public_task": "review-followup", "task_class": "phase_review"})
+        == "review_followup"
+    )
+    assert (
+        _record_lane({"public_task": "review_followup", "task_class": "phase_review"})
+        == "review_followup"
+    )
 
 
 def test_metadata_for_missing_wsl_worktree_folds_into_parent_repo() -> None:
-    metadata = _metadata_for_cwd(r"\\wsl.localhost\Ubuntu\home\alice\code\sample-web-wt-budget")
+    metadata = _metadata_for_cwd(
+        r"\\wsl.localhost\Ubuntu\home\alice\code\sample-web-wt-budget"
+    )
 
     assert metadata == {
         "repo": "sample-web",
@@ -155,7 +167,13 @@ def test_cached_row_with_folder_repo_folds_wt_suffix() -> None:
             "implementation_tokens": 0,
             "implementation_cost_usd": 0.0,
             "latest_review": "2026-04-27T00:00:00Z",
-            "lane_sessions": {"review_t1": 0, "review_t2": 0, "review_t3": 1, "review_t4": 0, "review_followup": 0},
+            "lane_sessions": {
+                "review_t1": 0,
+                "review_t2": 0,
+                "review_t3": 1,
+                "review_t4": 0,
+                "review_followup": 0,
+            },
             "review_seconds": 60,
             "tokens": 1000,
             "cost_usd": 0.01,
@@ -174,7 +192,9 @@ def _write_round(state_dir: Path, payload: dict[str, object]) -> None:
         for run in payload.get("runs", []):
             if isinstance(run, dict):
                 run.setdefault("review_status", "completed")
-    (rounds / f"{payload['round_id']}.json").write_text(json.dumps(payload), encoding="utf-8")
+    (rounds / f"{payload['round_id']}.json").write_text(
+        json.dumps(payload), encoding="utf-8"
+    )
 
 
 def _write_orchestrator_round(state_dir: Path, payload: dict[str, object]) -> None:
@@ -184,7 +204,9 @@ def _write_orchestrator_round(state_dir: Path, payload: dict[str, object]) -> No
         for run in payload.get("runs", []):
             if isinstance(run, dict):
                 run.setdefault("review_status", "completed")
-    (rounds / f"{payload['round_id']}.json").write_text(json.dumps(payload), encoding="utf-8")
+    (rounds / f"{payload['round_id']}.json").write_text(
+        json.dumps(payload), encoding="utf-8"
+    )
 
 
 def _write_codex_thread(
@@ -212,14 +234,19 @@ def _write_codex_thread(
                     "type": "turn_context",
                     "payload": {
                         "model": rollout_model if rollout_model is not None else model,
-                        "effort": rollout_reasoning_effort if rollout_reasoning_effort is not None else reasoning_effort,
+                        "effort": rollout_reasoning_effort
+                        if rollout_reasoning_effort is not None
+                        else reasoning_effort,
                     },
                 }
             ),
             json.dumps(
                 {
                     "type": "event_msg",
-                    "payload": {"type": "token_count", "info": {"total_token_usage": rollout_usage}},
+                    "payload": {
+                        "type": "token_count",
+                        "info": {"total_token_usage": rollout_usage},
+                    },
                 }
             ),
         ]
@@ -267,7 +294,9 @@ def _write_codex_thread(
         )
 
 
-def test_collect_review_cost_rows_groups_t1_to_t4_by_worktree(monkeypatch, tmp_path: Path) -> None:
+def test_collect_review_cost_rows_groups_t1_to_t4_by_worktree(
+    monkeypatch, tmp_path: Path
+) -> None:
     state_dir = tmp_path / "state"
     repo = tmp_path / "sample-api-wt-alpha"
     repo.mkdir()
@@ -293,8 +322,16 @@ def test_collect_review_cost_rows_groups_t1_to_t4_by_worktree(monkeypatch, tmp_p
             "review_cwd_normalized": normalized,
             "caller_id": "019dd132-4116-71f3-b013-beaa9e5e95bd",
             "runs": [
-                {"slot": "alpha", "usage": {"input_tokens": 100, "output_tokens": 20}, "cost_usd": 0.001},
-                {"slot": "bravo", "usage": {"input_tokens": 200, "output_tokens": 30}, "cost_usd": 0.002},
+                {
+                    "slot": "alpha",
+                    "usage": {"input_tokens": 100, "output_tokens": 20},
+                    "cost_usd": 0.001,
+                },
+                {
+                    "slot": "bravo",
+                    "usage": {"input_tokens": 200, "output_tokens": 30},
+                    "cost_usd": 0.002,
+                },
             ],
         },
     )
@@ -309,7 +346,11 @@ def test_collect_review_cost_rows_groups_t1_to_t4_by_worktree(monkeypatch, tmp_p
             "review_completed_at": "2026-04-27T11:04:00Z",
             "review_cwd_normalized": normalized,
             "runs": [
-                {"slot": "alpha", "usage": {"input_tokens": 300, "output_tokens": 40}, "cost_usd": 0.003},
+                {
+                    "slot": "alpha",
+                    "usage": {"input_tokens": 300, "output_tokens": 40},
+                    "cost_usd": 0.003,
+                },
             ],
         },
     )
@@ -325,10 +366,18 @@ def test_collect_review_cost_rows_groups_t1_to_t4_by_worktree(monkeypatch, tmp_p
                 "review_cwd_normalized": normalized,
                 "caller_id": "019dd132-4116-71f3-b013-beaa9e5e95bd",
                 "retry_runs": [
-                    {"slot": "alpha", "usage": {"input_tokens": 10, "output_tokens": 1}, "cost_usd": 0.0001}
+                    {
+                        "slot": "alpha",
+                        "usage": {"input_tokens": 10, "output_tokens": 1},
+                        "cost_usd": 0.0001,
+                    }
                 ],
                 "runs": [
-                    {"slot": "alpha", "usage": {"input_tokens": 400, "output_tokens": 50}, "cost_usd": 0.004},
+                    {
+                        "slot": "alpha",
+                        "usage": {"input_tokens": 400, "output_tokens": 50},
+                        "cost_usd": 0.004,
+                    },
                     {"slot": "bravo", "tokens_used": 75, "cost_usd": 0.005},
                 ],
             }
@@ -342,8 +391,18 @@ def test_collect_review_cost_rows_groups_t1_to_t4_by_worktree(monkeypatch, tmp_p
                 "recorded_at": "2026-04-27T11:10:00Z",
                 "review_cwd_normalized": normalized,
                 "runs": [
-                    {"slot": "alpha", "elapsed_seconds": 90, "usage": {"input_tokens": 500, "output_tokens": 60}, "cost_usd": 0.006},
-                    {"slot": "bravo", "elapsed_seconds": 70, "usage": {"input_tokens": 600, "output_tokens": 70}, "cost_usd": 0.007},
+                    {
+                        "slot": "alpha",
+                        "elapsed_seconds": 90,
+                        "usage": {"input_tokens": 500, "output_tokens": 60},
+                        "cost_usd": 0.006,
+                    },
+                    {
+                        "slot": "bravo",
+                        "elapsed_seconds": 70,
+                        "usage": {"input_tokens": 600, "output_tokens": 70},
+                        "cost_usd": 0.007,
+                    },
                 ],
             }
         )
@@ -378,7 +437,9 @@ def test_collect_review_cost_rows_groups_t1_to_t4_by_worktree(monkeypatch, tmp_p
         agent_role="review",
     )
 
-    rows = collect_review_cost_rows(state_dir=state_dir, review_cwd=repo, codex_home=codex_home)
+    rows = collect_review_cost_rows(
+        state_dir=state_dir, review_cwd=repo, codex_home=codex_home
+    )
 
     assert len(rows) == 1
     row = rows[0]
@@ -401,7 +462,9 @@ def test_collect_review_cost_rows_groups_t1_to_t4_by_worktree(monkeypatch, tmp_p
     assert row.cost_usd == 0.0281
 
 
-def test_collect_review_cost_rows_includes_completed_ungraded_local_rounds(monkeypatch, tmp_path: Path) -> None:
+def test_collect_review_cost_rows_includes_completed_ungraded_local_rounds(
+    monkeypatch, tmp_path: Path
+) -> None:
     state_dir = tmp_path / "state"
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -424,19 +487,27 @@ def test_collect_review_cost_rows_includes_completed_ungraded_local_rounds(monke
             "review_completed_at": "2026-04-27T10:01:00Z",
             "review_cwd_normalized": str(repo),
             "runs": [
-                {"slot": "alpha", "usage": {"input_tokens": 100, "output_tokens": 20}, "cost_usd": 0.001}
+                {
+                    "slot": "alpha",
+                    "usage": {"input_tokens": 100, "output_tokens": 20},
+                    "cost_usd": 0.001,
+                }
             ],
         },
     )
 
-    rows = collect_review_cost_rows(state_dir=state_dir, review_cwd=repo, codex_home=tmp_path / "codex-home")
+    rows = collect_review_cost_rows(
+        state_dir=state_dir, review_cwd=repo, codex_home=tmp_path / "codex-home"
+    )
 
     assert len(rows) == 1
     assert rows[0].lane_sessions["review_t1"] == 1
     assert rows[0].tokens == 120
 
 
-def test_collect_review_cost_rows_includes_orchestrator_rounds(monkeypatch, tmp_path: Path) -> None:
+def test_collect_review_cost_rows_includes_orchestrator_rounds(
+    monkeypatch, tmp_path: Path
+) -> None:
     state_dir = tmp_path / "state"
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -465,7 +536,11 @@ def test_collect_review_cost_rows_includes_orchestrator_rounds(monkeypatch, tmp_
                     "slot": "alpha",
                     "model": "gpt-5.4",
                     "reasoning_effort": "medium",
-                    "usage": {"input_tokens": 100, "cached_input_tokens": 80, "output_tokens": 20},
+                    "usage": {
+                        "input_tokens": 100,
+                        "cached_input_tokens": 80,
+                        "output_tokens": 20,
+                    },
                     "cost_usd": None,
                 },
                 {
@@ -499,7 +574,9 @@ def test_collect_review_cost_rows_includes_orchestrator_rounds(monkeypatch, tmp_
         },
     )
 
-    rows = collect_review_cost_rows(state_dir=state_dir, review_cwd=repo, codex_home=tmp_path / "codex-home")
+    rows = collect_review_cost_rows(
+        state_dir=state_dir, review_cwd=repo, codex_home=tmp_path / "codex-home"
+    )
 
     assert len(rows) == 1
     row = rows[0]
@@ -509,7 +586,9 @@ def test_collect_review_cost_rows_includes_orchestrator_rounds(monkeypatch, tmp_
     assert row.cost_usd == 0.00112
 
 
-def test_render_review_cost_markdown_groups_by_repo(monkeypatch, tmp_path: Path) -> None:
+def test_render_review_cost_markdown_groups_by_repo(
+    monkeypatch, tmp_path: Path
+) -> None:
     state_dir = tmp_path / "state"
     repo = tmp_path / "sample-api-wt-alpha"
     repo.mkdir()
@@ -533,7 +612,11 @@ def test_render_review_cost_markdown_groups_by_repo(monkeypatch, tmp_path: Path)
             "review_completed_at": "2026-04-27T10:01:00Z",
             "review_cwd_normalized": str(repo),
             "runs": [
-                {"slot": "alpha", "usage": {"input_tokens": 100, "output_tokens": 20}, "cost_usd": 0.001}
+                {
+                    "slot": "alpha",
+                    "usage": {"input_tokens": 100, "output_tokens": 20},
+                    "cost_usd": 0.001,
+                }
             ],
         },
     )
@@ -549,11 +632,21 @@ def test_render_review_cost_markdown_groups_by_repo(monkeypatch, tmp_path: Path)
         git_branch="feat/cost-ledger",
     )
 
-    markdown = render_review_cost_markdown(collect_review_cost_rows(state_dir=state_dir, review_cwd=repo, codex_home=codex_home))
+    markdown = render_review_cost_markdown(
+        collect_review_cost_rows(
+            state_dir=state_dir, review_cwd=repo, codex_home=codex_home
+        )
+    )
 
     assert "# sample-api" in markdown
-    assert "| Date | Folder | Branch | PR | Worker Model | Impl Tokens | Impl Cost | T1 | T2 | T3 | T4 | FU | Review Time | Review Tokens | Review Cost | Total Cost |" in markdown
-    assert "| 2026-04-27 | sample-api-wt-alpha | feat/cost-ledger | 123 | gpt-5.4 medium | 1k | $0.00 | 1 | 0 | 0 | 0 | 0 | 1m 00s | 120 | $0.00 | $0.01 |" in markdown
+    assert (
+        "| Date | Folder | Branch | PR | Worker Model | Impl Tokens | Impl Cost | T1 | T2 | T3 | T4 | FU | Review Time | Review Tokens | Review Cost | Total Cost |"
+        in markdown
+    )
+    assert (
+        "| 2026-04-27 | sample-api-wt-alpha | feat/cost-ledger | 123 | gpt-5.4 medium | 1k | $0.00 | 1 | 0 | 0 | 0 | 0 | 1m 00s | 120 | $0.00 | $0.01 |"
+        in markdown
+    )
 
 
 def test_format_compact_number_keeps_cells_short() -> None:
@@ -565,7 +658,9 @@ def test_format_compact_number_keeps_cells_short() -> None:
     assert format_compact_number(100_000_000) == "100m"
 
 
-def test_refresh_review_cost_report_best_effort_writes_default_ledger(monkeypatch, tmp_path: Path) -> None:
+def test_refresh_review_cost_report_best_effort_writes_default_ledger(
+    monkeypatch, tmp_path: Path
+) -> None:
     state_dir = tmp_path / "state"
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -589,19 +684,27 @@ def test_refresh_review_cost_report_best_effort_writes_default_ledger(monkeypatc
             "review_completed_at": "2026-04-27T10:01:00Z",
             "review_cwd_normalized": str(repo),
             "runs": [
-                {"slot": "alpha", "usage": {"input_tokens": 100, "output_tokens": 20}, "cost_usd": 0.001}
+                {
+                    "slot": "alpha",
+                    "usage": {"input_tokens": 100, "output_tokens": 20},
+                    "cost_usd": 0.001,
+                }
             ],
         },
     )
 
-    output = refresh_review_cost_report_best_effort(state_dir=state_dir, review_cwd=repo)
+    output = refresh_review_cost_report_best_effort(
+        state_dir=state_dir, review_cwd=repo
+    )
 
     assert output == state_dir / "review_cost_ledger.md"
     assert "# repo" in output.read_text(encoding="utf-8")
     assert list((state_dir / "review_cost_rows").glob("*.json"))
 
 
-def test_update_review_cost_row_cache_replaces_pr_number_changes(tmp_path: Path) -> None:
+def test_update_review_cost_row_cache_replaces_pr_number_changes(
+    tmp_path: Path,
+) -> None:
     state_dir = tmp_path / "state"
     old_row = ReviewCostRow(
         repo="repo",
@@ -613,7 +716,13 @@ def test_update_review_cost_row_cache_replaces_pr_number_changes(tmp_path: Path)
         implementation_cost_usd=0.0,
         caller_threads=(),
         latest_review="2026-04-27T10:00:00Z",
-        lane_sessions={"review_t1": 1, "review_t2": 0, "review_t3": 0, "review_t4": 0, "review_followup": 0},
+        lane_sessions={
+            "review_t1": 1,
+            "review_t2": 0,
+            "review_t3": 0,
+            "review_t4": 0,
+            "review_followup": 0,
+        },
         review_seconds=60,
         tokens=100,
         cost_usd=0.01,
@@ -628,7 +737,13 @@ def test_update_review_cost_row_cache_replaces_pr_number_changes(tmp_path: Path)
         implementation_cost_usd=67.0,
         caller_threads=("caller",),
         latest_review="2026-04-27T10:00:00Z",
-        lane_sessions={"review_t1": 1, "review_t2": 0, "review_t3": 0, "review_t4": 0, "review_followup": 0},
+        lane_sessions={
+            "review_t1": 1,
+            "review_t2": 0,
+            "review_t3": 0,
+            "review_t4": 0,
+            "review_followup": 0,
+        },
         review_seconds=60,
         tokens=100,
         cost_usd=0.01,
@@ -648,14 +763,23 @@ def test_update_review_cost_row_cache_replaces_pr_number_changes(tmp_path: Path)
     assert len(list((state_dir / "review_cost_rows").glob("*.json"))) == 1
 
 
-def test_current_pr_number_can_skip_gh_for_background_refresh(monkeypatch, tmp_path: Path) -> None:
+def test_current_pr_number_can_skip_gh_for_background_refresh(
+    monkeypatch, tmp_path: Path
+) -> None:
     monkeypatch.setenv("REVIEW_SUITE_COST_SKIP_GH_PR_VIEW", "1")
-    monkeypatch.setattr("review_costs.subprocess.run", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("gh should not run")))
+    monkeypatch.setattr(
+        "review_costs.subprocess.run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("gh should not run")
+        ),
+    )
 
     assert _current_pr_number(tmp_path) == ""
 
 
-def test_wrapper_cost_refresh_launcher_detaches_costs_command(monkeypatch, tmp_path: Path) -> None:
+def test_wrapper_cost_refresh_launcher_detaches_costs_command(
+    monkeypatch, tmp_path: Path
+) -> None:
     calls: list[tuple[list[str], dict[str, object]]] = []
 
     def fake_popen(command: list[str], **kwargs: object) -> object:
@@ -664,17 +788,28 @@ def test_wrapper_cost_refresh_launcher_detaches_costs_command(monkeypatch, tmp_p
 
     monkeypatch.setattr("review_costs.subprocess.Popen", fake_popen)
 
-    assert launch_review_cost_report_refresh_best_effort(state_dir=tmp_path, review_cwd=tmp_path) is True
+    assert (
+        launch_review_cost_report_refresh_best_effort(
+            state_dir=tmp_path, review_cwd=tmp_path
+        )
+        is True
+    )
 
     command, kwargs = calls[0]
-    assert command[:3] == [sys.executable, str(SCRIPT_DIR / "review_suite_arena.py"), "costs"]
+    assert command[:3] == [
+        sys.executable,
+        str(SCRIPT_DIR / "review_suite_arena.py"),
+        "costs",
+    ]
     assert command[3:] == ["--state-dir", str(tmp_path), "--cd", str(tmp_path)]
     assert kwargs["stdin"] is subprocess.DEVNULL
     assert kwargs["stdout"] is subprocess.DEVNULL
     assert kwargs["stderr"] is subprocess.DEVNULL
 
 
-def test_collect_review_cost_rows_includes_implementation_only_worktree(monkeypatch, tmp_path: Path) -> None:
+def test_collect_review_cost_rows_includes_implementation_only_worktree(
+    monkeypatch, tmp_path: Path
+) -> None:
     state_dir = tmp_path / "state"
     state_dir.mkdir()
     repo = tmp_path / "repo"
@@ -699,17 +834,27 @@ def test_collect_review_cost_rows_includes_implementation_only_worktree(monkeypa
         git_branch="feat/costs",
     )
 
-    rows = collect_review_cost_rows(state_dir=state_dir, review_cwd=repo, codex_home=codex_home)
+    rows = collect_review_cost_rows(
+        state_dir=state_dir, review_cwd=repo, codex_home=codex_home
+    )
 
     assert len(rows) == 1
     row = rows[0]
     assert row.worker_model == "gpt-5.5 medium"
     assert row.implementation_tokens == 2000
     assert row.tokens == 0
-    assert row.lane_sessions == {"review_t1": 0, "review_t2": 0, "review_t3": 0, "review_t4": 0, "review_followup": 0}
+    assert row.lane_sessions == {
+        "review_t1": 0,
+        "review_t2": 0,
+        "review_t3": 0,
+        "review_t4": 0,
+        "review_followup": 0,
+    }
 
 
-def test_collect_review_cost_rows_excludes_registered_wrapper_sessions(monkeypatch, tmp_path: Path) -> None:
+def test_collect_review_cost_rows_excludes_registered_wrapper_sessions(
+    monkeypatch, tmp_path: Path
+) -> None:
     state_dir = tmp_path / "state"
     state_dir.mkdir()
     repo = tmp_path / "repo"
@@ -735,16 +880,23 @@ def test_collect_review_cost_rows_excludes_registered_wrapper_sessions(monkeypat
         title="Review the commit range `abc..def` in the current repository.",
     )
     (state_dir / "wrapper_sessions.jsonl").write_text(
-        json.dumps({"session_id": "review-wrapper-session", "tool_name": "review-deslop"}) + "\n",
+        json.dumps(
+            {"session_id": "review-wrapper-session", "tool_name": "review-deslop"}
+        )
+        + "\n",
         encoding="utf-8",
     )
 
-    rows = collect_review_cost_rows(state_dir=state_dir, review_cwd=repo, codex_home=codex_home)
+    rows = collect_review_cost_rows(
+        state_dir=state_dir, review_cwd=repo, codex_home=codex_home
+    )
 
     assert rows == []
 
 
-def test_collect_review_cost_rows_includes_wrapper_caller_threads(monkeypatch, tmp_path: Path) -> None:
+def test_collect_review_cost_rows_includes_wrapper_caller_threads(
+    monkeypatch, tmp_path: Path
+) -> None:
     state_dir = tmp_path / "state"
     state_dir.mkdir()
     repo = tmp_path / "repo"
@@ -772,14 +924,24 @@ def test_collect_review_cost_rows_includes_wrapper_caller_threads(monkeypatch, t
         encoding="utf-8",
     )
 
-    rows = collect_review_cost_rows(state_dir=state_dir, review_cwd=repo, codex_home=tmp_path / "codex-home")
+    rows = collect_review_cost_rows(
+        state_dir=state_dir, review_cwd=repo, codex_home=tmp_path / "codex-home"
+    )
 
     assert len(rows) == 1
     assert rows[0].caller_threads == ("019dd132-4116-71f3-b013-beaa9e5e95bd",)
-    assert rows[0].lane_sessions == {"review_t1": 0, "review_t2": 0, "review_t3": 0, "review_t4": 0, "review_followup": 0}
+    assert rows[0].lane_sessions == {
+        "review_t1": 0,
+        "review_t2": 0,
+        "review_t3": 0,
+        "review_t4": 0,
+        "review_followup": 0,
+    }
 
 
-def test_collect_review_cost_rows_attributes_implementation_by_caller_thread(monkeypatch, tmp_path: Path) -> None:
+def test_collect_review_cost_rows_attributes_implementation_by_caller_thread(
+    monkeypatch, tmp_path: Path
+) -> None:
     state_dir = tmp_path / "state"
     state_dir.mkdir()
     review_repo = tmp_path / "review-worktree"
@@ -828,14 +990,18 @@ def test_collect_review_cost_rows_attributes_implementation_by_caller_thread(mon
         encoding="utf-8",
     )
 
-    rows = collect_review_cost_rows(state_dir=state_dir, review_cwd=review_repo, codex_home=codex_home)
+    rows = collect_review_cost_rows(
+        state_dir=state_dir, review_cwd=review_repo, codex_home=codex_home
+    )
 
     assert len(rows) == 1
     assert rows[0].worker_model == "gpt-5.5 xhigh"
     assert rows[0].implementation_tokens == 109_000_000
 
 
-def test_collect_review_cost_rows_skips_sampled_review_placeholders(monkeypatch, tmp_path: Path) -> None:
+def test_collect_review_cost_rows_skips_sampled_review_placeholders(
+    monkeypatch, tmp_path: Path
+) -> None:
     state_dir = tmp_path / "state"
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -864,10 +1030,17 @@ def test_collect_review_cost_rows_skips_sampled_review_placeholders(monkeypatch,
         },
     )
 
-    assert collect_review_cost_rows(state_dir=state_dir, review_cwd=repo, codex_home=tmp_path / "codex-home") == []
+    assert (
+        collect_review_cost_rows(
+            state_dir=state_dir, review_cwd=repo, codex_home=tmp_path / "codex-home"
+        )
+        == []
+    )
 
 
-def test_collect_review_cost_rows_all_does_not_seed_unrelated_codex_cwds(monkeypatch, tmp_path: Path) -> None:
+def test_collect_review_cost_rows_all_does_not_seed_unrelated_codex_cwds(
+    monkeypatch, tmp_path: Path
+) -> None:
     state_dir = tmp_path / "state"
     reviewed_repo = tmp_path / "reviewed"
     unrelated_repo = tmp_path / "unrelated"
@@ -893,19 +1066,34 @@ def test_collect_review_cost_rows_all_does_not_seed_unrelated_codex_cwds(monkeyp
             "review_completed_at": "2026-04-27T10:01:00Z",
             "review_cwd_normalized": str(reviewed_repo),
             "runs": [
-                {"slot": "alpha", "usage": {"input_tokens": 100, "output_tokens": 20}, "cost_usd": 0.001}
+                {
+                    "slot": "alpha",
+                    "usage": {"input_tokens": 100, "output_tokens": 20},
+                    "cost_usd": 0.001,
+                }
             ],
         },
     )
     codex_home = tmp_path / "codex-home"
-    _write_codex_thread(codex_home, thread_id="unrelated", cwd=unrelated_repo, model="gpt-5.5", reasoning_effort="medium", tokens_used=2000)
+    _write_codex_thread(
+        codex_home,
+        thread_id="unrelated",
+        cwd=unrelated_repo,
+        model="gpt-5.5",
+        reasoning_effort="medium",
+        tokens_used=2000,
+    )
 
-    rows = collect_review_cost_rows(state_dir=state_dir, include_all=True, codex_home=codex_home)
+    rows = collect_review_cost_rows(
+        state_dir=state_dir, include_all=True, codex_home=codex_home
+    )
 
     assert [row.folder for row in rows] == ["reviewed"]
 
 
-def test_collect_review_cost_rows_excludes_support_review_sessions(monkeypatch, tmp_path: Path) -> None:
+def test_collect_review_cost_rows_excludes_support_review_sessions(
+    monkeypatch, tmp_path: Path
+) -> None:
     state_dir = tmp_path / "state"
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -945,13 +1133,17 @@ def test_collect_review_cost_rows_excludes_support_review_sessions(monkeypatch, 
             title=title,
         )
 
-    rows = collect_review_cost_rows(state_dir=state_dir, review_cwd=repo, codex_home=codex_home)
+    rows = collect_review_cost_rows(
+        state_dir=state_dir, review_cwd=repo, codex_home=codex_home
+    )
 
     assert len(rows) == 1
     assert rows[0].implementation_tokens == 2000
 
 
-def test_collect_review_cost_rows_filters_implementation_sessions_by_branch(monkeypatch, tmp_path: Path) -> None:
+def test_collect_review_cost_rows_filters_implementation_sessions_by_branch(
+    monkeypatch, tmp_path: Path
+) -> None:
     state_dir = tmp_path / "state"
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -992,13 +1184,17 @@ def test_collect_review_cost_rows_filters_implementation_sessions_by_branch(monk
         tokens_used=999_999,
     )
 
-    rows = collect_review_cost_rows(state_dir=state_dir, review_cwd=repo, codex_home=codex_home)
+    rows = collect_review_cost_rows(
+        state_dir=state_dir, review_cwd=repo, codex_home=codex_home
+    )
 
     assert len(rows) == 1
     assert rows[0].implementation_tokens == 2000
 
 
-def test_collect_review_cost_rows_keeps_older_threads_schema_without_git_branch(monkeypatch, tmp_path: Path) -> None:
+def test_collect_review_cost_rows_keeps_older_threads_schema_without_git_branch(
+    monkeypatch, tmp_path: Path
+) -> None:
     state_dir = tmp_path / "state"
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -1030,13 +1226,17 @@ def test_collect_review_cost_rows_keeps_older_threads_schema_without_git_branch(
             ("legacy", str(repo), "gpt-5.5", "medium", 2000),
         )
 
-    rows = collect_review_cost_rows(state_dir=state_dir, review_cwd=repo, codex_home=codex_home)
+    rows = collect_review_cost_rows(
+        state_dir=state_dir, review_cwd=repo, codex_home=codex_home
+    )
 
     assert len(rows) == 1
     assert rows[0].implementation_tokens == 2000
 
 
-def test_collect_review_cost_rows_includes_subdirectory_sessions(monkeypatch, tmp_path: Path) -> None:
+def test_collect_review_cost_rows_includes_subdirectory_sessions(
+    monkeypatch, tmp_path: Path
+) -> None:
     state_dir = tmp_path / "state"
     repo = tmp_path / "repo"
     subdir = repo / "plugins" / "review-suite"
@@ -1061,13 +1261,17 @@ def test_collect_review_cost_rows_includes_subdirectory_sessions(monkeypatch, tm
         git_branch="feat/current",
     )
 
-    rows = collect_review_cost_rows(state_dir=state_dir, review_cwd=repo, codex_home=codex_home)
+    rows = collect_review_cost_rows(
+        state_dir=state_dir, review_cwd=repo, codex_home=codex_home
+    )
 
     assert len(rows) == 1
     assert rows[0].implementation_tokens == 2000
 
 
-def test_collect_review_cost_rows_filters_review_records_by_branch(monkeypatch, tmp_path: Path) -> None:
+def test_collect_review_cost_rows_filters_review_records_by_branch(
+    monkeypatch, tmp_path: Path
+) -> None:
     state_dir = tmp_path / "state"
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -1091,7 +1295,11 @@ def test_collect_review_cost_rows_filters_review_records_by_branch(monkeypatch, 
             "review_completed_at": "2026-04-27T10:01:00Z",
             "review_cwd_normalized": str(repo),
             "runs": [
-                {"slot": "alpha", "usage": {"input_tokens": 100, "output_tokens": 20}, "cost_usd": 0.001}
+                {
+                    "slot": "alpha",
+                    "usage": {"input_tokens": 100, "output_tokens": 20},
+                    "cost_usd": 0.001,
+                }
             ],
         },
     )
@@ -1106,12 +1314,18 @@ def test_collect_review_cost_rows_filters_review_records_by_branch(monkeypatch, 
             "review_completed_at": "2026-04-27T11:01:00Z",
             "review_cwd_normalized": str(repo),
             "runs": [
-                {"slot": "alpha", "usage": {"input_tokens": 200, "output_tokens": 30}, "cost_usd": 0.002}
+                {
+                    "slot": "alpha",
+                    "usage": {"input_tokens": 200, "output_tokens": 30},
+                    "cost_usd": 0.002,
+                }
             ],
         },
     )
 
-    rows = collect_review_cost_rows(state_dir=state_dir, review_cwd=repo, codex_home=tmp_path / "codex-home")
+    rows = collect_review_cost_rows(
+        state_dir=state_dir, review_cwd=repo, codex_home=tmp_path / "codex-home"
+    )
 
     assert len(rows) == 1
     assert rows[0].lane_sessions["review_t1"] == 1
@@ -1119,7 +1333,9 @@ def test_collect_review_cost_rows_filters_review_records_by_branch(monkeypatch, 
     assert rows[0].cost_usd == 0.002
 
 
-def test_collect_review_cost_rows_falls_back_when_rollout_usage_omits_total_tokens(monkeypatch, tmp_path: Path) -> None:
+def test_collect_review_cost_rows_falls_back_when_rollout_usage_omits_total_tokens(
+    monkeypatch, tmp_path: Path
+) -> None:
     state_dir = tmp_path / "state"
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -1150,13 +1366,17 @@ def test_collect_review_cost_rows_falls_back_when_rollout_usage_omits_total_toke
         },
     )
 
-    rows = collect_review_cost_rows(state_dir=state_dir, review_cwd=repo, codex_home=codex_home)
+    rows = collect_review_cost_rows(
+        state_dir=state_dir, review_cwd=repo, codex_home=codex_home
+    )
 
     assert len(rows) == 1
     assert rows[0].implementation_tokens == 125
 
 
-def test_collect_review_cost_rows_reads_model_metadata_from_rollout(monkeypatch, tmp_path: Path) -> None:
+def test_collect_review_cost_rows_reads_model_metadata_from_rollout(
+    monkeypatch, tmp_path: Path
+) -> None:
     state_dir = tmp_path / "state"
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -1188,7 +1408,9 @@ def test_collect_review_cost_rows_reads_model_metadata_from_rollout(monkeypatch,
         },
     )
 
-    rows = collect_review_cost_rows(state_dir=state_dir, review_cwd=repo, codex_home=codex_home)
+    rows = collect_review_cost_rows(
+        state_dir=state_dir, review_cwd=repo, codex_home=codex_home
+    )
 
     assert len(rows) == 1
     assert rows[0].worker_model == "gpt-5.5 medium"
@@ -1225,8 +1447,22 @@ def test_thread_rows_filters_by_cwd_in_sqlite(tmp_path: Path) -> None:
     unrelated = tmp_path / "unrelated"
     target.mkdir()
     unrelated.mkdir()
-    _write_codex_thread(codex_home, thread_id="target", cwd=target, model="gpt-5.5", reasoning_effort="medium", tokens_used=1)
-    _write_codex_thread(codex_home, thread_id="unrelated", cwd=unrelated, model="gpt-5.5", reasoning_effort="medium", tokens_used=1)
+    _write_codex_thread(
+        codex_home,
+        thread_id="target",
+        cwd=target,
+        model="gpt-5.5",
+        reasoning_effort="medium",
+        tokens_used=1,
+    )
+    _write_codex_thread(
+        codex_home,
+        thread_id="unrelated",
+        cwd=unrelated,
+        model="gpt-5.5",
+        reasoning_effort="medium",
+        tokens_used=1,
+    )
 
     rows = _thread_rows(codex_home / "state_5.sqlite", cwd_filters={str(target)})
 
@@ -1239,8 +1475,22 @@ def test_thread_rows_filters_by_thread_id_in_sqlite(tmp_path: Path) -> None:
     unrelated = tmp_path / "unrelated"
     target.mkdir()
     unrelated.mkdir()
-    _write_codex_thread(codex_home, thread_id="target-thread", cwd=target, model="gpt-5.5", reasoning_effort="medium", tokens_used=1)
-    _write_codex_thread(codex_home, thread_id="unrelated", cwd=unrelated, model="gpt-5.5", reasoning_effort="medium", tokens_used=1)
+    _write_codex_thread(
+        codex_home,
+        thread_id="target-thread",
+        cwd=target,
+        model="gpt-5.5",
+        reasoning_effort="medium",
+        tokens_used=1,
+    )
+    _write_codex_thread(
+        codex_home,
+        thread_id="unrelated",
+        cwd=unrelated,
+        model="gpt-5.5",
+        reasoning_effort="medium",
+        tokens_used=1,
+    )
 
     rows = _thread_rows(codex_home / "state_5.sqlite", id_filters={"target-thread"})
 
@@ -1254,8 +1504,22 @@ def test_thread_rows_includes_descendant_cwds(tmp_path: Path) -> None:
     unrelated = tmp_path / "target-other"
     child.mkdir(parents=True)
     unrelated.mkdir()
-    _write_codex_thread(codex_home, thread_id="child", cwd=child, model="gpt-5.5", reasoning_effort="medium", tokens_used=1)
-    _write_codex_thread(codex_home, thread_id="unrelated", cwd=unrelated, model="gpt-5.5", reasoning_effort="medium", tokens_used=1)
+    _write_codex_thread(
+        codex_home,
+        thread_id="child",
+        cwd=child,
+        model="gpt-5.5",
+        reasoning_effort="medium",
+        tokens_used=1,
+    )
+    _write_codex_thread(
+        codex_home,
+        thread_id="unrelated",
+        cwd=unrelated,
+        model="gpt-5.5",
+        reasoning_effort="medium",
+        tokens_used=1,
+    )
 
     rows = _thread_rows(codex_home / "state_5.sqlite", cwd_filters={str(target)})
 
@@ -1269,8 +1533,22 @@ def test_thread_rows_escapes_descendant_like_wildcards(tmp_path: Path) -> None:
     wildcard_sibling = tmp_path / "repoXa" / "child"
     child.mkdir(parents=True)
     wildcard_sibling.mkdir(parents=True)
-    _write_codex_thread(codex_home, thread_id="child", cwd=child, model="gpt-5.5", reasoning_effort="medium", tokens_used=1)
-    _write_codex_thread(codex_home, thread_id="sibling", cwd=wildcard_sibling, model="gpt-5.5", reasoning_effort="medium", tokens_used=1)
+    _write_codex_thread(
+        codex_home,
+        thread_id="child",
+        cwd=child,
+        model="gpt-5.5",
+        reasoning_effort="medium",
+        tokens_used=1,
+    )
+    _write_codex_thread(
+        codex_home,
+        thread_id="sibling",
+        cwd=wildcard_sibling,
+        model="gpt-5.5",
+        reasoning_effort="medium",
+        tokens_used=1,
+    )
 
     rows = _thread_rows(codex_home / "state_5.sqlite", cwd_filters={str(target)})
 
@@ -1302,7 +1580,9 @@ def test_thread_rows_tolerates_missing_created_at_column(tmp_path: Path) -> None
     assert [row["id"] for row in rows] == ["thread-1"]
 
 
-def test_current_pr_number_treats_missing_gh_as_optional(monkeypatch, tmp_path: Path) -> None:
+def test_current_pr_number_treats_missing_gh_as_optional(
+    monkeypatch, tmp_path: Path
+) -> None:
     def raise_missing(*args, **kwargs):
         raise FileNotFoundError("gh")
 

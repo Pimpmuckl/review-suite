@@ -8,7 +8,10 @@ import select
 import sys
 from pathlib import Path
 
-from review_suite_runtime_bootstrap import bootstrap_from_installed_cache, launcher_script_path
+from review_suite_runtime_bootstrap import (
+    bootstrap_from_installed_cache,
+    launcher_script_path,
+)
 
 bootstrap_from_installed_cache(__file__)
 
@@ -40,7 +43,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _help_command() -> str:
-    return format_command([sys.executable, str(launcher_script_path(__file__)), "--help"])
+    return format_command(
+        [sys.executable, str(launcher_script_path(__file__)), "--help"]
+    )
 
 
 def resolve_review_root(args: argparse.Namespace) -> Path:
@@ -66,7 +71,9 @@ def _stdin_has_data() -> bool:
     if file_type != _FILE_TYPE_PIPE:
         return False
     available = ctypes.c_ulong()
-    ok = ctypes.windll.kernel32.PeekNamedPipe(handle, None, 0, None, ctypes.byref(available), None)
+    ok = ctypes.windll.kernel32.PeekNamedPipe(
+        handle, None, 0, None, ctypes.byref(available), None
+    )
     if ok == 0:
         return False
     return bool(available.value)
@@ -82,12 +89,16 @@ def load_plan_input(args: argparse.Namespace) -> tuple[str, str]:
         return args.input_text, "inline-text"
     default_plan_path = Path.cwd() / "task_plan.md"
     if default_plan_path.exists():
-        return default_plan_path.read_text(encoding="utf-8"), f"default:{default_plan_path.resolve()}"
+        return default_plan_path.read_text(
+            encoding="utf-8"
+        ), f"default:{default_plan_path.resolve()}"
     if _stdin_has_data():
         text = sys.stdin.read()
         if text.strip():
             return text, "stdin"
-    raise ValueError("review-plan requires task_plan.md, --input-file, --input-text, or stdin content")
+    raise ValueError(
+        "review-plan requires task_plan.md, --input-file, --input-text, or stdin content"
+    )
 
 
 def build_prompt(plan_text: str) -> str:

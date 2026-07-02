@@ -71,7 +71,9 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
 
 
 def load_config(state_dir: Path | None = None) -> dict[str, Any]:
-    config = _deep_merge(_read_json(default_config_path()), _read_json(user_config_path(state_dir)))
+    config = _deep_merge(
+        _read_json(default_config_path()), _read_json(user_config_path(state_dir))
+    )
     _validate_config(config)
     return config
 
@@ -110,7 +112,11 @@ def _non_empty_text(value: Any, *, field: str) -> str:
 def _parse_model_label(value: Any, *, field: str) -> str:
     label = _non_empty_text(value, field=field)
     with_tier = label.rsplit("-", 2)
-    if len(with_tier) == 3 and with_tier[1] in SUPPORTED_REASONING_EFFORTS and with_tier[2] in SUPPORTED_SERVICE_TIERS:
+    if (
+        len(with_tier) == 3
+        and with_tier[1] in SUPPORTED_REASONING_EFFORTS
+        and with_tier[2] in SUPPORTED_SERVICE_TIERS
+    ):
         if not with_tier[0].strip():
             raise ValueError(f"{field} must include a model name")
         return label
@@ -120,7 +126,9 @@ def _parse_model_label(value: Any, *, field: str) -> str:
             raise ValueError(f"{field} must include a model name")
         return label
     efforts = ", ".join(sorted(SUPPORTED_REASONING_EFFORTS))
-    raise ValueError(f"{field} must look like model-effort where effort is one of: {efforts}")
+    raise ValueError(
+        f"{field} must look like model-effort where effort is one of: {efforts}"
+    )
 
 
 def _orchestrator_defaults(config: dict[str, Any]) -> dict[str, Any]:
@@ -143,7 +151,10 @@ def _stable_model_ref(config: dict[str, Any], ref: Any, *, field: str) -> str:
 
 def _stable_positive_int_ref(config: dict[str, Any], ref: Any, *, field: str) -> int:
     ref_name = _non_empty_text(ref, field=field)
-    return _positive_int(_orchestrator_defaults(config).get(ref_name), field=f"orchestrator.stable_defaults.{ref_name}")
+    return _positive_int(
+        _orchestrator_defaults(config).get(ref_name),
+        field=f"orchestrator.stable_defaults.{ref_name}",
+    )
 
 
 def _validate_lens_config(config: dict[str, Any]) -> None:
@@ -157,10 +168,14 @@ def _validate_lens_config(config: dict[str, Any]) -> None:
         raise ValueError("lens.default.model is required")
     effort = str(default.get("reasoning_effort") or "").strip()
     if effort not in SUPPORTED_REASONING_EFFORTS:
-        raise ValueError(f"lens.default.reasoning_effort must be one of: {', '.join(sorted(SUPPORTED_REASONING_EFFORTS))}")
+        raise ValueError(
+            f"lens.default.reasoning_effort must be one of: {', '.join(sorted(SUPPORTED_REASONING_EFFORTS))}"
+        )
     service_tier = str(default.get("service_tier") or "").strip()
     if service_tier and service_tier not in SUPPORTED_SERVICE_TIERS:
-        raise ValueError(f"lens.default.service_tier must be one of: {', '.join(sorted(SUPPORTED_SERVICE_TIERS))}")
+        raise ValueError(
+            f"lens.default.service_tier must be one of: {', '.join(sorted(SUPPORTED_SERVICE_TIERS))}"
+        )
 
 
 def _validate_gate_config(config: dict[str, Any]) -> None:
@@ -171,13 +186,37 @@ def _validate_gate_config(config: dict[str, Any]) -> None:
         gate = gates.get(gate_name)
         if not isinstance(gate, dict):
             raise ValueError(f"gates.{gate_name} config must be an object")
-        _stable_model_ref(config, gate.get("discovery_model_ref"), field=f"gates.{gate_name}.discovery_model_ref")
-        _positive_int(gate.get("discovery_reviewer_count"), field=f"gates.{gate_name}.discovery_reviewer_count")
-        _stable_model_ref(config, gate.get("signoff_model_ref"), field=f"gates.{gate_name}.signoff_model_ref")
-        _positive_int(gate.get("signoff_reviewer_count"), field=f"gates.{gate_name}.signoff_reviewer_count")
-        _stable_positive_int_ref(config, gate.get("discovery_loops_ref"), field=f"gates.{gate_name}.discovery_loops_ref")
-        _string_list(gate.get("backup_variant_ids"), field=f"gates.{gate_name}.backup_variant_ids")
-        _positive_int(gate.get("max_active_reviewers"), field=f"gates.{gate_name}.max_active_reviewers")
+        _stable_model_ref(
+            config,
+            gate.get("discovery_model_ref"),
+            field=f"gates.{gate_name}.discovery_model_ref",
+        )
+        _positive_int(
+            gate.get("discovery_reviewer_count"),
+            field=f"gates.{gate_name}.discovery_reviewer_count",
+        )
+        _stable_model_ref(
+            config,
+            gate.get("signoff_model_ref"),
+            field=f"gates.{gate_name}.signoff_model_ref",
+        )
+        _positive_int(
+            gate.get("signoff_reviewer_count"),
+            field=f"gates.{gate_name}.signoff_reviewer_count",
+        )
+        _stable_positive_int_ref(
+            config,
+            gate.get("discovery_loops_ref"),
+            field=f"gates.{gate_name}.discovery_loops_ref",
+        )
+        _string_list(
+            gate.get("backup_variant_ids"),
+            field=f"gates.{gate_name}.backup_variant_ids",
+        )
+        _positive_int(
+            gate.get("max_active_reviewers"),
+            field=f"gates.{gate_name}.max_active_reviewers",
+        )
 
 
 def _validate_orchestrator_config(config: dict[str, Any]) -> None:
@@ -196,26 +235,38 @@ def _validate_config(config: dict[str, Any]) -> None:
     if not isinstance(privacy, dict):
         raise ValueError("privacy config must be an object")
     if bool(privacy.get("arena_external_publish_enabled")):
-        raise ValueError("arena_external_publish_enabled is not supported in the public review-suite plugin")
+        raise ValueError(
+            "arena_external_publish_enabled is not supported in the public review-suite plugin"
+        )
     _validate_lens_config(config)
     _validate_gate_config(config)
     _validate_orchestrator_config(config)
 
 
-def lens_model_config(tool_name: str, *, state_dir: Path | None = None) -> LensModelConfig:
+def lens_model_config(
+    tool_name: str, *, state_dir: Path | None = None
+) -> LensModelConfig:
     config = load_config(state_dir)
     lens = dict(config.get("lens") or {})
-    merged = _deep_merge(dict(lens.get("default") or {}), dict(lens.get(tool_name) or {}))
+    merged = _deep_merge(
+        dict(lens.get("default") or {}), dict(lens.get(tool_name) or {})
+    )
     model = str(merged.get("model") or "").strip()
     effort = str(merged.get("reasoning_effort") or "").strip()
     service_tier = str(merged.get("service_tier") or "").strip() or None
     if not model:
         raise ValueError(f"lens model is required for {tool_name}")
     if effort not in SUPPORTED_REASONING_EFFORTS:
-        raise ValueError(f"lens reasoning_effort for {tool_name} must be one of: {', '.join(sorted(SUPPORTED_REASONING_EFFORTS))}")
+        raise ValueError(
+            f"lens reasoning_effort for {tool_name} must be one of: {', '.join(sorted(SUPPORTED_REASONING_EFFORTS))}"
+        )
     if service_tier and service_tier not in SUPPORTED_SERVICE_TIERS:
-        raise ValueError(f"lens service_tier for {tool_name} must be one of: {', '.join(sorted(SUPPORTED_SERVICE_TIERS))}")
-    return LensModelConfig(model=model, reasoning_effort=effort, service_tier=service_tier)
+        raise ValueError(
+            f"lens service_tier for {tool_name} must be one of: {', '.join(sorted(SUPPORTED_SERVICE_TIERS))}"
+        )
+    return LensModelConfig(
+        model=model, reasoning_effort=effort, service_tier=service_tier
+    )
 
 
 def gate_config(gate_task_class: str, *, state_dir: Path | None = None) -> GateConfig:
@@ -247,7 +298,10 @@ def gate_config(gate_task_class: str, *, state_dir: Path | None = None) -> GateC
             gate.get("discovery_loops_ref"),
             field=f"gates.{gate_task_class}.discovery_loops_ref",
         ),
-        backup_variant_ids=_string_list(gate.get("backup_variant_ids"), field=f"gates.{gate_task_class}.backup_variant_ids"),
+        backup_variant_ids=_string_list(
+            gate.get("backup_variant_ids"),
+            field=f"gates.{gate_task_class}.backup_variant_ids",
+        ),
         max_active_reviewers=_positive_int(
             gate.get("max_active_reviewers"),
             field=f"gates.{gate_task_class}.max_active_reviewers",

@@ -33,7 +33,14 @@ def _write_json(path: Path, payload: dict[str, object]) -> None:
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
-def _gate_run(variant_id: str, *, verdict: str, elapsed: float = 12.0, tokens: int = 1000, cost: float = 0.01) -> dict[str, object]:
+def _gate_run(
+    variant_id: str,
+    *,
+    verdict: str,
+    elapsed: float = 12.0,
+    tokens: int = 1000,
+    cost: float = 0.01,
+) -> dict[str, object]:
     return {
         "slot": "alpha",
         "variant_id": variant_id,
@@ -45,7 +52,9 @@ def _gate_run(variant_id: str, *, verdict: str, elapsed: float = 12.0, tokens: i
     }
 
 
-def test_select_gate_variants_prefers_least_used_distinct_champions(tmp_path: Path) -> None:
+def test_select_gate_variants_prefers_least_used_distinct_champions(
+    tmp_path: Path,
+) -> None:
     state_dir = tmp_path / "state"
     _write_json(
         state_dir / "operational_state.json",
@@ -70,10 +79,18 @@ def test_select_gate_variants_prefers_least_used_distinct_champions(tmp_path: Pa
         },
     )
     gate_runs = [
-        {"task_class": "phase_gate", "runs": [{"variant_id": "a"}, {"variant_id": "a"}]},
-        {"task_class": "phase_gate", "runs": [{"variant_id": "b"}, {"variant_id": "c"}]},
+        {
+            "task_class": "phase_gate",
+            "runs": [{"variant_id": "a"}, {"variant_id": "a"}],
+        },
+        {
+            "task_class": "phase_gate",
+            "runs": [{"variant_id": "b"}, {"variant_id": "c"}],
+        },
     ]
-    (state_dir / "gate_runs.jsonl").write_text("\n".join(json.dumps(row) for row in gate_runs) + "\n", encoding="utf-8")
+    (state_dir / "gate_runs.jsonl").write_text(
+        "\n".join(json.dumps(row) for row in gate_runs) + "\n", encoding="utf-8"
+    )
     roster = {
         "variants": [
             {"id": "a", "state": "active"},
@@ -82,7 +99,9 @@ def test_select_gate_variants_prefers_least_used_distinct_champions(tmp_path: Pa
         ]
     }
 
-    selection = _select_gate_variants(roster=roster, state_dir=state_dir, gate_task_class="phase_gate")
+    selection = _select_gate_variants(
+        roster=roster, state_dir=state_dir, gate_task_class="phase_gate"
+    )
 
     assert selection.mode == "multi_champion_4_pass"
     assert [variant["id"] for variant in selection.variants] == ["b", "c", "a", "b"]
@@ -114,13 +133,22 @@ def test_select_gate_variants_duplicates_single_champion(tmp_path: Path) -> None
     )
     roster = {"variants": [{"id": "solo", "state": "active"}]}
 
-    selection = _select_gate_variants(roster=roster, state_dir=state_dir, gate_task_class="phase_gate")
+    selection = _select_gate_variants(
+        roster=roster, state_dir=state_dir, gate_task_class="phase_gate"
+    )
 
     assert selection.mode == "4_pass"
-    assert [variant["id"] for variant in selection.variants] == ["solo", "solo", "solo", "solo"]
+    assert [variant["id"] for variant in selection.variants] == [
+        "solo",
+        "solo",
+        "solo",
+        "solo",
+    ]
 
 
-def test_select_gate_variants_falls_back_to_legacy_singular_champion_field(tmp_path: Path) -> None:
+def test_select_gate_variants_falls_back_to_legacy_singular_champion_field(
+    tmp_path: Path,
+) -> None:
     state_dir = tmp_path / "state"
     _write_json(
         state_dir / "operational_state.json",
@@ -147,10 +175,17 @@ def test_select_gate_variants_falls_back_to_legacy_singular_champion_field(tmp_p
     )
     roster = {"variants": [{"id": "solo", "state": "active"}]}
 
-    selection = _select_gate_variants(roster=roster, state_dir=state_dir, gate_task_class="phase_gate")
+    selection = _select_gate_variants(
+        roster=roster, state_dir=state_dir, gate_task_class="phase_gate"
+    )
 
     assert selection.mode == "4_pass"
-    assert [variant["id"] for variant in selection.variants] == ["solo", "solo", "solo", "solo"]
+    assert [variant["id"] for variant in selection.variants] == [
+        "solo",
+        "solo",
+        "solo",
+        "solo",
+    ]
 
 
 def test_select_gate_variants_prefers_non_cooling_champions(tmp_path: Path) -> None:
@@ -162,7 +197,9 @@ def test_select_gate_variants_prefers_non_cooling_champions(tmp_path: Path) -> N
             "task_classes": {
                 "phase_review": {
                     "champion_variant_ids": ["a", "b", "c"],
-                    "cooldowns": {"a": {"until": "2099-01-01T00:00:00Z", "failure_count": 1}},
+                    "cooldowns": {
+                        "a": {"until": "2099-01-01T00:00:00Z", "failure_count": 1}
+                    },
                     "probation_variant_ids": [],
                     "stable_variant_ids": [],
                     "mode": "champion",
@@ -185,13 +222,17 @@ def test_select_gate_variants_prefers_non_cooling_champions(tmp_path: Path) -> N
         ]
     }
 
-    selection = _select_gate_variants(roster=roster, state_dir=state_dir, gate_task_class="phase_gate")
+    selection = _select_gate_variants(
+        roster=roster, state_dir=state_dir, gate_task_class="phase_gate"
+    )
 
     assert selection.mode == "multi_champion_4_pass"
     assert [variant["id"] for variant in selection.variants] == ["b", "c", "b", "c"]
 
 
-def test_select_gate_variants_uses_pr_gate_discovery_variant_before_champions(tmp_path: Path) -> None:
+def test_select_gate_variants_uses_pr_gate_discovery_variant_before_champions(
+    tmp_path: Path,
+) -> None:
     state_dir = tmp_path / "state"
     _write_json(
         state_dir / "operational_state.json",
@@ -200,7 +241,12 @@ def test_select_gate_variants_uses_pr_gate_discovery_variant_before_champions(tm
             "task_classes": {
                 "pr_review": {
                     "champion_variant_ids": ["gpt-5.5-xhigh"],
-                    "cooldowns": {"gpt-5.5-xhigh": {"until": "2099-01-01T00:00:00Z", "failure_count": 1}},
+                    "cooldowns": {
+                        "gpt-5.5-xhigh": {
+                            "until": "2099-01-01T00:00:00Z",
+                            "failure_count": 1,
+                        }
+                    },
                     "probation_variant_ids": [],
                     "stable_variant_ids": [],
                     "mode": "champion",
@@ -222,14 +268,21 @@ def test_select_gate_variants_uses_pr_gate_discovery_variant_before_champions(tm
         ]
     }
 
-    selection = _select_gate_variants(roster=roster, state_dir=state_dir, gate_task_class="pr_gate")
+    selection = _select_gate_variants(
+        roster=roster, state_dir=state_dir, gate_task_class="pr_gate"
+    )
 
     assert selection.mode == "configured_discovery_double_pass"
-    assert [variant["id"] for variant in selection.variants] == ["gpt-5.4-xhigh", "gpt-5.4-xhigh"]
+    assert [variant["id"] for variant in selection.variants] == [
+        "gpt-5.4-xhigh",
+        "gpt-5.4-xhigh",
+    ]
     assert selection.champion_ids == ("gpt-5.4-xhigh",)
 
 
-def test_select_gate_variants_uses_configured_discovery_without_champions(tmp_path: Path) -> None:
+def test_select_gate_variants_uses_configured_discovery_without_champions(
+    tmp_path: Path,
+) -> None:
     state_dir = tmp_path / "state"
     _write_json(
         state_dir / "operational_state.json",
@@ -238,7 +291,9 @@ def test_select_gate_variants_uses_configured_discovery_without_champions(tmp_pa
             "task_classes": {
                 "phase_review": {
                     "champion_variant_ids": [],
-                    "cooldowns": {"alpha": {"until": "2099-01-01T00:00:00Z", "failure_count": 1}},
+                    "cooldowns": {
+                        "alpha": {"until": "2099-01-01T00:00:00Z", "failure_count": 1}
+                    },
                     "probation_variant_ids": ["probation"],
                     "stable_variant_ids": [],
                     "mode": "scramble",
@@ -256,14 +311,40 @@ def test_select_gate_variants_uses_configured_discovery_without_champions(tmp_pa
     (state_dir / "runs.jsonl").write_text("", encoding="utf-8")
     roster = {
         "variants": [
-            {"id": "gpt-5.5-medium", "state": "active", "model": "gpt-5.5", "reasoning_effort": "medium", "task_classes": ["phase_review"]},
-            {"id": "gpt-5.4-medium", "state": "active", "model": "gpt-5.4", "reasoning_effort": "medium", "task_classes": ["phase_review"]},
-            {"id": "alpha", "state": "active", "model": "gpt-5.4", "reasoning_effort": "xhigh", "task_classes": ["phase_review"]},
-            {"id": "probation", "state": "active", "model": "gpt-5.4", "reasoning_effort": "xhigh", "task_classes": ["phase_review"]},
+            {
+                "id": "gpt-5.5-medium",
+                "state": "active",
+                "model": "gpt-5.5",
+                "reasoning_effort": "medium",
+                "task_classes": ["phase_review"],
+            },
+            {
+                "id": "gpt-5.4-medium",
+                "state": "active",
+                "model": "gpt-5.4",
+                "reasoning_effort": "medium",
+                "task_classes": ["phase_review"],
+            },
+            {
+                "id": "alpha",
+                "state": "active",
+                "model": "gpt-5.4",
+                "reasoning_effort": "xhigh",
+                "task_classes": ["phase_review"],
+            },
+            {
+                "id": "probation",
+                "state": "active",
+                "model": "gpt-5.4",
+                "reasoning_effort": "xhigh",
+                "task_classes": ["phase_review"],
+            },
         ]
     }
 
-    selection = _select_gate_variants(roster=roster, state_dir=state_dir, gate_task_class="phase_gate")
+    selection = _select_gate_variants(
+        roster=roster, state_dir=state_dir, gate_task_class="phase_gate"
+    )
 
     assert selection.mode == "configured_discovery_4_pass"
     assert [variant["id"] for variant in selection.variants] == [
@@ -274,7 +355,9 @@ def test_select_gate_variants_uses_configured_discovery_without_champions(tmp_pa
     ]
 
 
-def test_phase_gate_reviewer_count_switches_from_discovery_to_signoff(tmp_path: Path) -> None:
+def test_phase_gate_reviewer_count_switches_from_discovery_to_signoff(
+    tmp_path: Path,
+) -> None:
     state_dir = tmp_path / "state"
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -370,7 +453,15 @@ def test_phase_gate_reviewer_count_switches_from_discovery_to_signoff(tmp_path: 
         )
         == 4
     )
-    assert _gate_reviewer_count(gate_task_class="pr_gate", state_dir=state_dir, review_cwd=repo, task_id=task_id) == 2
+    assert (
+        _gate_reviewer_count(
+            gate_task_class="pr_gate",
+            state_dir=state_dir,
+            review_cwd=repo,
+            task_id=task_id,
+        )
+        == 2
+    )
 
 
 def test_phase_gate_discovery_loops_are_configurable(tmp_path: Path) -> None:
@@ -397,7 +488,15 @@ def test_phase_gate_discovery_loops_are_configurable(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    assert _gate_reviewer_count(gate_task_class="phase_gate", state_dir=state_dir, review_cwd=repo, task_id=task_id) == 4
+    assert (
+        _gate_reviewer_count(
+            gate_task_class="phase_gate",
+            state_dir=state_dir,
+            review_cwd=repo,
+            task_id=task_id,
+        )
+        == 4
+    )
 
     with (state_dir / "gate_runs.jsonl").open("a", encoding="utf-8") as handle:
         handle.write(
@@ -413,7 +512,15 @@ def test_phase_gate_discovery_loops_are_configurable(tmp_path: Path) -> None:
             + "\n"
         )
 
-    assert _gate_reviewer_count(gate_task_class="phase_gate", state_dir=state_dir, review_cwd=repo, task_id=task_id) == 2
+    assert (
+        _gate_reviewer_count(
+            gate_task_class="phase_gate",
+            state_dir=state_dir,
+            review_cwd=repo,
+            task_id=task_id,
+        )
+        == 2
+    )
 
 
 def test_pr_gate_uses_configured_discovery_then_signoff_variant(tmp_path: Path) -> None:
@@ -459,7 +566,10 @@ def test_pr_gate_uses_configured_discovery_then_signoff_variant(tmp_path: Path) 
     )
 
     assert first.mode == "configured_discovery_double_pass"
-    assert [variant["id"] for variant in first.variants] == ["gpt-5.4-xhigh", "gpt-5.4-xhigh"]
+    assert [variant["id"] for variant in first.variants] == [
+        "gpt-5.4-xhigh",
+        "gpt-5.4-xhigh",
+    ]
 
     (state_dir / "gate_runs.jsonl").write_text(
         json.dumps(
@@ -483,10 +593,15 @@ def test_pr_gate_uses_configured_discovery_then_signoff_variant(tmp_path: Path) 
     )
 
     assert subsequent.mode == "configured_signoff_double_pass"
-    assert [variant["id"] for variant in subsequent.variants] == ["gpt-5.5-xhigh", "gpt-5.5-xhigh"]
+    assert [variant["id"] for variant in subsequent.variants] == [
+        "gpt-5.5-xhigh",
+        "gpt-5.5-xhigh",
+    ]
 
 
-def test_select_gate_variants_champion_override_wins_over_configured_gate_variant(tmp_path: Path) -> None:
+def test_select_gate_variants_champion_override_wins_over_configured_gate_variant(
+    tmp_path: Path,
+) -> None:
     state_dir = tmp_path / "state"
     _write_json(
         state_dir / "operational_state.json",
@@ -512,8 +627,16 @@ def test_select_gate_variants_champion_override_wins_over_configured_gate_varian
     )
     roster = {
         "variants": [
-            {"id": "gpt-5.5-medium", "state": "active", "task_classes": ["phase_review"]},
-            {"id": "gpt-5.4-medium", "state": "active", "task_classes": ["phase_review"]},
+            {
+                "id": "gpt-5.5-medium",
+                "state": "active",
+                "task_classes": ["phase_review"],
+            },
+            {
+                "id": "gpt-5.4-medium",
+                "state": "active",
+                "task_classes": ["phase_review"],
+            },
         ]
     }
 
@@ -534,7 +657,9 @@ def test_select_gate_variants_champion_override_wins_over_configured_gate_varian
     assert selection.champion_ids == ("gpt-5.4-medium",)
 
 
-def test_select_gate_variants_rejects_ineligible_champion_override(tmp_path: Path) -> None:
+def test_select_gate_variants_rejects_ineligible_champion_override(
+    tmp_path: Path,
+) -> None:
     state_dir = tmp_path / "state"
     _write_json(
         state_dir / "operational_state.json",
@@ -573,7 +698,9 @@ def test_select_gate_variants_rejects_ineligible_champion_override(tmp_path: Pat
         )
 
 
-def test_select_gate_variants_uses_backup_when_persisted_champions_are_retired(tmp_path: Path) -> None:
+def test_select_gate_variants_uses_backup_when_persisted_champions_are_retired(
+    tmp_path: Path,
+) -> None:
     state_dir = tmp_path / "state"
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -615,8 +742,16 @@ def test_select_gate_variants_uses_backup_when_persisted_champions_are_retired(t
     )
     roster = {
         "variants": [
-            {"id": "gpt-5.3-codex-medium", "state": "retired", "task_classes": ["phase_review"]},
-            {"id": "gpt-5.4-medium", "state": "active", "task_classes": ["phase_review"]},
+            {
+                "id": "gpt-5.3-codex-medium",
+                "state": "retired",
+                "task_classes": ["phase_review"],
+            },
+            {
+                "id": "gpt-5.4-medium",
+                "state": "active",
+                "task_classes": ["phase_review"],
+            },
         ]
     }
 
@@ -629,11 +764,16 @@ def test_select_gate_variants_uses_backup_when_persisted_champions_are_retired(t
     )
 
     assert selection.mode == "provisional_backup_double_pass"
-    assert [variant["id"] for variant in selection.variants] == ["gpt-5.4-medium", "gpt-5.4-medium"]
+    assert [variant["id"] for variant in selection.variants] == [
+        "gpt-5.4-medium",
+        "gpt-5.4-medium",
+    ]
     assert selection.champion_ids == ()
 
 
-def test_select_gate_variants_falls_through_provisional_backup_order_when_primary_is_cooling(tmp_path: Path) -> None:
+def test_select_gate_variants_falls_through_provisional_backup_order_when_primary_is_cooling(
+    tmp_path: Path,
+) -> None:
     state_dir = tmp_path / "state"
     _write_json(
         state_dir / "operational_state.json",
@@ -643,7 +783,10 @@ def test_select_gate_variants_falls_through_provisional_backup_order_when_primar
                 "phase_review": {
                     "champion_variant_ids": [],
                     "cooldowns": {
-                        "gpt-5.4-medium": {"until": "2099-01-01T00:00:00Z", "failure_count": 1}
+                        "gpt-5.4-medium": {
+                            "until": "2099-01-01T00:00:00Z",
+                            "failure_count": 1,
+                        }
                     },
                     "probation_variant_ids": [],
                     "stable_variant_ids": [],
@@ -661,13 +804,23 @@ def test_select_gate_variants_falls_through_provisional_backup_order_when_primar
     )
     roster = {
         "variants": [
-            {"id": "gpt-5.5-medium", "state": "active", "task_classes": ["phase_review"]},
-            {"id": "gpt-5.4-medium", "state": "active", "task_classes": ["phase_review"]},
+            {
+                "id": "gpt-5.5-medium",
+                "state": "active",
+                "task_classes": ["phase_review"],
+            },
+            {
+                "id": "gpt-5.4-medium",
+                "state": "active",
+                "task_classes": ["phase_review"],
+            },
             {"id": "gpt-5.4-high", "state": "active", "task_classes": ["phase_review"]},
         ]
     }
 
-    selection = _select_gate_variants(roster=roster, state_dir=state_dir, gate_task_class="phase_gate")
+    selection = _select_gate_variants(
+        roster=roster, state_dir=state_dir, gate_task_class="phase_gate"
+    )
 
     assert selection.mode == "provisional_backup_4_pass"
     assert [variant["id"] for variant in selection.variants] == [
@@ -678,7 +831,9 @@ def test_select_gate_variants_falls_through_provisional_backup_order_when_primar
     ]
 
 
-def test_select_gate_variants_excludes_probation_from_supplied_roster_fallback(tmp_path: Path) -> None:
+def test_select_gate_variants_excludes_probation_from_supplied_roster_fallback(
+    tmp_path: Path,
+) -> None:
     state_dir = tmp_path / "state"
     _write_json(
         state_dir / "operational_state.json",
@@ -709,13 +864,22 @@ def test_select_gate_variants_excludes_probation_from_supplied_roster_fallback(t
         ]
     }
 
-    selection = _select_gate_variants(roster=roster, state_dir=state_dir, gate_task_class="phase_gate")
+    selection = _select_gate_variants(
+        roster=roster, state_dir=state_dir, gate_task_class="phase_gate"
+    )
 
     assert selection.mode == "provisional_backup_4_pass"
-    assert [variant["id"] for variant in selection.variants] == ["fallback", "fallback", "fallback", "fallback"]
+    assert [variant["id"] for variant in selection.variants] == [
+        "fallback",
+        "fallback",
+        "fallback",
+        "fallback",
+    ]
 
 
-def test_select_gate_variants_uses_pr_gate_configured_discovery_without_champions(tmp_path: Path) -> None:
+def test_select_gate_variants_uses_pr_gate_configured_discovery_without_champions(
+    tmp_path: Path,
+) -> None:
     state_dir = tmp_path / "state"
     _write_json(
         state_dir / "operational_state.json",
@@ -732,7 +896,10 @@ def test_select_gate_variants_uses_pr_gate_configured_discovery_without_champion
                 "pr_review": {
                     "champion_variant_ids": [],
                     "cooldowns": {
-                        "gpt-5.5-xhigh": {"until": "2099-01-01T00:00:00Z", "failure_count": 1}
+                        "gpt-5.5-xhigh": {
+                            "until": "2099-01-01T00:00:00Z",
+                            "failure_count": 1,
+                        }
                     },
                     "probation_variant_ids": [],
                     "stable_variant_ids": [],
@@ -749,10 +916,15 @@ def test_select_gate_variants_uses_pr_gate_configured_discovery_without_champion
         ]
     }
 
-    selection = _select_gate_variants(roster=roster, state_dir=state_dir, gate_task_class="pr_gate")
+    selection = _select_gate_variants(
+        roster=roster, state_dir=state_dir, gate_task_class="pr_gate"
+    )
 
     assert selection.mode == "configured_discovery_double_pass"
-    assert [variant["id"] for variant in selection.variants] == ["gpt-5.4-xhigh", "gpt-5.4-xhigh"]
+    assert [variant["id"] for variant in selection.variants] == [
+        "gpt-5.4-xhigh",
+        "gpt-5.4-xhigh",
+    ]
 
 
 def test_snapshot_queue_item_preserves_retry_after() -> None:
@@ -775,7 +947,9 @@ def test_snapshot_queue_item_preserves_retry_after() -> None:
     assert snapshot["retry_delay_seconds"] == 12.5
 
 
-def test_aggregate_gate_records_tracks_sequences_and_model_metrics(tmp_path: Path) -> None:
+def test_aggregate_gate_records_tracks_sequences_and_model_metrics(
+    tmp_path: Path,
+) -> None:
     state_dir = tmp_path / "state"
     operational_state = {
         "generated_at": "2026-04-14T00:00:00Z",
@@ -803,7 +977,10 @@ def test_aggregate_gate_records_tracks_sequences_and_model_metrics(tmp_path: Pat
             "task_id": "feature-a",
             "review_cwd_normalized": "repo",
             "green": False,
-            "runs": [_gate_run("alpha", verdict="findings"), _gate_run("bravo", verdict="findings")],
+            "runs": [
+                _gate_run("alpha", verdict="findings"),
+                _gate_run("bravo", verdict="findings"),
+            ],
         },
         {
             "recorded_at": "2026-04-14T00:10:00Z",
@@ -811,7 +988,10 @@ def test_aggregate_gate_records_tracks_sequences_and_model_metrics(tmp_path: Pat
             "task_id": "feature-a",
             "review_cwd_normalized": "repo",
             "green": True,
-            "runs": [_gate_run("alpha", verdict="clean"), _gate_run("bravo", verdict="clean")],
+            "runs": [
+                _gate_run("alpha", verdict="clean"),
+                _gate_run("bravo", verdict="clean"),
+            ],
         },
         {
             "recorded_at": "2026-04-14T01:00:00Z",
@@ -819,21 +999,33 @@ def test_aggregate_gate_records_tracks_sequences_and_model_metrics(tmp_path: Pat
             "task_id": "feature-b",
             "review_cwd_normalized": "repo",
             "green": True,
-            "runs": [_gate_run("alpha", verdict="clean"), _gate_run("bravo", verdict="clean")],
+            "runs": [
+                _gate_run("alpha", verdict="clean"),
+                _gate_run("bravo", verdict="clean"),
+            ],
         },
     ]
     _write_json(state_dir / "operational_state.json", operational_state)
-    (state_dir / "gate_runs.jsonl").write_text("\n".join(json.dumps(row) for row in records) + "\n", encoding="utf-8")
+    (state_dir / "gate_runs.jsonl").write_text(
+        "\n".join(json.dumps(row) for row in records) + "\n", encoding="utf-8"
+    )
 
-    summary = aggregate_gate_records(state_dir=state_dir, operational_state=operational_state)
-    rows = {row["variant_id"]: row for row in summary["task_classes"]["phase_gate"]["leaderboard"]}
+    summary = aggregate_gate_records(
+        state_dir=state_dir, operational_state=operational_state
+    )
+    rows = {
+        row["variant_id"]: row
+        for row in summary["task_classes"]["phase_gate"]["leaderboard"]
+    }
 
     assert rows["alpha"]["runs"] == 3
     assert rows["alpha"]["runs"] == 3
     assert rows["alpha"]["blocker_pct"] == 0.0
 
 
-def test_aggregate_gate_records_skips_blocked_rounds_and_late_join_penalties(tmp_path: Path) -> None:
+def test_aggregate_gate_records_skips_blocked_rounds_and_late_join_penalties(
+    tmp_path: Path,
+) -> None:
     state_dir = tmp_path / "state"
     operational_state = {
         "generated_at": "2026-04-14T00:00:00Z",
@@ -861,7 +1053,10 @@ def test_aggregate_gate_records_skips_blocked_rounds_and_late_join_penalties(tmp
             "task_id": "feature-a",
             "review_cwd_normalized": "repo",
             "green": False,
-            "runs": [_gate_run("alpha", verdict="blocked"), _gate_run("bravo", verdict="blocked")],
+            "runs": [
+                _gate_run("alpha", verdict="blocked"),
+                _gate_run("bravo", verdict="blocked"),
+            ],
         },
         {
             "recorded_at": "2026-04-14T00:10:00Z",
@@ -869,7 +1064,10 @@ def test_aggregate_gate_records_skips_blocked_rounds_and_late_join_penalties(tmp
             "task_id": "feature-a",
             "review_cwd_normalized": "repo",
             "green": False,
-            "runs": [_gate_run("charlie", verdict="findings"), _gate_run("delta", verdict="findings")],
+            "runs": [
+                _gate_run("charlie", verdict="findings"),
+                _gate_run("delta", verdict="findings"),
+            ],
         },
         {
             "recorded_at": "2026-04-14T00:20:00Z",
@@ -877,14 +1075,24 @@ def test_aggregate_gate_records_skips_blocked_rounds_and_late_join_penalties(tmp
             "task_id": "feature-a",
             "review_cwd_normalized": "repo",
             "green": True,
-            "runs": [_gate_run("charlie", verdict="clean"), _gate_run("delta", verdict="clean")],
+            "runs": [
+                _gate_run("charlie", verdict="clean"),
+                _gate_run("delta", verdict="clean"),
+            ],
         },
     ]
     _write_json(state_dir / "operational_state.json", operational_state)
-    (state_dir / "gate_runs.jsonl").write_text("\n".join(json.dumps(row) for row in records) + "\n", encoding="utf-8")
+    (state_dir / "gate_runs.jsonl").write_text(
+        "\n".join(json.dumps(row) for row in records) + "\n", encoding="utf-8"
+    )
 
-    summary = aggregate_gate_records(state_dir=state_dir, operational_state=operational_state)
-    rows = {row["variant_id"]: row for row in summary["task_classes"]["phase_gate"]["leaderboard"]}
+    summary = aggregate_gate_records(
+        state_dir=state_dir, operational_state=operational_state
+    )
+    rows = {
+        row["variant_id"]: row
+        for row in summary["task_classes"]["phase_gate"]["leaderboard"]
+    }
 
     assert rows["charlie"]["runs"] == 2
     assert rows["charlie"]["blocker_pct"] == 0.0
@@ -892,7 +1100,9 @@ def test_aggregate_gate_records_skips_blocked_rounds_and_late_join_penalties(tmp
     assert rows["alpha"]["blocker_pct"] == 100.0
 
 
-def test_aggregate_gate_records_sorts_leaderboard_by_runs_before_blocker_rate(tmp_path: Path) -> None:
+def test_aggregate_gate_records_sorts_leaderboard_by_runs_before_blocker_rate(
+    tmp_path: Path,
+) -> None:
     state_dir = tmp_path / "state"
     operational_state = {
         "generated_at": "2026-04-14T00:00:00Z",
@@ -919,7 +1129,10 @@ def test_aggregate_gate_records_sorts_leaderboard_by_runs_before_blocker_rate(tm
             "task_class": "phase_gate",
             "task_id": "feature-a",
             "review_cwd_normalized": "repo",
-            "runs": [_gate_run("many", verdict="blocked"), _gate_run("few", verdict="clean")],
+            "runs": [
+                _gate_run("many", verdict="blocked"),
+                _gate_run("few", verdict="clean"),
+            ],
         },
         {
             "recorded_at": "2026-04-14T00:10:00Z",
@@ -930,15 +1143,21 @@ def test_aggregate_gate_records_sorts_leaderboard_by_runs_before_blocker_rate(tm
         },
     ]
     _write_json(state_dir / "operational_state.json", operational_state)
-    (state_dir / "gate_runs.jsonl").write_text("\n".join(json.dumps(row) for row in records) + "\n", encoding="utf-8")
+    (state_dir / "gate_runs.jsonl").write_text(
+        "\n".join(json.dumps(row) for row in records) + "\n", encoding="utf-8"
+    )
 
-    summary = aggregate_gate_records(state_dir=state_dir, operational_state=operational_state)
+    summary = aggregate_gate_records(
+        state_dir=state_dir, operational_state=operational_state
+    )
     rows = summary["task_classes"]["phase_gate"]["leaderboard"]
 
     assert [row["variant_id"] for row in rows[:2]] == ["many", "few"]
 
 
-def test_aggregate_gate_records_reports_gate_primary_for_gate_champions(tmp_path: Path) -> None:
+def test_aggregate_gate_records_reports_gate_primary_for_gate_champions(
+    tmp_path: Path,
+) -> None:
     state_dir = tmp_path / "state"
     operational_state = {
         "generated_at": "2026-04-14T00:00:00Z",
@@ -963,7 +1182,9 @@ def test_aggregate_gate_records_reports_gate_primary_for_gate_champions(tmp_path
     _write_json(state_dir / "operational_state.json", operational_state)
     (state_dir / "gate_runs.jsonl").write_text("", encoding="utf-8")
 
-    summary = aggregate_gate_records(state_dir=state_dir, operational_state=operational_state)
+    summary = aggregate_gate_records(
+        state_dir=state_dir, operational_state=operational_state
+    )
 
     assert summary["task_classes"]["phase_gate"]["champions"] == ["gpt-5.5-medium"]
     assert summary["task_classes"]["phase_gate"]["leaderboard"] == [
@@ -1165,7 +1386,9 @@ def test_summarize_gate_round_keeps_signoff_pending_for_non_blocked_outputs() ->
     assert payload["status"] == "signoff_pending"
 
 
-def test_run_gate_round_retries_operational_block_once(monkeypatch, tmp_path: Path, capsys) -> None:
+def test_run_gate_round_retries_operational_block_once(
+    monkeypatch, tmp_path: Path, capsys
+) -> None:
     state_dir = tmp_path / "state"
     review_cwd = tmp_path / "repo"
     review_cwd.mkdir()
@@ -1203,7 +1426,9 @@ def test_run_gate_round_retries_operational_block_once(monkeypatch, tmp_path: Pa
             return None
 
     monkeypatch.setattr("review_gate.subprocess.Popen", FakeProc)
-    monkeypatch.setattr("review_gate.ensure_clean_git_worktree", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "review_gate.ensure_clean_git_worktree", lambda *args, **kwargs: None
+    )
     monkeypatch.setattr("review_gate.load_roster", lambda path: {})
     monkeypatch.setattr(
         "review_gate._select_gate_variants",
@@ -1226,7 +1451,9 @@ def test_run_gate_round_retries_operational_block_once(monkeypatch, tmp_path: Pa
 
     launches: list[tuple[str, int]] = []
 
-    def fake_launch_gate_run(*, slot: str, variant: dict[str, object], retry_attempts: int, **kwargs) -> dict[str, object]:
+    def fake_launch_gate_run(
+        *, slot: str, variant: dict[str, object], retry_attempts: int, **kwargs
+    ) -> dict[str, object]:
         launches.append((slot, retry_attempts))
         stdout_path = tmp_path / f"{slot}-{retry_attempts}.stdout"
         stderr_path = tmp_path / f"{slot}-{retry_attempts}.stderr"
@@ -1250,7 +1477,9 @@ def test_run_gate_round_retries_operational_block_once(monkeypatch, tmp_path: Pa
 
     attempts = {"alpha": 0, "bravo": 0}
 
-    def fake_collect_completed_review_capture(*, slot: str, variant_id: str, **kwargs) -> dict[str, object]:
+    def fake_collect_completed_review_capture(
+        *, slot: str, variant_id: str, **kwargs
+    ) -> dict[str, object]:
         attempts[slot] += 1
         if slot == "alpha" and attempts[slot] == 1:
             return {
@@ -1282,7 +1511,10 @@ def test_run_gate_round_retries_operational_block_once(monkeypatch, tmp_path: Pa
             "elapsed_seconds": 1.0,
         }
 
-    monkeypatch.setattr("review_gate.collect_completed_review_capture", fake_collect_completed_review_capture)
+    monkeypatch.setattr(
+        "review_gate.collect_completed_review_capture",
+        fake_collect_completed_review_capture,
+    )
     monkeypatch.setattr("review_gate._print_live_gate_completed_run", lambda run: None)
     cost_refreshes: list[dict[str, object]] = []
     monkeypatch.setattr(
@@ -1312,7 +1544,13 @@ def test_run_gate_round_retries_operational_block_once(monkeypatch, tmp_path: Pa
     assert payload["action"]["verdict"] == ["clean", "findings"]
     assert "show_cmd" not in payload["action"]
     assert "scope_check" not in payload["action"]
-    stored = [json.loads(line) for line in (state_dir / "gate_runs.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
+    stored = [
+        json.loads(line)
+        for line in (state_dir / "gate_runs.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
     assert len(stored) == 1
     assert stored[0]["signoff_status"] == "pending"
     assert len(stored[0]["retry_runs"]) == 1
@@ -1327,7 +1565,9 @@ def test_run_gate_round_retries_operational_block_once(monkeypatch, tmp_path: Pa
     assert "xhigh" not in captured.err
 
 
-def test_run_gate_round_replaces_exhausted_gate_reviewer_with_inline_fallback(monkeypatch, tmp_path: Path) -> None:
+def test_run_gate_round_replaces_exhausted_gate_reviewer_with_inline_fallback(
+    monkeypatch, tmp_path: Path
+) -> None:
     state_dir = tmp_path / "state"
     review_cwd = tmp_path / "repo"
     review_cwd.mkdir()
@@ -1365,13 +1605,30 @@ def test_run_gate_round_replaces_exhausted_gate_reviewer_with_inline_fallback(mo
 
     roster = {
         "variants": [
-            {"id": "gpt-5.4-medium", "model": "gpt-5.4", "reasoning_effort": "medium", "task_classes": ["phase_review"]},
-            {"id": "gpt-5.5-medium", "model": "gpt-5.5", "reasoning_effort": "medium", "task_classes": ["phase_review"]},
-            {"id": "bravo-model", "model": "gpt-5.5", "reasoning_effort": "medium", "task_classes": ["phase_review"]},
+            {
+                "id": "gpt-5.4-medium",
+                "model": "gpt-5.4",
+                "reasoning_effort": "medium",
+                "task_classes": ["phase_review"],
+            },
+            {
+                "id": "gpt-5.5-medium",
+                "model": "gpt-5.5",
+                "reasoning_effort": "medium",
+                "task_classes": ["phase_review"],
+            },
+            {
+                "id": "bravo-model",
+                "model": "gpt-5.5",
+                "reasoning_effort": "medium",
+                "task_classes": ["phase_review"],
+            },
         ]
     }
     monkeypatch.setattr("review_gate.subprocess.Popen", FakeProc)
-    monkeypatch.setattr("review_gate.ensure_clean_git_worktree", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "review_gate.ensure_clean_git_worktree", lambda *args, **kwargs: None
+    )
     monkeypatch.setattr("review_gate.load_roster", lambda path: roster)
     monkeypatch.setattr("review_gate._gate_retry_delay_seconds", lambda reason: 0)
     monkeypatch.setattr("review_gate.OPERATIONAL_RETRY_DELAY_SECONDS", 0)
@@ -1386,13 +1643,17 @@ def test_run_gate_round_replaces_exhausted_gate_reviewer_with_inline_fallback(mo
             champion_ids=("gpt-5.4-medium", "bravo-model"),
         ),
     )
-    monkeypatch.setattr("review_gate.make_round_id", lambda *args, **kwargs: "gate-inline-fallback")
+    monkeypatch.setattr(
+        "review_gate.make_round_id", lambda *args, **kwargs: "gate-inline-fallback"
+    )
     monkeypatch.setattr("review_gate._current_branch_name", lambda path: "feature/test")
     monkeypatch.setattr("review_gate.time.sleep", lambda seconds: None)
 
     launches: list[tuple[str, str, int]] = []
 
-    def fake_launch_gate_run(*, slot: str, variant: dict[str, object], retry_attempts: int, **kwargs) -> dict[str, object]:
+    def fake_launch_gate_run(
+        *, slot: str, variant: dict[str, object], retry_attempts: int, **kwargs
+    ) -> dict[str, object]:
         variant_id = str(variant["id"])
         launches.append((slot, variant_id, retry_attempts))
         stdout_path = tmp_path / f"{slot}-{variant_id}-{retry_attempts}.stdout"
@@ -1415,7 +1676,9 @@ def test_run_gate_round_replaces_exhausted_gate_reviewer_with_inline_fallback(mo
 
     monkeypatch.setattr("review_gate._launch_gate_run", fake_launch_gate_run)
 
-    def fake_collect_completed_review_capture(*, slot: str, variant_id: str, **kwargs) -> dict[str, object]:
+    def fake_collect_completed_review_capture(
+        *, slot: str, variant_id: str, **kwargs
+    ) -> dict[str, object]:
         blocked = slot == "alpha" and variant_id == "gpt-5.4-medium"
         return {
             "slot": slot,
@@ -1432,9 +1695,14 @@ def test_run_gate_round_replaces_exhausted_gate_reviewer_with_inline_fallback(mo
             "elapsed_seconds": 1.0,
         }
 
-    monkeypatch.setattr("review_gate.collect_completed_review_capture", fake_collect_completed_review_capture)
+    monkeypatch.setattr(
+        "review_gate.collect_completed_review_capture",
+        fake_collect_completed_review_capture,
+    )
     monkeypatch.setattr("review_gate._print_live_gate_completed_run", lambda run: None)
-    monkeypatch.setattr("review_gate.refresh_review_cost_report_best_effort", lambda **kwargs: None)
+    monkeypatch.setattr(
+        "review_gate.refresh_review_cost_report_best_effort", lambda **kwargs: None
+    )
 
     payload, exit_code = run_gate_round(
         gate_task_class="phase_gate",
@@ -1453,16 +1721,29 @@ def test_run_gate_round_replaces_exhausted_gate_reviewer_with_inline_fallback(mo
     assert exit_code == 0
     assert payload["status"] == "signoff_pending"
     assert ("alpha", "gpt-5.5-medium", 0) in launches
-    stored = [json.loads(line) for line in (state_dir / "gate_runs.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
-    assert [run["variant_id"] for run in stored[0]["runs"]] == ["bravo-model", "gpt-5.5-medium"]
+    stored = [
+        json.loads(line)
+        for line in (state_dir / "gate_runs.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
+    assert [run["variant_id"] for run in stored[0]["runs"]] == [
+        "bravo-model",
+        "gpt-5.5-medium",
+    ]
     assert len(stored[0]["retry_runs"]) == 2
     assert stored[0]["retry_runs"][-1]["cooldown_eligible"] is True
-    op_state = json.loads((state_dir / "operational_state.json").read_text(encoding="utf-8"))
+    op_state = json.loads(
+        (state_dir / "operational_state.json").read_text(encoding="utf-8")
+    )
     cooldown = op_state["task_classes"]["phase_review"]["cooldowns"]["gpt-5.4-medium"]
     assert cooldown["last_reason"] == "review_interrupted"
 
 
-def test_run_gate_round_inline_fallback_skips_cooling_backup(monkeypatch, tmp_path: Path) -> None:
+def test_run_gate_round_inline_fallback_skips_cooling_backup(
+    monkeypatch, tmp_path: Path
+) -> None:
     state_dir = tmp_path / "state"
     review_cwd = tmp_path / "repo"
     review_cwd.mkdir()
@@ -1473,7 +1754,12 @@ def test_run_gate_round_inline_fallback_skips_cooling_backup(monkeypatch, tmp_pa
             "task_classes": {
                 "phase_review": {
                     "champion_variant_ids": ["gpt-5.4-medium", "bravo-model"],
-                    "cooldowns": {"gpt-5.5-medium": {"until": "2099-01-01T00:00:00Z", "failure_count": 1}},
+                    "cooldowns": {
+                        "gpt-5.5-medium": {
+                            "until": "2099-01-01T00:00:00Z",
+                            "failure_count": 1,
+                        }
+                    },
                     "probation_variant_ids": [],
                     "stable_variant_ids": [],
                     "mode": "champion",
@@ -1500,14 +1786,36 @@ def test_run_gate_round_inline_fallback_skips_cooling_backup(monkeypatch, tmp_pa
 
     roster = {
         "variants": [
-            {"id": "gpt-5.4-medium", "model": "gpt-5.4", "reasoning_effort": "medium", "task_classes": ["phase_review"]},
-            {"id": "gpt-5.5-medium", "model": "gpt-5.5", "reasoning_effort": "medium", "task_classes": ["phase_review"]},
-            {"id": "gpt-5.4-high", "model": "gpt-5.4", "reasoning_effort": "high", "task_classes": ["phase_review"]},
-            {"id": "bravo-model", "model": "gpt-5.5", "reasoning_effort": "medium", "task_classes": ["phase_review"]},
+            {
+                "id": "gpt-5.4-medium",
+                "model": "gpt-5.4",
+                "reasoning_effort": "medium",
+                "task_classes": ["phase_review"],
+            },
+            {
+                "id": "gpt-5.5-medium",
+                "model": "gpt-5.5",
+                "reasoning_effort": "medium",
+                "task_classes": ["phase_review"],
+            },
+            {
+                "id": "gpt-5.4-high",
+                "model": "gpt-5.4",
+                "reasoning_effort": "high",
+                "task_classes": ["phase_review"],
+            },
+            {
+                "id": "bravo-model",
+                "model": "gpt-5.5",
+                "reasoning_effort": "medium",
+                "task_classes": ["phase_review"],
+            },
         ]
     }
     monkeypatch.setattr("review_gate.subprocess.Popen", FakeProc)
-    monkeypatch.setattr("review_gate.ensure_clean_git_worktree", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "review_gate.ensure_clean_git_worktree", lambda *args, **kwargs: None
+    )
     monkeypatch.setattr("review_gate.load_roster", lambda path: roster)
     monkeypatch.setattr("review_gate._gate_retry_delay_seconds", lambda reason: 0)
     monkeypatch.setattr("review_gate.OPERATIONAL_RETRY_DELAY_SECONDS", 0)
@@ -1522,13 +1830,18 @@ def test_run_gate_round_inline_fallback_skips_cooling_backup(monkeypatch, tmp_pa
             champion_ids=("gpt-5.4-medium", "bravo-model"),
         ),
     )
-    monkeypatch.setattr("review_gate.make_round_id", lambda *args, **kwargs: "gate-inline-cooling-fallback")
+    monkeypatch.setattr(
+        "review_gate.make_round_id",
+        lambda *args, **kwargs: "gate-inline-cooling-fallback",
+    )
     monkeypatch.setattr("review_gate._current_branch_name", lambda path: "feature/test")
     monkeypatch.setattr("review_gate.time.sleep", lambda seconds: None)
 
     launches: list[tuple[str, str, int]] = []
 
-    def fake_launch_gate_run(*, slot: str, variant: dict[str, object], retry_attempts: int, **kwargs) -> dict[str, object]:
+    def fake_launch_gate_run(
+        *, slot: str, variant: dict[str, object], retry_attempts: int, **kwargs
+    ) -> dict[str, object]:
         variant_id = str(variant["id"])
         launches.append((slot, variant_id, retry_attempts))
         stdout_path = tmp_path / f"{slot}-{variant_id}-{retry_attempts}.stdout"
@@ -1555,10 +1868,16 @@ def test_run_gate_round_inline_fallback_skips_cooling_backup(monkeypatch, tmp_pa
         lambda slot, variant_id, **kwargs: {
             "slot": slot,
             "variant_id": variant_id,
-            "review_status": "interrupted" if slot == "alpha" and variant_id == "gpt-5.4-medium" else "completed",
-            "status_summary": "interrupted" if slot == "alpha" and variant_id == "gpt-5.4-medium" else "No findings.",
+            "review_status": "interrupted"
+            if slot == "alpha" and variant_id == "gpt-5.4-medium"
+            else "completed",
+            "status_summary": "interrupted"
+            if slot == "alpha" and variant_id == "gpt-5.4-medium"
+            else "No findings.",
             "grade_blocked": slot == "alpha" and variant_id == "gpt-5.4-medium",
-            "grade_block_reason": "review_interrupted" if slot == "alpha" and variant_id == "gpt-5.4-medium" else None,
+            "grade_block_reason": "review_interrupted"
+            if slot == "alpha" and variant_id == "gpt-5.4-medium"
+            else None,
             "reviewer_output": "",
             "reviewer_output_ref": None,
             "usage": {},
@@ -1568,7 +1887,9 @@ def test_run_gate_round_inline_fallback_skips_cooling_backup(monkeypatch, tmp_pa
         },
     )
     monkeypatch.setattr("review_gate._print_live_gate_completed_run", lambda run: None)
-    monkeypatch.setattr("review_gate.refresh_review_cost_report_best_effort", lambda **kwargs: None)
+    monkeypatch.setattr(
+        "review_gate.refresh_review_cost_report_best_effort", lambda **kwargs: None
+    )
 
     payload, exit_code = run_gate_round(
         gate_task_class="phase_gate",
@@ -1669,8 +1990,16 @@ def test_run_gate_round_resumes_partial_snapshot(monkeypatch, tmp_path: Path) ->
                 "selection_mode": "dual_champion",
                 "selection_champion_variant_ids": ["alpha-model", "bravo-model"],
                 "selection_variants": [
-                    {"id": "alpha-model", "model": "gpt-5.4", "reasoning_effort": "xhigh"},
-                    {"id": "bravo-model", "model": "gpt-5.4", "reasoning_effort": "xhigh"},
+                    {
+                        "id": "alpha-model",
+                        "model": "gpt-5.4",
+                        "reasoning_effort": "xhigh",
+                    },
+                    {
+                        "id": "bravo-model",
+                        "model": "gpt-5.4",
+                        "reasoning_effort": "xhigh",
+                    },
                 ],
                 "round_started_at": "",
                 "completed_runs": [
@@ -1695,7 +2024,11 @@ def test_run_gate_round_resumes_partial_snapshot(monkeypatch, tmp_path: Path) ->
                 "active": [
                     {
                         "slot": "bravo",
-                        "variant": {"id": "bravo-model", "model": "gpt-5.4", "reasoning_effort": "xhigh"},
+                        "variant": {
+                            "id": "bravo-model",
+                            "model": "gpt-5.4",
+                            "reasoning_effort": "xhigh",
+                        },
                         "retry_attempts": 0,
                     }
                 ],
@@ -1703,7 +2036,10 @@ def test_run_gate_round_resumes_partial_snapshot(monkeypatch, tmp_path: Path) ->
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr("review_gate._load_gate_partial", lambda path: json.loads(partial_path.read_text(encoding="utf-8")))
+    monkeypatch.setattr(
+        "review_gate._load_gate_partial",
+        lambda path: json.loads(partial_path.read_text(encoding="utf-8")),
+    )
     monkeypatch.setattr("review_gate.utc_now_iso", lambda: "2026-04-14T00:00:30Z")
 
     class FakeProc:
@@ -1718,7 +2054,9 @@ def test_run_gate_round_resumes_partial_snapshot(monkeypatch, tmp_path: Path) ->
 
     launches: list[str] = []
 
-    def fake_launch_gate_run(*, slot: str, variant: dict[str, object], retry_attempts: int, **kwargs) -> dict[str, object]:
+    def fake_launch_gate_run(
+        *, slot: str, variant: dict[str, object], retry_attempts: int, **kwargs
+    ) -> dict[str, object]:
         launches.append(slot)
         stdout_path = tmp_path / f"{slot}.stdout"
         stderr_path = tmp_path / f"{slot}.stderr"
@@ -1739,7 +2077,9 @@ def test_run_gate_round_resumes_partial_snapshot(monkeypatch, tmp_path: Path) ->
         }
 
     monkeypatch.setattr("review_gate.subprocess.Popen", FakeProc)
-    monkeypatch.setattr("review_gate.ensure_clean_git_worktree", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "review_gate.ensure_clean_git_worktree", lambda *args, **kwargs: None
+    )
     monkeypatch.setattr("review_gate.load_roster", lambda path: {})
     monkeypatch.setattr("review_gate._launch_gate_run", fake_launch_gate_run)
     monkeypatch.setattr(
@@ -1780,15 +2120,21 @@ def test_run_gate_round_resumes_partial_snapshot(monkeypatch, tmp_path: Path) ->
     assert payload["status"] == "signoff_pending"
     records = [
         json.loads(line)
-        for line in (state_dir / "gate_runs.jsonl").read_text(encoding="utf-8").splitlines()
+        for line in (state_dir / "gate_runs.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
         if line.strip()
     ]
     assert records[0]["round_started_at"] == "2026-04-14T00:00:30Z"
     assert not partial_path.exists()
 
 
-def test_cleanup_stale_gate_partials_archives_non_live_partial(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setattr("review_gate.utc_now", lambda: datetime(2026, 5, 3, 12, 0, tzinfo=timezone.utc))
+def test_cleanup_stale_gate_partials_archives_non_live_partial(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        "review_gate.utc_now", lambda: datetime(2026, 5, 3, 12, 0, tzinfo=timezone.utc)
+    )
     monkeypatch.setattr("review_gate._process_is_running", lambda pid: False)
     partial_path = tmp_path / "gate_partials" / "pr_gate-deadbeef.json"
     _write_json(
@@ -1809,15 +2155,21 @@ def test_cleanup_stale_gate_partials_archives_non_live_partial(monkeypatch: pyte
     assert cleaned[0]["round_id"] == "old-gate-round"
     assert cleaned[0]["reason"] == "auto_stale_gate_partial_24h"
     assert not partial_path.exists()
-    archived = list((tmp_path / "gate_partials" / "dismissed").glob("pr_gate-deadbeef-stale-*.json"))
+    archived = list(
+        (tmp_path / "gate_partials" / "dismissed").glob("pr_gate-deadbeef-stale-*.json")
+    )
     assert len(archived) == 1
     payload = json.loads(archived[0].read_text(encoding="utf-8"))
     assert payload["status"] == "dismissed"
     assert payload["dismissed_reason"] == "auto_stale_gate_partial_24h"
 
 
-def test_cleanup_stale_gate_partials_keeps_live_partial(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setattr("review_gate.utc_now", lambda: datetime(2026, 5, 3, 12, 0, tzinfo=timezone.utc))
+def test_cleanup_stale_gate_partials_keeps_live_partial(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        "review_gate.utc_now", lambda: datetime(2026, 5, 3, 12, 0, tzinfo=timezone.utc)
+    )
     monkeypatch.setattr("review_gate._process_is_running", lambda pid: True)
     partial_path = tmp_path / "gate_partials" / "pr_gate-live.json"
     _write_json(
@@ -1837,9 +2189,15 @@ def test_cleanup_stale_gate_partials_keeps_live_partial(monkeypatch: pytest.Monk
     assert partial_path.exists()
 
 
-def test_cleanup_stale_gate_partials_archives_recorded_final_partial(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setattr("review_gate.utc_now", lambda: datetime(2026, 5, 3, 12, 0, tzinfo=timezone.utc))
-    monkeypatch.setattr("review_gate._gate_round_already_recorded", lambda state_dir, round_id: True)
+def test_cleanup_stale_gate_partials_archives_recorded_final_partial(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        "review_gate.utc_now", lambda: datetime(2026, 5, 3, 12, 0, tzinfo=timezone.utc)
+    )
+    monkeypatch.setattr(
+        "review_gate._gate_round_already_recorded", lambda state_dir, round_id: True
+    )
     partial_path = tmp_path / "gate_partials" / "pr_gate-final.json"
     _write_json(
         partial_path,
@@ -1859,12 +2217,20 @@ def test_cleanup_stale_gate_partials_archives_recorded_final_partial(monkeypatch
 
     assert cleaned[0]["round_id"] == "old-final-gate-round"
     assert not partial_path.exists()
-    assert list((tmp_path / "gate_partials" / "dismissed").glob("pr_gate-final-stale-*.json"))
+    assert list(
+        (tmp_path / "gate_partials" / "dismissed").glob("pr_gate-final-stale-*.json")
+    )
 
 
-def test_cleanup_stale_gate_partials_keeps_unrecorded_final_partial(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setattr("review_gate.utc_now", lambda: datetime(2026, 5, 3, 12, 0, tzinfo=timezone.utc))
-    monkeypatch.setattr("review_gate._gate_round_already_recorded", lambda state_dir, round_id: False)
+def test_cleanup_stale_gate_partials_keeps_unrecorded_final_partial(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        "review_gate.utc_now", lambda: datetime(2026, 5, 3, 12, 0, tzinfo=timezone.utc)
+    )
+    monkeypatch.setattr(
+        "review_gate._gate_round_already_recorded", lambda state_dir, round_id: False
+    )
     partial_path = tmp_path / "gate_partials" / "pr_gate-final-unrecorded.json"
     _write_json(
         partial_path,
@@ -1884,7 +2250,9 @@ def test_cleanup_stale_gate_partials_keeps_unrecorded_final_partial(monkeypatch:
     assert partial_path.exists()
 
 
-def test_run_gate_round_preserves_waiting_retry_delay_on_resume(monkeypatch, tmp_path: Path) -> None:
+def test_run_gate_round_preserves_waiting_retry_delay_on_resume(
+    monkeypatch, tmp_path: Path
+) -> None:
     state_dir = tmp_path / "state"
     review_cwd = tmp_path / "repo"
     review_cwd.mkdir()
@@ -1927,8 +2295,16 @@ def test_run_gate_round_preserves_waiting_retry_delay_on_resume(monkeypatch, tmp
                 "selection_mode": "dual_champion",
                 "selection_champion_variant_ids": ["alpha-model", "bravo-model"],
                 "selection_variants": [
-                    {"id": "alpha-model", "model": "gpt-5.4", "reasoning_effort": "xhigh"},
-                    {"id": "bravo-model", "model": "gpt-5.4", "reasoning_effort": "xhigh"},
+                    {
+                        "id": "alpha-model",
+                        "model": "gpt-5.4",
+                        "reasoning_effort": "xhigh",
+                    },
+                    {
+                        "id": "bravo-model",
+                        "model": "gpt-5.4",
+                        "reasoning_effort": "xhigh",
+                    },
                 ],
                 "completed_runs": [],
                 "retry_runs": [],
@@ -1936,7 +2312,11 @@ def test_run_gate_round_preserves_waiting_retry_delay_on_resume(monkeypatch, tmp
                 "waiting_retry": [
                     {
                         "slot": "alpha",
-                        "variant": {"id": "alpha-model", "model": "gpt-5.4", "reasoning_effort": "xhigh"},
+                        "variant": {
+                            "id": "alpha-model",
+                            "model": "gpt-5.4",
+                            "reasoning_effort": "xhigh",
+                        },
                         "retry_attempts": 1,
                         "retry_delay_seconds": 10.0,
                     }
@@ -1944,7 +2324,11 @@ def test_run_gate_round_preserves_waiting_retry_delay_on_resume(monkeypatch, tmp
                 "active": [
                     {
                         "slot": "bravo",
-                        "variant": {"id": "bravo-model", "model": "gpt-5.4", "reasoning_effort": "xhigh"},
+                        "variant": {
+                            "id": "bravo-model",
+                            "model": "gpt-5.4",
+                            "reasoning_effort": "xhigh",
+                        },
                         "retry_attempts": 0,
                     }
                 ],
@@ -1952,7 +2336,10 @@ def test_run_gate_round_preserves_waiting_retry_delay_on_resume(monkeypatch, tmp
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr("review_gate._load_gate_partial", lambda path: json.loads(partial_path.read_text(encoding="utf-8")))
+    monkeypatch.setattr(
+        "review_gate._load_gate_partial",
+        lambda path: json.loads(partial_path.read_text(encoding="utf-8")),
+    )
 
     class FakeProc:
         def poll(self) -> int:
@@ -1970,8 +2357,12 @@ def test_run_gate_round_preserves_waiting_retry_delay_on_resume(monkeypatch, tmp
 
     launches: list[tuple[str, float, int]] = []
 
-    def fake_launch_gate_run(*, slot: str, variant: dict[str, object], retry_attempts: int, **kwargs) -> dict[str, object]:
-        launches.append((slot, __import__("review_gate").time.monotonic(), retry_attempts))
+    def fake_launch_gate_run(
+        *, slot: str, variant: dict[str, object], retry_attempts: int, **kwargs
+    ) -> dict[str, object]:
+        launches.append(
+            (slot, __import__("review_gate").time.monotonic(), retry_attempts)
+        )
         stdout_path = tmp_path / f"{slot}.stdout"
         stderr_path = tmp_path / f"{slot}.stderr"
         stdout_path.write_text("", encoding="utf-8")
@@ -2022,10 +2413,15 @@ def test_run_gate_round_preserves_waiting_retry_delay_on_resume(monkeypatch, tmp
     }
 
     monkeypatch.setattr("review_gate.subprocess.Popen", FakeProc)
-    monkeypatch.setattr("review_gate.ensure_clean_git_worktree", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "review_gate.ensure_clean_git_worktree", lambda *args, **kwargs: None
+    )
     monkeypatch.setattr("review_gate.load_roster", lambda path: {})
     monkeypatch.setattr("review_gate._launch_gate_run", fake_launch_gate_run)
-    monkeypatch.setattr("review_gate.collect_completed_review_capture", lambda *, slot, **kwargs: outcomes[slot])
+    monkeypatch.setattr(
+        "review_gate.collect_completed_review_capture",
+        lambda *, slot, **kwargs: outcomes[slot],
+    )
     monkeypatch.setattr("review_gate._print_live_gate_completed_run", lambda run: None)
 
     payload, exit_code = run_gate_round(
@@ -2047,7 +2443,9 @@ def test_run_gate_round_preserves_waiting_retry_delay_on_resume(monkeypatch, tmp
     assert payload["status"] == "signoff_pending"
 
 
-def test_run_gate_round_replays_sealed_final_partial_once(monkeypatch, tmp_path: Path) -> None:
+def test_run_gate_round_replays_sealed_final_partial_once(
+    monkeypatch, tmp_path: Path
+) -> None:
     state_dir = tmp_path / "state"
     review_cwd = tmp_path / "repo"
     review_cwd.mkdir()
@@ -2090,8 +2488,16 @@ def test_run_gate_round_replays_sealed_final_partial_once(monkeypatch, tmp_path:
                 "selection_mode": "dual_champion",
                 "selection_champion_variant_ids": ["alpha-model", "bravo-model"],
                 "selection_variants": [
-                    {"id": "alpha-model", "model": "gpt-5.4", "reasoning_effort": "xhigh"},
-                    {"id": "bravo-model", "model": "gpt-5.4", "reasoning_effort": "xhigh"},
+                    {
+                        "id": "alpha-model",
+                        "model": "gpt-5.4",
+                        "reasoning_effort": "xhigh",
+                    },
+                    {
+                        "id": "bravo-model",
+                        "model": "gpt-5.4",
+                        "reasoning_effort": "xhigh",
+                    },
                 ],
                 "completed_runs": [],
                 "retry_runs": [],
@@ -2150,7 +2556,9 @@ def test_run_gate_round_replays_sealed_final_partial_once(monkeypatch, tmp_path:
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr("review_gate.ensure_clean_git_worktree", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "review_gate.ensure_clean_git_worktree", lambda *args, **kwargs: None
+    )
     monkeypatch.setattr("review_gate.load_roster", lambda path: {})
 
     payload, exit_code = run_gate_round(
@@ -2167,7 +2575,13 @@ def test_run_gate_round_replays_sealed_final_partial_once(monkeypatch, tmp_path:
         prompt="",
     )
 
-    stored = [json.loads(line) for line in (state_dir / "gate_runs.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
+    stored = [
+        json.loads(line)
+        for line in (state_dir / "gate_runs.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
     assert len(stored) == 1
     assert stored[0]["round_id"] == "gate-1"
     assert exit_code == 0
@@ -2176,7 +2590,9 @@ def test_run_gate_round_replays_sealed_final_partial_once(monkeypatch, tmp_path:
     assert stored[0]["signoff_status"] == "pending"
 
 
-def test_run_gate_round_replays_sealed_final_partial_refreshes_reports_when_already_recorded(monkeypatch, tmp_path: Path) -> None:
+def test_run_gate_round_replays_sealed_final_partial_refreshes_reports_when_already_recorded(
+    monkeypatch, tmp_path: Path
+) -> None:
     state_dir = tmp_path / "state"
     review_cwd = tmp_path / "repo"
     review_cwd.mkdir()
@@ -2219,8 +2635,16 @@ def test_run_gate_round_replays_sealed_final_partial_refreshes_reports_when_alre
                 "selection_mode": "dual_champion",
                 "selection_champion_variant_ids": ["alpha-model", "bravo-model"],
                 "selection_variants": [
-                    {"id": "alpha-model", "model": "gpt-5.4", "reasoning_effort": "xhigh"},
-                    {"id": "bravo-model", "model": "gpt-5.4", "reasoning_effort": "xhigh"},
+                    {
+                        "id": "alpha-model",
+                        "model": "gpt-5.4",
+                        "reasoning_effort": "xhigh",
+                    },
+                    {
+                        "id": "bravo-model",
+                        "model": "gpt-5.4",
+                        "reasoning_effort": "xhigh",
+                    },
                 ],
                 "completed_runs": [],
                 "retry_runs": [],
@@ -2248,7 +2672,7 @@ def test_run_gate_round_replays_sealed_final_partial_refreshes_reports_when_alre
                             "status_summary": "No findings.",
                             "grade_blocked": False,
                             "grade_block_reason": None,
-                        "elapsed_seconds": 1.0,
+                            "elapsed_seconds": 1.0,
                             "session_id": None,
                             "usage": {},
                             "cost_usd": None,
@@ -2262,7 +2686,7 @@ def test_run_gate_round_replays_sealed_final_partial_refreshes_reports_when_alre
                             "status_summary": "No findings.",
                             "grade_blocked": False,
                             "grade_block_reason": None,
-                        "elapsed_seconds": 1.0,
+                            "elapsed_seconds": 1.0,
                             "session_id": None,
                             "usage": {},
                             "cost_usd": None,
@@ -2275,11 +2699,18 @@ def test_run_gate_round_replays_sealed_final_partial_refreshes_reports_when_alre
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr("review_gate.ensure_clean_git_worktree", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "review_gate.ensure_clean_git_worktree", lambda *args, **kwargs: None
+    )
     monkeypatch.setattr("review_gate.load_roster", lambda path: {})
-    monkeypatch.setattr("review_gate._gate_round_already_recorded", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        "review_gate._gate_round_already_recorded", lambda *args, **kwargs: True
+    )
     refreshed: list[str] = []
-    monkeypatch.setattr("review_gate.refresh_gate_reports", lambda **kwargs: refreshed.append("yes") or {})
+    monkeypatch.setattr(
+        "review_gate.refresh_gate_reports",
+        lambda **kwargs: refreshed.append("yes") or {},
+    )
 
     payload, exit_code = run_gate_round(
         gate_task_class="phase_gate",

@@ -38,7 +38,9 @@ def write_text(value: Any, *, stream: Any | None = None, end: str = "\n") -> Non
         if buffer is not None:
             buffer.write(rendered.encode(encoding, errors="backslashreplace"))
         else:
-            target.write(rendered.encode("ascii", errors="backslashreplace").decode("ascii"))
+            target.write(
+                rendered.encode("ascii", errors="backslashreplace").decode("ascii")
+            )
     flush = getattr(target, "flush", None)
     if callable(flush):
         flush()
@@ -103,7 +105,9 @@ def _emit_field(lines: list[str], depth: int, key: str, value: Any) -> None:
     indent = _INDENT * depth
     encoded_key = _encode_key(key)
     if _is_primitive(value):
-        lines.append(f"{indent}{encoded_key}: {_encode_primitive(value, delimiter=',')}")
+        lines.append(
+            f"{indent}{encoded_key}: {_encode_primitive(value, delimiter=',')}"
+        )
         return
     if isinstance(value, dict):
         lines.append(f"{indent}{encoded_key}:")
@@ -113,16 +117,29 @@ def _emit_field(lines: list[str], depth: int, key: str, value: Any) -> None:
     if isinstance(value, list):
         _emit_array(lines, depth, encoded_key, value)
         return
-    lines.append(f"{indent}{encoded_key}: {_encode_primitive(str(value), delimiter=',')}")
+    lines.append(
+        f"{indent}{encoded_key}: {_encode_primitive(str(value), delimiter=',')}"
+    )
 
 
-def _emit_array(lines: list[str], depth: int, key: str | None, values: list[Any], *, list_item: bool = False) -> None:
+def _emit_array(
+    lines: list[str],
+    depth: int,
+    key: str | None,
+    values: list[Any],
+    *,
+    list_item: bool = False,
+) -> None:
     indent = _INDENT * depth
     prefix = "- " if list_item else ""
     header_start = f"{prefix}{key}" if key else prefix.rstrip()
     if _all_primitives(values):
-        header = f"{header_start}[{len(values)}]:" if header_start else f"[{len(values)}]:"
-        encoded_values = ",".join(_encode_primitive(value, delimiter=",") for value in values)
+        header = (
+            f"{header_start}[{len(values)}]:" if header_start else f"[{len(values)}]:"
+        )
+        encoded_values = ",".join(
+            _encode_primitive(value, delimiter=",") for value in values
+        )
         line = f"{indent}{header}"
         if encoded_values:
             line += f" {encoded_values}"
@@ -131,12 +148,18 @@ def _emit_array(lines: list[str], depth: int, key: str | None, values: list[Any]
     fields = _tabular_fields(values)
     if fields:
         fields_text = ",".join(_encode_key(field) for field in fields)
-        header = f"{header_start}[{len(values)}]{{{fields_text}}}:" if header_start else f"[{len(values)}]{{{fields_text}}}:"
+        header = (
+            f"{header_start}[{len(values)}]{{{fields_text}}}:"
+            if header_start
+            else f"[{len(values)}]{{{fields_text}}}:"
+        )
         lines.append(f"{indent}{header}")
         child_indent = _INDENT * (depth + (2 if list_item else 1))
         for row in values:
             assert isinstance(row, dict)
-            encoded_row = ",".join(_encode_primitive(row.get(field), delimiter=",") for field in fields)
+            encoded_row = ",".join(
+                _encode_primitive(row.get(field), delimiter=",") for field in fields
+            )
             lines.append(f"{child_indent}{encoded_row}")
         return
     header = f"{header_start}[{len(values)}]:" if header_start else f"[{len(values)}]:"
@@ -162,7 +185,9 @@ def _emit_list_item(lines: list[str], depth: int, value: Any) -> None:
         first_key, first_value = items[0]
         encoded_first_key = _encode_key(str(first_key))
         if _is_primitive(first_value):
-            lines.append(f"{indent}- {encoded_first_key}: {_encode_primitive(first_value, delimiter=',')}")
+            lines.append(
+                f"{indent}- {encoded_first_key}: {_encode_primitive(first_value, delimiter=',')}"
+            )
         elif isinstance(first_value, list):
             _emit_array(lines, depth, encoded_first_key, first_value, list_item=True)
         else:
@@ -242,7 +267,10 @@ def _needs_quotes(value: str, *, delimiter: str) -> bool:
         return True
     if value == "-" or value.startswith("-"):
         return True
-    if any(character in value for character in (":", "\"", "\\", "[", "]", "{", "}", delimiter)):
+    if any(
+        character in value
+        for character in (":", '"', "\\", "[", "]", "{", "}", delimiter)
+    ):
         return True
     if any(ord(character) < 32 for character in value):
         return True
@@ -252,9 +280,9 @@ def _needs_quotes(value: str, *, delimiter: str) -> bool:
 def _quote_string(value: str) -> str:
     escaped = (
         value.replace("\\", "\\\\")
-        .replace("\"", "\\\"")
+        .replace('"', '\\"')
         .replace("\n", "\\n")
         .replace("\r", "\\r")
         .replace("\t", "\\t")
     )
-    return f"\"{escaped}\""
+    return f'"{escaped}"'

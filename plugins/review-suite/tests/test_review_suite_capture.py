@@ -101,13 +101,23 @@ def _child_rollout(
     )
 
 
-def test_rollout_activity_summary_ignores_token_count_heartbeats(tmp_path: Path) -> None:
+def test_rollout_activity_summary_ignores_token_count_heartbeats(
+    tmp_path: Path,
+) -> None:
     rollout = tmp_path / "heartbeat-only.jsonl"
     _write_jsonl(
         rollout,
         [
-            {"timestamp": "2026-04-23T20:00:00Z", "type": "session_meta", "payload": {}},
-            {"timestamp": "2026-04-23T20:00:01Z", "type": "turn_context", "payload": {}},
+            {
+                "timestamp": "2026-04-23T20:00:00Z",
+                "type": "session_meta",
+                "payload": {},
+            },
+            {
+                "timestamp": "2026-04-23T20:00:01Z",
+                "type": "turn_context",
+                "payload": {},
+            },
             {
                 "timestamp": "2026-04-23T20:05:01Z",
                 "type": "event_msg",
@@ -128,8 +138,16 @@ def test_rollout_activity_summary_tracks_assistant_activity(tmp_path: Path) -> N
     _write_jsonl(
         rollout,
         [
-            {"timestamp": "2026-04-23T20:00:00Z", "type": "session_meta", "payload": {}},
-            {"timestamp": "2026-04-23T20:00:01Z", "type": "turn_context", "payload": {}},
+            {
+                "timestamp": "2026-04-23T20:00:00Z",
+                "type": "session_meta",
+                "payload": {},
+            },
+            {
+                "timestamp": "2026-04-23T20:00:01Z",
+                "type": "turn_context",
+                "payload": {},
+            },
             {
                 "timestamp": "2026-04-23T20:03:01Z",
                 "type": "response_item",
@@ -153,8 +171,16 @@ def test_rollout_activity_summary_tracks_custom_tool_activity(tmp_path: Path) ->
     _write_jsonl(
         rollout,
         [
-            {"timestamp": "2026-04-23T20:00:00Z", "type": "session_meta", "payload": {}},
-            {"timestamp": "2026-04-23T20:00:01Z", "type": "turn_context", "payload": {}},
+            {
+                "timestamp": "2026-04-23T20:00:00Z",
+                "type": "session_meta",
+                "payload": {},
+            },
+            {
+                "timestamp": "2026-04-23T20:00:01Z",
+                "type": "turn_context",
+                "payload": {},
+            },
             {
                 "timestamp": "2026-04-23T20:04:01Z",
                 "type": "response_item",
@@ -310,11 +336,19 @@ def test_collect_round_results_persists_each_exited_reviewer_immediately(
         writes.append(json.loads(json.dumps(payload)))
         return _state_dir / "rounds" / f"{payload['round_id']}.json"
 
-    monkeypatch.setattr(review_suite_local, "_process_is_running", fake_process_is_running)
-    monkeypatch.setattr(review_suite_local, "find_review_child_thread", lambda **_: None)
+    monkeypatch.setattr(
+        review_suite_local, "_process_is_running", fake_process_is_running
+    )
+    monkeypatch.setattr(
+        review_suite_local, "find_review_child_thread", lambda **_: None
+    )
     monkeypatch.setattr(review_suite_local, "find_thread_by_title", lambda **_: None)
     monkeypatch.setattr(review_suite_local, "write_round", fake_write_round)
-    monkeypatch.setattr(review_suite_local, "_print_live_completed_run", lambda run: streamed.append(dict(run)))
+    monkeypatch.setattr(
+        review_suite_local,
+        "_print_live_completed_run",
+        lambda run: streamed.append(dict(run)),
+    )
     monkeypatch.setattr(review_suite_local.time, "sleep", lambda _: None)
 
     completed = review_suite_local.collect_round_results(
@@ -340,14 +374,19 @@ def test_collect_round_results_persists_each_exited_reviewer_immediately(
         "alpha": "completed",
         "bravo": "completed",
     }
-    assert all("stdout_path" not in run and "stderr_path" not in run and "pid" not in run for run in completed["runs"])
+    assert all(
+        "stdout_path" not in run and "stderr_path" not in run and "pid" not in run
+        for run in completed["runs"]
+    )
     assert not alpha_stdout.exists()
     assert not alpha_stderr.exists()
     assert not bravo_stdout.exists()
     assert not bravo_stderr.exists()
 
 
-def test_collect_round_results_rebinds_launcher_sessions_to_review_children(tmp_path: Path) -> None:
+def test_collect_round_results_rebinds_launcher_sessions_to_review_children(
+    tmp_path: Path,
+) -> None:
     state_dir = tmp_path / "state"
     sqlite_path = tmp_path / "state_5.sqlite"
     review_cwd = r"C:\repo\demo"
@@ -483,7 +522,10 @@ def test_collect_round_results_rebinds_launcher_sessions_to_review_children(tmp_
     }
     assert runs_by_slot["alpha"]["cost_usd"] == pytest.approx(0.003375)
     assert runs_by_slot["alpha"]["reviewer_output"] == "alpha child findings"
-    assert runs_by_slot["alpha"]["reviewer_output_ref"] == "rollout://child-alpha/gpt-5.4-xhigh"
+    assert (
+        runs_by_slot["alpha"]["reviewer_output_ref"]
+        == "rollout://child-alpha/gpt-5.4-xhigh"
+    )
 
     assert runs_by_slot["bravo"]["session_id"] == "launcher-bravo"
     assert runs_by_slot["bravo"]["thread_id"] == "child-bravo"
@@ -495,8 +537,13 @@ def test_collect_round_results_rebinds_launcher_sessions_to_review_children(tmp_
     }
     assert runs_by_slot["bravo"]["cost_usd"] == pytest.approx(0.00182)
     assert runs_by_slot["bravo"]["reviewer_output"] == "bravo child findings"
-    assert runs_by_slot["bravo"]["reviewer_output_ref"] == "rollout://child-bravo/gpt-5.3-codex-medium"
-    assert review_suite_local.total_usage_tokens(runs_by_slot["alpha"]["usage"]) == 1_270
+    assert (
+        runs_by_slot["bravo"]["reviewer_output_ref"]
+        == "rollout://child-bravo/gpt-5.3-codex-medium"
+    )
+    assert (
+        review_suite_local.total_usage_tokens(runs_by_slot["alpha"]["usage"]) == 1_270
+    )
     assert review_suite_local.total_usage_tokens(runs_by_slot["bravo"]["usage"]) == 940
 
     record = review_suite_local.build_record_from_grade(
@@ -526,7 +573,9 @@ def test_collect_round_results_rebinds_launcher_sessions_to_review_children(tmp_
             bravo_note=None,
             shared_note="ok",
         )
-    with pytest.raises(ValueError, match="winner tie requires --basis tie_clean or tie_both_useful"):
+    with pytest.raises(
+        ValueError, match="winner tie requires --basis tie_clean or tie_both_useful"
+    ):
         review_suite_local.build_record_from_grade(
             round_payload=completed,
             roster=_minimal_roster(),
@@ -540,7 +589,9 @@ def test_collect_round_results_rebinds_launcher_sessions_to_review_children(tmp_
         )
 
 
-def test_collect_round_results_falls_back_to_child_lookup_when_session_id_is_missing(tmp_path: Path) -> None:
+def test_collect_round_results_falls_back_to_child_lookup_when_session_id_is_missing(
+    tmp_path: Path,
+) -> None:
     state_dir = tmp_path / "state"
     sqlite_path = tmp_path / "state_5.sqlite"
     review_cwd = r"C:\repo\demo"
@@ -618,7 +669,9 @@ def test_collect_round_results_falls_back_to_child_lookup_when_session_id_is_mis
     assert run["reviewer_output"] == "child only findings"
 
 
-def test_collect_round_results_matches_review_child_created_after_default_window(tmp_path: Path) -> None:
+def test_collect_round_results_matches_review_child_created_after_default_window(
+    tmp_path: Path,
+) -> None:
     state_dir = tmp_path / "state"
     sqlite_path = tmp_path / "state_5.sqlite"
     review_cwd = r"C:\repo\demo"
@@ -778,7 +831,9 @@ def test_collect_round_results_retries_child_lookup_after_launcher_match(
 
     child_lookup_calls = {"count": 0}
 
-    monkeypatch.setattr(review_suite_local, "find_thread_by_id", lambda **_: launcher_thread)
+    monkeypatch.setattr(
+        review_suite_local, "find_thread_by_id", lambda **_: launcher_thread
+    )
 
     def delayed_child_lookup(**_: object) -> dict[str, object] | None:
         child_lookup_calls["count"] += 1
@@ -786,7 +841,9 @@ def test_collect_round_results_retries_child_lookup_after_launcher_match(
             return None
         return child_thread
 
-    monkeypatch.setattr(review_suite_local, "find_review_child_thread", delayed_child_lookup)
+    monkeypatch.setattr(
+        review_suite_local, "find_review_child_thread", delayed_child_lookup
+    )
     monkeypatch.setattr(review_suite_local, "find_thread_by_title", lambda **_: None)
     monkeypatch.setattr(review_suite_local.time, "sleep", lambda _: None)
 
@@ -815,19 +872,29 @@ def test_collect_round_results_retries_child_lookup_after_launcher_match(
 
 def test_compute_cost_and_total_tokens_treat_cached_input_as_subset() -> None:
     variant = _minimal_roster()["variants"][0]
-    usage = {"input_tokens": 2_417_374, "cached_input_tokens": 2_340_864, "output_tokens": 23_880}
+    usage = {
+        "input_tokens": 2_417_374,
+        "cached_input_tokens": 2_340_864,
+        "output_tokens": 23_880,
+    }
 
     assert review_suite_local.total_usage_tokens(usage) == 2_441_254
-    assert review_suite_local.compute_cost_usd(variant, usage) == pytest.approx(1.134691)
+    assert review_suite_local.compute_cost_usd(variant, usage) == pytest.approx(
+        1.134691
+    )
 
 
-def test_collect_round_results_preserves_foreign_review_cwd_for_capture(monkeypatch, tmp_path: Path) -> None:
+def test_collect_round_results_preserves_foreign_review_cwd_for_capture(
+    monkeypatch, tmp_path: Path
+) -> None:
     class ForeignReviewCwd:
         def __str__(self) -> str:
             return r"C:\repo\demo"
 
         def resolve(self) -> Path:
-            raise AssertionError("foreign review cwd should not be resolved during capture lookup")
+            raise AssertionError(
+                "foreign review cwd should not be resolved during capture lookup"
+            )
 
     state_dir = tmp_path / "state"
     stdout_path = tmp_path / "stdout.txt"
@@ -845,7 +912,9 @@ def test_collect_round_results_preserves_foreign_review_cwd_for_capture(monkeypa
             "reviewer_output": "No findings.",
         }
 
-    monkeypatch.setattr(review_suite_local, "_collect_completed_run_from_artifacts", fake_collect)
+    monkeypatch.setattr(
+        review_suite_local, "_collect_completed_run_from_artifacts", fake_collect
+    )
     monkeypatch.setattr(review_suite_local, "_cleanup_run_artifacts", lambda item: None)
 
     completed = review_suite_local.collect_round_results(
@@ -885,14 +954,18 @@ def test_collect_completed_review_capture_uses_started_at_for_title_fallback(
     observed: dict[str, object] = {}
 
     monkeypatch.setattr(review_suite_local, "find_thread_by_id", lambda **_: None)
-    monkeypatch.setattr(review_suite_local, "find_review_child_thread", lambda **_: None)
+    monkeypatch.setattr(
+        review_suite_local, "find_review_child_thread", lambda **_: None
+    )
     monkeypatch.setattr(review_suite_local.time, "sleep", lambda _: None)
 
     def fake_find_thread_by_title(**kwargs: object) -> None:
         observed["created_after"] = kwargs["created_after"]
         return None
 
-    monkeypatch.setattr(review_suite_local, "find_thread_by_title", fake_find_thread_by_title)
+    monkeypatch.setattr(
+        review_suite_local, "find_thread_by_title", fake_find_thread_by_title
+    )
     monkeypatch.setattr(review_suite_local, "enrich_thread_record", lambda thread: {})
 
     variant = {
@@ -919,7 +992,10 @@ def test_collect_completed_review_capture_uses_started_at_for_title_fallback(
         review_cwd=tmp_path,
     )
 
-    assert observed["created_after"] == review_suite_local._started_at_epoch_seconds(started_at) - 5
+    assert (
+        observed["created_after"]
+        == review_suite_local._started_at_epoch_seconds(started_at) - 5
+    )
 
 
 def test_collect_completed_review_capture_prefers_final_message_path(
@@ -933,7 +1009,9 @@ def test_collect_completed_review_capture_prefers_final_message_path(
     final_path.write_text("No findings from output file.\n", encoding="utf-8")
 
     monkeypatch.setattr(review_suite_local, "find_thread_by_id", lambda **_: None)
-    monkeypatch.setattr(review_suite_local, "find_review_child_thread", lambda **_: None)
+    monkeypatch.setattr(
+        review_suite_local, "find_review_child_thread", lambda **_: None
+    )
     monkeypatch.setattr(review_suite_local, "find_thread_by_title", lambda **_: None)
     monkeypatch.setattr(review_suite_local, "enrich_thread_record", lambda thread: {})
     monkeypatch.setattr(review_suite_local.time, "sleep", lambda _: None)
@@ -971,8 +1049,14 @@ def test_rollout_capture_missing_threads_table_returns_none(tmp_path: Path) -> N
     sqlite_path = tmp_path / "state_5.sqlite"
     sqlite3.connect(sqlite_path).close()
 
-    assert rollout_capture.find_thread_by_id(sqlite_path=sqlite_path, thread_id="thread-1") is None
-    assert rollout_capture.find_thread_by_title(sqlite_path=sqlite_path, title="review") is None
+    assert (
+        rollout_capture.find_thread_by_id(sqlite_path=sqlite_path, thread_id="thread-1")
+        is None
+    )
+    assert (
+        rollout_capture.find_thread_by_title(sqlite_path=sqlite_path, title="review")
+        is None
+    )
     assert (
         rollout_capture.find_review_child_thread(
             sqlite_path=sqlite_path,

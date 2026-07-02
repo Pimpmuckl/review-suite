@@ -37,8 +37,12 @@ BASIS = "valid_findings_vs_none"
 
 @pytest.fixture(autouse=True)
 def _stub_clean_git_worktree(monkeypatch) -> None:
-    monkeypatch.setattr("review_suite_arena.ensure_clean_git_worktree", lambda *args, **kwargs: None)
-    monkeypatch.setattr("review_suite_local.ensure_clean_git_worktree", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "review_suite_arena.ensure_clean_git_worktree", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        "review_suite_local.ensure_clean_git_worktree", lambda *args, **kwargs: None
+    )
 
 
 def test_print_findings_prints_final_reviewer_output(capsys) -> None:
@@ -60,7 +64,7 @@ def test_print_findings_prints_final_reviewer_output(capsys) -> None:
                     "status_summary": "No findings.",
                     "grade_blocked": False,
                     "reviewer_output": "Bravo body",
-                }
+                },
             ],
         }
     )
@@ -97,7 +101,9 @@ def test_public_round_result_does_not_repeat_streamed_output() -> None:
     assert "output" not in result["runs"][0]
 
 
-def test_blocking_round_error_uses_compact_action_for_completed_round(tmp_path: Path) -> None:
+def test_blocking_round_error_uses_compact_action_for_completed_round(
+    tmp_path: Path,
+) -> None:
     error = _blocking_round_error(
         payload={
             "round_id": "round-123",
@@ -206,7 +212,9 @@ def test_cmd_show_round_prints_stored_reviewer_outputs(tmp_path: Path, capsys) -
         },
     )
 
-    result = cmd_show_round(Namespace(round_id="round-1", state_dir=str(tmp_path), json=False))
+    result = cmd_show_round(
+        Namespace(round_id="round-1", state_dir=str(tmp_path), json=False)
+    )
 
     captured = capsys.readouterr()
     assert result == 0
@@ -246,7 +254,9 @@ def test_cmd_show_round_prints_gate_record_outputs(tmp_path: Path, capsys) -> No
         encoding="utf-8",
     )
 
-    result = cmd_show_round(Namespace(round_id="gate-round-1", state_dir=str(tmp_path), json=False))
+    result = cmd_show_round(
+        Namespace(round_id="gate-round-1", state_dir=str(tmp_path), json=False)
+    )
 
     captured = capsys.readouterr()
     assert result == 0
@@ -255,7 +265,9 @@ def test_cmd_show_round_prints_gate_record_outputs(tmp_path: Path, capsys) -> No
     assert "Gate bravo clean." in captured.out
 
 
-def test_cmd_close_gate_clean_records_workflow_anchor(monkeypatch, tmp_path: Path, capsys) -> None:
+def test_cmd_close_gate_clean_records_workflow_anchor(
+    monkeypatch, tmp_path: Path, capsys
+) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     (tmp_path / "gate_runs.jsonl").write_text(
@@ -292,14 +304,27 @@ def test_cmd_close_gate_clean_records_workflow_anchor(monkeypatch, tmp_path: Pat
         encoding="utf-8",
     )
     anchor_calls: list[dict[str, object]] = []
-    monkeypatch.setattr("review_suite_arena.record_review_anchor", lambda **kwargs: anchor_calls.append(kwargs) or {})
+    monkeypatch.setattr(
+        "review_suite_arena.record_review_anchor",
+        lambda **kwargs: anchor_calls.append(kwargs) or {},
+    )
 
     result = cmd_close_gate(
-        Namespace(round_id="gate-round-clean", verdict="clean", state_dir=str(tmp_path), note=None)
+        Namespace(
+            round_id="gate-round-clean",
+            verdict="clean",
+            state_dir=str(tmp_path),
+            note=None,
+        )
     )
 
     captured = capsys.readouterr()
-    decisions = [json.loads(line) for line in (tmp_path / "gate_signoffs.jsonl").read_text(encoding="utf-8").splitlines()]
+    decisions = [
+        json.loads(line)
+        for line in (tmp_path / "gate_signoffs.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
     assert result == 0
     assert anchor_calls[0]["lane"] == "review_t4"
     assert anchor_calls[0]["task_id"] == "feature/test"
@@ -309,7 +334,9 @@ def test_cmd_close_gate_clean_records_workflow_anchor(monkeypatch, tmp_path: Pat
     assert "anchored: true" in captured.out
 
 
-def test_cmd_close_gate_findings_does_not_record_workflow_anchor(monkeypatch, tmp_path: Path, capsys) -> None:
+def test_cmd_close_gate_findings_does_not_record_workflow_anchor(
+    monkeypatch, tmp_path: Path, capsys
+) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     (tmp_path / "gate_runs.jsonl").write_text(
@@ -339,15 +366,30 @@ def test_cmd_close_gate_findings_does_not_record_workflow_anchor(monkeypatch, tm
         encoding="utf-8",
     )
     anchor_calls: list[dict[str, object]] = []
-    monkeypatch.setattr("review_suite_arena.record_review_anchor", lambda **kwargs: anchor_calls.append(kwargs) or {})
+    monkeypatch.setattr(
+        "review_suite_arena.record_review_anchor",
+        lambda **kwargs: anchor_calls.append(kwargs) or {},
+    )
 
     result = cmd_close_gate(
-        Namespace(round_id="gate-round-findings", verdict="findings", state_dir=str(tmp_path), note="valid P2")
+        Namespace(
+            round_id="gate-round-findings",
+            verdict="findings",
+            state_dir=str(tmp_path),
+            note="valid P2",
+        )
     )
-    shown = cmd_show_round(Namespace(round_id="gate-round-findings", state_dir=str(tmp_path), json=False))
+    shown = cmd_show_round(
+        Namespace(round_id="gate-round-findings", state_dir=str(tmp_path), json=False)
+    )
 
     captured = capsys.readouterr()
-    decisions = [json.loads(line) for line in (tmp_path / "gate_signoffs.jsonl").read_text(encoding="utf-8").splitlines()]
+    decisions = [
+        json.loads(line)
+        for line in (tmp_path / "gate_signoffs.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
     assert result == 0
     assert shown == 0
     assert anchor_calls == []
@@ -382,9 +424,19 @@ def test_cmd_costs_writes_markdown_report(monkeypatch, tmp_path: Path, capsys) -
         cost_usd = 0.012345
 
     monkeypatch.setattr("review_suite_arena.resolve_repo_root", lambda cd: repo)
-    monkeypatch.setattr("review_suite_arena.collect_review_cost_rows", lambda **kwargs: rows or [Row()])
+    monkeypatch.setattr(
+        "review_suite_arena.collect_review_cost_rows", lambda **kwargs: rows or [Row()]
+    )
 
-    result = cmd_costs(Namespace(cd=str(repo), all=False, state_dir=str(state_dir), output=str(output), json=False))
+    result = cmd_costs(
+        Namespace(
+            cd=str(repo),
+            all=False,
+            state_dir=str(state_dir),
+            output=str(output),
+            json=False,
+        )
+    )
 
     captured = capsys.readouterr()
     assert result == 0
@@ -397,7 +449,9 @@ def test_cmd_costs_writes_markdown_report(monkeypatch, tmp_path: Path, capsys) -
     assert "total_implementation_cost_usd: 0.004" in captured.out
 
 
-def test_cmd_costs_renders_cached_rows_after_scoped_refresh(monkeypatch, tmp_path: Path, capsys) -> None:
+def test_cmd_costs_renders_cached_rows_after_scoped_refresh(
+    monkeypatch, tmp_path: Path, capsys
+) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     state_dir = tmp_path / "state"
@@ -412,7 +466,13 @@ def test_cmd_costs_renders_cached_rows_after_scoped_refresh(monkeypatch, tmp_pat
         implementation_cost_usd=0.02,
         caller_threads=(),
         latest_review="2026-04-26T10:00:00Z",
-        lane_sessions={"review_t1": 1, "review_t2": 0, "review_t3": 0, "review_t4": 0, "review_followup": 0},
+        lane_sessions={
+            "review_t1": 1,
+            "review_t2": 0,
+            "review_t3": 0,
+            "review_t4": 0,
+            "review_followup": 0,
+        },
         review_seconds=60,
         tokens=300,
         cost_usd=0.003,
@@ -427,16 +487,32 @@ def test_cmd_costs_renders_cached_rows_after_scoped_refresh(monkeypatch, tmp_pat
         implementation_cost_usd=0.004,
         caller_threads=(),
         latest_review="2026-04-27T10:00:00Z",
-        lane_sessions={"review_t1": 2, "review_t2": 2, "review_t3": 0, "review_t4": 0, "review_followup": 0},
+        lane_sessions={
+            "review_t1": 2,
+            "review_t2": 2,
+            "review_t3": 0,
+            "review_t4": 0,
+            "review_followup": 0,
+        },
         review_seconds=123.0,
         tokens=456,
         cost_usd=0.012345,
     )
     update_review_cost_row_cache(state_dir=state_dir, rows=[cached_row])
     monkeypatch.setattr("review_suite_arena.resolve_repo_root", lambda cd: repo)
-    monkeypatch.setattr("review_suite_arena.collect_review_cost_rows", lambda **kwargs: [current_row])
+    monkeypatch.setattr(
+        "review_suite_arena.collect_review_cost_rows", lambda **kwargs: [current_row]
+    )
 
-    result = cmd_costs(Namespace(cd=str(repo), all=False, state_dir=str(state_dir), output=str(output), json=False))
+    result = cmd_costs(
+        Namespace(
+            cd=str(repo),
+            all=False,
+            state_dir=str(state_dir),
+            output=str(output),
+            json=False,
+        )
+    )
 
     captured = capsys.readouterr()
     markdown = output.read_text(encoding="utf-8")
@@ -461,23 +537,39 @@ def test_cmd_costs_all_ignores_cd_filter(monkeypatch, tmp_path: Path) -> None:
         return repo
 
     monkeypatch.setattr("review_suite_arena.resolve_repo_root", fake_resolve_repo_root)
-    monkeypatch.setattr("review_suite_arena.write_review_cost_report", lambda **kwargs: tmp_path / "costs.md")
+    monkeypatch.setattr(
+        "review_suite_arena.write_review_cost_report",
+        lambda **kwargs: tmp_path / "costs.md",
+    )
     monkeypatch.setattr("review_suite_arena.emit_toon", lambda payload: None)
 
     def fake_collect_review_cost_rows(**kwargs):
         seen.update(kwargs)
         return []
 
-    monkeypatch.setattr("review_suite_arena.collect_review_cost_rows", fake_collect_review_cost_rows)
+    monkeypatch.setattr(
+        "review_suite_arena.collect_review_cost_rows", fake_collect_review_cost_rows
+    )
 
-    result = cmd_costs(Namespace(cd=str(repo), all=True, state_dir=str(state_dir), output=None, json=False, codex_home=None))
+    result = cmd_costs(
+        Namespace(
+            cd=str(repo),
+            all=True,
+            state_dir=str(state_dir),
+            output=None,
+            json=False,
+            codex_home=None,
+        )
+    )
 
     assert result == 0
     assert seen["review_cwd"] is None
     assert seen["include_all"] is True
 
 
-def test_cmd_show_last_prints_latest_outputs_per_local_lane(tmp_path: Path, capsys) -> None:
+def test_cmd_show_last_prints_latest_outputs_per_local_lane(
+    tmp_path: Path, capsys
+) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     write_round(
@@ -489,7 +581,13 @@ def test_cmd_show_last_prints_latest_outputs_per_local_lane(tmp_path: Path, caps
             "sampled_at": "2026-04-25T09:00:00Z",
             "review_cwd": str(repo),
             "review_cwd_normalized": str(repo),
-            "runs": [{"slot": "alpha", "review_status": "completed", "reviewer_output": "Old T1"}],
+            "runs": [
+                {
+                    "slot": "alpha",
+                    "review_status": "completed",
+                    "reviewer_output": "Old T1",
+                }
+            ],
         },
     )
     write_round(
@@ -501,7 +599,13 @@ def test_cmd_show_last_prints_latest_outputs_per_local_lane(tmp_path: Path, caps
             "sampled_at": "2026-04-25T10:00:00Z",
             "review_cwd": str(repo),
             "review_cwd_normalized": str(repo),
-            "runs": [{"slot": "alpha", "review_status": "completed", "reviewer_output": "Latest T1"}],
+            "runs": [
+                {
+                    "slot": "alpha",
+                    "review_status": "completed",
+                    "reviewer_output": "Latest T1",
+                }
+            ],
         },
     )
     (tmp_path / "gate_runs.jsonl").write_text(
@@ -512,14 +616,22 @@ def test_cmd_show_last_prints_latest_outputs_per_local_lane(tmp_path: Path, caps
                 "task_class": "phase_gate",
                 "review_cwd": str(repo),
                 "review_cwd_normalized": str(repo),
-                "runs": [{"slot": "alpha", "review_status": "completed", "reviewer_output": "Latest T2"}],
+                "runs": [
+                    {
+                        "slot": "alpha",
+                        "review_status": "completed",
+                        "reviewer_output": "Latest T2",
+                    }
+                ],
             }
         )
         + "\n",
         encoding="utf-8",
     )
 
-    result = cmd_show_last(Namespace(cd=None, task=None, state_dir=str(tmp_path), json=False))
+    result = cmd_show_last(
+        Namespace(cd=None, task=None, state_dir=str(tmp_path), json=False)
+    )
 
     captured = capsys.readouterr()
     assert result == 0
@@ -530,18 +642,28 @@ def test_cmd_show_last_prints_latest_outputs_per_local_lane(tmp_path: Path, caps
     assert "Latest T2" in captured.out
 
 
-def test_cmd_show_round_finds_orchestrator_review_rounds(tmp_path: Path, capsys) -> None:
+def test_cmd_show_round_finds_orchestrator_review_rounds(
+    tmp_path: Path, capsys
+) -> None:
     write_round(
         tmp_path / "orchestrator" / "review-rounds",
         {
             "round_id": "orchestrator-round",
             "task_class": "phase_review",
             "status": "completed",
-            "runs": [{"slot": "alpha", "review_status": "completed", "reviewer_output": "Orchestrator finding"}],
+            "runs": [
+                {
+                    "slot": "alpha",
+                    "review_status": "completed",
+                    "reviewer_output": "Orchestrator finding",
+                }
+            ],
         },
     )
 
-    result = cmd_show_round(Namespace(round_id="orchestrator-round", state_dir=str(tmp_path), json=False))
+    result = cmd_show_round(
+        Namespace(round_id="orchestrator-round", state_dir=str(tmp_path), json=False)
+    )
 
     captured = capsys.readouterr()
     assert result == 0
@@ -549,7 +671,9 @@ def test_cmd_show_round_finds_orchestrator_review_rounds(tmp_path: Path, capsys)
     assert "Orchestrator finding" in captured.out
 
 
-def test_cmd_show_last_filters_orchestrator_review_rounds_by_repo(monkeypatch, tmp_path: Path, capsys) -> None:
+def test_cmd_show_last_filters_orchestrator_review_rounds_by_repo(
+    monkeypatch, tmp_path: Path, capsys
+) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     monkeypatch.setattr("review_suite_arena.resolve_repo_root", lambda cd: repo)
@@ -562,11 +686,19 @@ def test_cmd_show_last_filters_orchestrator_review_rounds_by_repo(monkeypatch, t
             "sampled_at": "2026-05-27T10:00:00Z",
             "review_cwd": str(repo),
             "review_cwd_normalized": str(repo),
-            "runs": [{"slot": "alpha", "review_status": "completed", "reviewer_output": "Nested latest"}],
+            "runs": [
+                {
+                    "slot": "alpha",
+                    "review_status": "completed",
+                    "reviewer_output": "Nested latest",
+                }
+            ],
         },
     )
 
-    result = cmd_show_last(Namespace(cd=str(repo), task="review_t1", state_dir=str(tmp_path), json=False))
+    result = cmd_show_last(
+        Namespace(cd=str(repo), task="review_t1", state_dir=str(tmp_path), json=False)
+    )
 
     captured = capsys.readouterr()
     assert result == 0
@@ -603,7 +735,9 @@ def test_completed_round_payload_uses_reroll_command_key() -> None:
         reroll_rows=[{"slot": "alpha", "command": "reroll-cmd"}],
     )
 
-    assert payload["actions"] == [{"kind": "reroll", "slot": "alpha", "cmd": "reroll-cmd"}]
+    assert payload["actions"] == [
+        {"kind": "reroll", "slot": "alpha", "cmd": "reroll-cmd"}
+    ]
     assert payload["blocked"] is True
 
 
@@ -624,7 +758,9 @@ def test_completed_round_payload_success_only_emits_grade_command() -> None:
     )
 
     assert payload["Action"]["cmd"] == "grade-cmd"
-    assert payload["Action"]["tie_clean"].endswith("review_suite_arena.py grade --winner tie --basis tie_clean")
+    assert payload["Action"]["tie_clean"].endswith(
+        "review_suite_arena.py grade --winner tie --basis tie_clean"
+    )
     assert set(payload["Action"]) == {"cmd", "tie_clean"}
     assert "runs" not in payload
 
@@ -640,13 +776,19 @@ def test_completed_round_payload_omits_inspect_when_round_id_is_known() -> None:
     )
 
     assert payload["Action"]["cmd"] == "grade-cmd"
-    assert payload["Action"]["tie_clean"].endswith("review_suite_arena.py grade --winner tie --basis tie_clean")
+    assert payload["Action"]["tie_clean"].endswith(
+        "review_suite_arena.py grade --winner tie --basis tie_clean"
+    )
     assert "inspect" not in payload["Action"]
 
 
 def test_completed_round_payload_manual_omits_run_rows_after_output() -> None:
     payload = _completed_round_payload(
-        round_result={"round_id": "round-123", "blocked": False, "runs": [{"slot": "alpha"}]},
+        round_result={
+            "round_id": "round-123",
+            "blocked": False,
+            "runs": [{"slot": "alpha"}],
+        },
         manual=True,
     )
 
@@ -666,13 +808,22 @@ def test_has_direct_grade_inputs_requires_complete_tuple() -> None:
     )
 
 
-def test_run_benchmarked_round_direct_grade_uses_latest_pending_round(monkeypatch, tmp_path) -> None:
+def test_run_benchmarked_round_direct_grade_uses_latest_pending_round(
+    monkeypatch, tmp_path
+) -> None:
     captured: dict[str, object] = {}
     emitted: list[dict[str, object]] = []
 
-    monkeypatch.setattr("review_suite_arena._ensure_no_pending_grades", lambda **kwargs: (_ for _ in ()).throw(AssertionError("should not check pending before direct grade")))
+    monkeypatch.setattr(
+        "review_suite_arena._ensure_no_pending_grades",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("should not check pending before direct grade")
+        ),
+    )
     monkeypatch.setattr("review_suite_arena.load_roster", lambda path: {"variants": []})
-    monkeypatch.setattr("review_suite_arena.load_rubric", lambda path: {"categories": []})
+    monkeypatch.setattr(
+        "review_suite_arena.load_rubric", lambda path: {"categories": []}
+    )
     monkeypatch.setattr(
         "review_suite_arena.find_pending_rounds_for_caller",
         lambda **kwargs: [{"round_id": "latest-round", "task_class": "pr_review"}],
@@ -682,8 +833,12 @@ def test_run_benchmarked_round_direct_grade_uses_latest_pending_round(monkeypatc
         captured.update(kwargs)
         return {"status": "graded", "round_id": kwargs["round_id"]}
 
-    monkeypatch.setattr("review_suite_arena._record_grade_result", fake_record_grade_result)
-    monkeypatch.setattr("review_suite_arena.emit_toon", lambda payload: emitted.append(payload))
+    monkeypatch.setattr(
+        "review_suite_arena._record_grade_result", fake_record_grade_result
+    )
+    monkeypatch.setattr(
+        "review_suite_arena.emit_toon", lambda payload: emitted.append(payload)
+    )
 
     result = run_benchmarked_round(
         task_class="pr_review",
@@ -713,27 +868,57 @@ def test_run_benchmarked_round_direct_grade_uses_latest_pending_round(monkeypatc
     assert captured["task_id"] == "task-123"
     assert captured["winner"] == "alpha"
     assert captured["basis"] == BASIS
-    assert emitted == [{"status": "graded", "round_id": "latest-round", "task": "review_t3"}]
+    assert emitted == [
+        {"status": "graded", "round_id": "latest-round", "task": "review_t3"}
+    ]
 
 
-def test_run_benchmarked_round_emits_round_banner_and_compact_payload(monkeypatch, tmp_path, capsys) -> None:
+def test_run_benchmarked_round_emits_round_banner_and_compact_payload(
+    monkeypatch, tmp_path, capsys
+) -> None:
     emitted: list[dict[str, object]] = []
     anchor_calls: list[dict[str, object]] = []
 
-    monkeypatch.setattr("review_suite_arena._ensure_no_pending_grades", lambda **kwargs: None)
+    monkeypatch.setattr(
+        "review_suite_arena._ensure_no_pending_grades", lambda **kwargs: None
+    )
     monkeypatch.setattr("review_suite_arena.load_roster", lambda path: {"variants": []})
-    monkeypatch.setattr("review_suite_arena.load_rubric", lambda path: {"categories": []})
+    monkeypatch.setattr(
+        "review_suite_arena.load_rubric", lambda path: {"categories": []}
+    )
     monkeypatch.setattr("review_suite_arena.read_jsonl", lambda path: [])
     monkeypatch.setattr("review_suite_arena.load_operational_state", lambda path: {})
-    monkeypatch.setattr("review_suite_arena.select_pair", lambda **kwargs: {"round_id": "round-1", "task_class": "phase_review"})
+    monkeypatch.setattr(
+        "review_suite_arena.select_pair",
+        lambda **kwargs: {"round_id": "round-1", "task_class": "phase_review"},
+    )
     monkeypatch.setattr("review_suite_arena.write_round", lambda *args, **kwargs: None)
-    monkeypatch.setattr("review_suite_arena.run_round", lambda **kwargs: {"round_id": "round-1", "task_class": "phase_review", "runs": []})
-    monkeypatch.setattr("review_suite_arena.public_round_result", lambda *args, **kwargs: {"blocked": False, "runs": []})
-    monkeypatch.setattr("review_suite_arena._print_findings", lambda *args, **kwargs: None)
-    monkeypatch.setattr("review_suite_arena._current_branch_name", lambda review_cwd: "branch-1")
+    monkeypatch.setattr(
+        "review_suite_arena.run_round",
+        lambda **kwargs: {
+            "round_id": "round-1",
+            "task_class": "phase_review",
+            "runs": [],
+        },
+    )
+    monkeypatch.setattr(
+        "review_suite_arena.public_round_result",
+        lambda *args, **kwargs: {"blocked": False, "runs": []},
+    )
+    monkeypatch.setattr(
+        "review_suite_arena._print_findings", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        "review_suite_arena._current_branch_name", lambda review_cwd: "branch-1"
+    )
     monkeypatch.setattr("review_suite_arena._print_next_steps", lambda **kwargs: None)
-    monkeypatch.setattr("review_suite_arena.record_review_anchor", lambda **kwargs: anchor_calls.append(kwargs) or {})
-    monkeypatch.setattr("review_suite_arena.emit_toon", lambda payload: emitted.append(payload))
+    monkeypatch.setattr(
+        "review_suite_arena.record_review_anchor",
+        lambda **kwargs: anchor_calls.append(kwargs) or {},
+    )
+    monkeypatch.setattr(
+        "review_suite_arena.emit_toon", lambda payload: emitted.append(payload)
+    )
 
     result = run_benchmarked_round(
         task_class="phase_review",
@@ -770,30 +955,67 @@ def test_run_benchmarked_round_emits_round_banner_and_compact_payload(monkeypatc
     assert "[review-suite] round review_t1 round-1" in capsys.readouterr().err
 
 
-def test_run_benchmarked_round_noninteractive_uses_toon_actions_without_stderr_next_steps(monkeypatch, tmp_path) -> None:
+def test_run_benchmarked_round_noninteractive_uses_toon_actions_without_stderr_next_steps(
+    monkeypatch, tmp_path
+) -> None:
     emitted: list[dict[str, object]] = []
 
-    monkeypatch.setattr("review_suite_arena._ensure_no_pending_grades", lambda **kwargs: None)
+    monkeypatch.setattr(
+        "review_suite_arena._ensure_no_pending_grades", lambda **kwargs: None
+    )
     monkeypatch.setattr("review_suite_arena.load_roster", lambda path: {"variants": []})
-    monkeypatch.setattr("review_suite_arena.load_rubric", lambda path: {"categories": []})
+    monkeypatch.setattr(
+        "review_suite_arena.load_rubric", lambda path: {"categories": []}
+    )
     monkeypatch.setattr("review_suite_arena.read_jsonl", lambda path: [])
     monkeypatch.setattr("review_suite_arena.load_operational_state", lambda path: {})
-    monkeypatch.setattr("review_suite_arena.select_pair", lambda **kwargs: {"round_id": "round-1", "task_class": "phase_review"})
+    monkeypatch.setattr(
+        "review_suite_arena.select_pair",
+        lambda **kwargs: {"round_id": "round-1", "task_class": "phase_review"},
+    )
     monkeypatch.setattr("review_suite_arena.write_round", lambda *args, **kwargs: None)
-    monkeypatch.setattr("review_suite_arena.guard_no_stage_step_down", lambda **kwargs: None)
-    monkeypatch.setattr("review_suite_arena._validate_benchmarked_review_runtime", lambda **kwargs: None)
-    monkeypatch.setattr("review_suite_arena.run_round", lambda **kwargs: {"round_id": "round-1", "task_class": "phase_review", "runs": []})
-    monkeypatch.setattr("review_suite_arena.public_round_result", lambda *args, **kwargs: {"blocked": False, "runs": []})
-    monkeypatch.setattr("review_suite_arena._print_findings", lambda *args, **kwargs: None)
-    monkeypatch.setattr("review_suite_arena._current_branch_name", lambda review_cwd: "branch-1")
-    monkeypatch.setattr("review_suite_arena.refresh_review_cost_report_best_effort", lambda **kwargs: None)
-    monkeypatch.setattr("review_suite_arena._record_standalone_review_anchor_for_round", lambda **kwargs: True)
+    monkeypatch.setattr(
+        "review_suite_arena.guard_no_stage_step_down", lambda **kwargs: None
+    )
+    monkeypatch.setattr(
+        "review_suite_arena._validate_benchmarked_review_runtime", lambda **kwargs: None
+    )
+    monkeypatch.setattr(
+        "review_suite_arena.run_round",
+        lambda **kwargs: {
+            "round_id": "round-1",
+            "task_class": "phase_review",
+            "runs": [],
+        },
+    )
+    monkeypatch.setattr(
+        "review_suite_arena.public_round_result",
+        lambda *args, **kwargs: {"blocked": False, "runs": []},
+    )
+    monkeypatch.setattr(
+        "review_suite_arena._print_findings", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        "review_suite_arena._current_branch_name", lambda review_cwd: "branch-1"
+    )
+    monkeypatch.setattr(
+        "review_suite_arena.refresh_review_cost_report_best_effort",
+        lambda **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "review_suite_arena._record_standalone_review_anchor_for_round",
+        lambda **kwargs: True,
+    )
     monkeypatch.setattr("review_suite_arena._output_isatty", lambda: False)
     monkeypatch.setattr(
         "review_suite_arena._print_next_steps",
-        lambda **kwargs: (_ for _ in ()).throw(AssertionError("next-step prose should stay out of non-interactive output")),
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("next-step prose should stay out of non-interactive output")
+        ),
     )
-    monkeypatch.setattr("review_suite_arena.emit_toon", lambda payload: emitted.append(payload))
+    monkeypatch.setattr(
+        "review_suite_arena.emit_toon", lambda payload: emitted.append(payload)
+    )
 
     result = run_benchmarked_round(
         task_class="phase_review",
@@ -833,12 +1055,18 @@ def test_run_benchmarked_round_noninteractive_uses_toon_actions_without_stderr_n
     assert set(emitted[-1]["Action"]) == {"cmd", "tie_clean"}
 
 
-def test_run_benchmarked_round_warns_for_deep_review_without_model_names(monkeypatch, tmp_path, capsys) -> None:
+def test_run_benchmarked_round_warns_for_deep_review_without_model_names(
+    monkeypatch, tmp_path, capsys
+) -> None:
     emitted: list[dict[str, object]] = []
 
-    monkeypatch.setattr("review_suite_arena._ensure_no_pending_grades", lambda **kwargs: None)
+    monkeypatch.setattr(
+        "review_suite_arena._ensure_no_pending_grades", lambda **kwargs: None
+    )
     monkeypatch.setattr("review_suite_arena.load_roster", lambda path: {"variants": []})
-    monkeypatch.setattr("review_suite_arena.load_rubric", lambda path: {"categories": []})
+    monkeypatch.setattr(
+        "review_suite_arena.load_rubric", lambda path: {"categories": []}
+    )
     monkeypatch.setattr("review_suite_arena.read_jsonl", lambda path: [])
     monkeypatch.setattr("review_suite_arena.load_operational_state", lambda path: {})
     monkeypatch.setattr(
@@ -847,19 +1075,39 @@ def test_run_benchmarked_round_warns_for_deep_review_without_model_names(monkeyp
             "round_id": "round-1",
             "task_class": "pr_review",
             "runs": [
-                {"slot": "alpha", "variant_id": "hidden-alpha", "reasoning_effort": "xhigh"},
-                {"slot": "bravo", "variant_id": "hidden-bravo", "reasoning_effort": "medium"},
+                {
+                    "slot": "alpha",
+                    "variant_id": "hidden-alpha",
+                    "reasoning_effort": "xhigh",
+                },
+                {
+                    "slot": "bravo",
+                    "variant_id": "hidden-bravo",
+                    "reasoning_effort": "medium",
+                },
             ],
         },
     )
     monkeypatch.setattr("review_suite_arena.write_round", lambda *args, **kwargs: None)
-    monkeypatch.setattr("review_suite_arena.run_round", lambda **kwargs: {"round_id": "round-1", "task_class": "pr_review", "runs": []})
-    monkeypatch.setattr("review_suite_arena.public_round_result", lambda *args, **kwargs: {"blocked": False, "runs": []})
-    monkeypatch.setattr("review_suite_arena._print_findings", lambda *args, **kwargs: None)
-    monkeypatch.setattr("review_suite_arena._current_branch_name", lambda review_cwd: "branch-1")
+    monkeypatch.setattr(
+        "review_suite_arena.run_round",
+        lambda **kwargs: {"round_id": "round-1", "task_class": "pr_review", "runs": []},
+    )
+    monkeypatch.setattr(
+        "review_suite_arena.public_round_result",
+        lambda *args, **kwargs: {"blocked": False, "runs": []},
+    )
+    monkeypatch.setattr(
+        "review_suite_arena._print_findings", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        "review_suite_arena._current_branch_name", lambda review_cwd: "branch-1"
+    )
     monkeypatch.setattr("review_suite_arena._output_isatty", lambda: False)
     monkeypatch.setattr("review_suite_arena.record_review_anchor", lambda **kwargs: {})
-    monkeypatch.setattr("review_suite_arena.emit_toon", lambda payload: emitted.append(payload))
+    monkeypatch.setattr(
+        "review_suite_arena.emit_toon", lambda payload: emitted.append(payload)
+    )
 
     result = run_benchmarked_round(
         task_class="pr_review",
@@ -893,17 +1141,31 @@ def test_run_benchmarked_round_warns_for_deep_review_without_model_names(monkeyp
     assert "xhigh" not in err
 
 
-def test_run_benchmarked_round_dirty_base_guard_does_not_persist_sampled_round(monkeypatch, tmp_path) -> None:
+def test_run_benchmarked_round_dirty_base_guard_does_not_persist_sampled_round(
+    monkeypatch, tmp_path
+) -> None:
     writes: list[dict[str, object]] = []
 
-    monkeypatch.setattr("review_suite_arena._ensure_no_pending_grades", lambda **kwargs: None)
+    monkeypatch.setattr(
+        "review_suite_arena._ensure_no_pending_grades", lambda **kwargs: None
+    )
 
     def fail_clean_check(*args, **kwargs):
         raise ValueError("review-suite requires a clean worktree")
 
-    monkeypatch.setattr("review_suite_arena.ensure_clean_git_worktree", fail_clean_check)
-    monkeypatch.setattr("review_suite_arena.select_pair", lambda **kwargs: (_ for _ in ()).throw(AssertionError("select_pair should not run")))
-    monkeypatch.setattr("review_suite_arena.write_round", lambda state_dir, payload: writes.append(dict(payload)))
+    monkeypatch.setattr(
+        "review_suite_arena.ensure_clean_git_worktree", fail_clean_check
+    )
+    monkeypatch.setattr(
+        "review_suite_arena.select_pair",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("select_pair should not run")
+        ),
+    )
+    monkeypatch.setattr(
+        "review_suite_arena.write_round",
+        lambda state_dir, payload: writes.append(dict(payload)),
+    )
 
     with pytest.raises(ValueError, match="clean worktree"):
         run_benchmarked_round(
@@ -933,18 +1195,32 @@ def test_run_benchmarked_round_dirty_base_guard_does_not_persist_sampled_round(m
     assert writes == []
 
 
-def test_run_benchmarked_round_runtime_guard_does_not_persist_sampled_round(monkeypatch, tmp_path) -> None:
+def test_run_benchmarked_round_runtime_guard_does_not_persist_sampled_round(
+    monkeypatch, tmp_path
+) -> None:
     writes: list[dict[str, object]] = []
 
-    monkeypatch.setattr("review_suite_arena._ensure_no_pending_grades", lambda **kwargs: None)
-    monkeypatch.setattr("review_suite_arena.ensure_clean_git_worktree", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "review_suite_arena._ensure_no_pending_grades", lambda **kwargs: None
+    )
+    monkeypatch.setattr(
+        "review_suite_arena.ensure_clean_git_worktree", lambda *args, **kwargs: None
+    )
 
     def fail_runtime_check(**kwargs):
         raise ValueError("rerun with --wsl")
 
     monkeypatch.setattr("review_suite_arena.validate_codex_runtime", fail_runtime_check)
-    monkeypatch.setattr("review_suite_arena.select_pair", lambda **kwargs: (_ for _ in ()).throw(AssertionError("select_pair should not run")))
-    monkeypatch.setattr("review_suite_arena.write_round", lambda state_dir, payload: writes.append(dict(payload)))
+    monkeypatch.setattr(
+        "review_suite_arena.select_pair",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("select_pair should not run")
+        ),
+    )
+    monkeypatch.setattr(
+        "review_suite_arena.write_round",
+        lambda state_dir, payload: writes.append(dict(payload)),
+    )
 
     with pytest.raises(ValueError, match="--wsl"):
         run_benchmarked_round(
@@ -974,36 +1250,59 @@ def test_run_benchmarked_round_runtime_guard_does_not_persist_sampled_round(monk
     assert writes == []
 
 
-def test_run_benchmarked_round_interactive_blocked_round_skips_final_toon(monkeypatch, tmp_path) -> None:
+def test_run_benchmarked_round_interactive_blocked_round_skips_final_toon(
+    monkeypatch, tmp_path
+) -> None:
     next_steps: list[dict[str, object]] = []
 
-    monkeypatch.setattr("review_suite_arena._ensure_no_pending_grades", lambda **kwargs: None)
+    monkeypatch.setattr(
+        "review_suite_arena._ensure_no_pending_grades", lambda **kwargs: None
+    )
     monkeypatch.setattr("review_suite_arena.load_roster", lambda path: {"variants": []})
-    monkeypatch.setattr("review_suite_arena.load_rubric", lambda path: {"categories": []})
+    monkeypatch.setattr(
+        "review_suite_arena.load_rubric", lambda path: {"categories": []}
+    )
     monkeypatch.setattr("review_suite_arena.read_jsonl", lambda path: [])
     monkeypatch.setattr("review_suite_arena.load_operational_state", lambda path: {})
-    monkeypatch.setattr("review_suite_arena.select_pair", lambda **kwargs: {"round_id": "round-1", "task_class": "phase_review"})
+    monkeypatch.setattr(
+        "review_suite_arena.select_pair",
+        lambda **kwargs: {"round_id": "round-1", "task_class": "phase_review"},
+    )
     monkeypatch.setattr("review_suite_arena.write_round", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         "review_suite_arena.run_round",
         lambda **kwargs: {
             "round_id": "round-1",
             "task_class": "phase_review",
-            "runs": [{"slot": "alpha", "review_status": "timeout", "grade_blocked": True}],
+            "runs": [
+                {"slot": "alpha", "review_status": "timeout", "grade_blocked": True}
+            ],
         },
     )
     monkeypatch.setattr(
         "review_suite_arena.public_round_result",
-        lambda *args, **kwargs: {"blocked": True, "runs": [{"slot": "alpha", "blocked": True}]},
+        lambda *args, **kwargs: {
+            "blocked": True,
+            "runs": [{"slot": "alpha", "blocked": True}],
+        },
     )
-    monkeypatch.setattr("review_suite_arena._print_findings", lambda *args, **kwargs: None)
-    monkeypatch.setattr("review_suite_arena._current_branch_name", lambda review_cwd: "branch-1")
+    monkeypatch.setattr(
+        "review_suite_arena._print_findings", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        "review_suite_arena._current_branch_name", lambda review_cwd: "branch-1"
+    )
     monkeypatch.setattr("review_suite_arena._output_isatty", lambda: True)
     monkeypatch.setattr("review_suite_arena._print_round_banner", lambda **kwargs: None)
-    monkeypatch.setattr("review_suite_arena._print_next_steps", lambda **kwargs: next_steps.append(kwargs))
+    monkeypatch.setattr(
+        "review_suite_arena._print_next_steps",
+        lambda **kwargs: next_steps.append(kwargs),
+    )
     monkeypatch.setattr(
         "review_suite_arena.emit_toon",
-        lambda payload: (_ for _ in ()).throw(AssertionError("interactive blocked runs should not emit final TOON")),
+        lambda payload: (_ for _ in ()).throw(
+            AssertionError("interactive blocked runs should not emit final TOON")
+        ),
     )
 
     result = run_benchmarked_round(
@@ -1034,7 +1333,9 @@ def test_run_benchmarked_round_interactive_blocked_round_skips_final_toon(monkey
     assert next_steps
 
 
-def test_run_benchmarked_round_direct_grade_rejects_ambiguous_caller_pending_rounds(monkeypatch, tmp_path) -> None:
+def test_run_benchmarked_round_direct_grade_rejects_ambiguous_caller_pending_rounds(
+    monkeypatch, tmp_path
+) -> None:
     monkeypatch.setattr(
         "review_suite_arena.find_pending_rounds_for_caller",
         lambda **kwargs: [
@@ -1043,7 +1344,9 @@ def test_run_benchmarked_round_direct_grade_rejects_ambiguous_caller_pending_rou
         ],
     )
 
-    with pytest.raises(ValueError, match="multiple pending pr_review rounds found for this caller"):
+    with pytest.raises(
+        ValueError, match="multiple pending pr_review rounds found for this caller"
+    ):
         run_benchmarked_round(
             task_class="pr_review",
             review_cwd=tmp_path,
@@ -1068,22 +1371,50 @@ def test_run_benchmarked_round_direct_grade_rejects_ambiguous_caller_pending_rou
         )
 
 
-def test_run_benchmarked_round_complete_grade_inputs_without_pending_falls_through(monkeypatch, tmp_path) -> None:
-    monkeypatch.setattr("review_suite_arena._ensure_no_pending_grades", lambda **kwargs: None)
-    monkeypatch.setattr("review_suite_arena.find_pending_rounds_for_caller", lambda **kwargs: [])
+def test_run_benchmarked_round_complete_grade_inputs_without_pending_falls_through(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setattr(
+        "review_suite_arena._ensure_no_pending_grades", lambda **kwargs: None
+    )
+    monkeypatch.setattr(
+        "review_suite_arena.find_pending_rounds_for_caller", lambda **kwargs: []
+    )
     monkeypatch.setattr("review_suite_arena.iter_round_payloads", lambda state_dir: [])
     monkeypatch.setattr("review_suite_arena.load_roster", lambda path: {"variants": []})
-    monkeypatch.setattr("review_suite_arena.load_rubric", lambda path: {"categories": []})
+    monkeypatch.setattr(
+        "review_suite_arena.load_rubric", lambda path: {"categories": []}
+    )
     monkeypatch.setattr("review_suite_arena.read_jsonl", lambda path: [])
     monkeypatch.setattr("review_suite_arena.load_operational_state", lambda path: {})
-    monkeypatch.setattr("review_suite_arena.select_pair", lambda **kwargs: {"round_id": "new-round", "task_class": "pr_review"})
+    monkeypatch.setattr(
+        "review_suite_arena.select_pair",
+        lambda **kwargs: {"round_id": "new-round", "task_class": "pr_review"},
+    )
     monkeypatch.setattr("review_suite_arena.write_round", lambda *args, **kwargs: None)
-    monkeypatch.setattr("review_suite_arena.run_round", lambda **kwargs: {"round_id": "new-round", "task_class": "pr_review", "runs": []})
-    monkeypatch.setattr("review_suite_arena.public_round_result", lambda *args, **kwargs: {"blocked": False, "runs": []})
-    monkeypatch.setattr("review_suite_arena._print_findings", lambda *args, **kwargs: None)
-    monkeypatch.setattr("review_suite_arena._current_branch_name", lambda review_cwd: "branch-1")
+    monkeypatch.setattr(
+        "review_suite_arena.run_round",
+        lambda **kwargs: {
+            "round_id": "new-round",
+            "task_class": "pr_review",
+            "runs": [],
+        },
+    )
+    monkeypatch.setattr(
+        "review_suite_arena.public_round_result",
+        lambda *args, **kwargs: {"blocked": False, "runs": []},
+    )
+    monkeypatch.setattr(
+        "review_suite_arena._print_findings", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        "review_suite_arena._current_branch_name", lambda review_cwd: "branch-1"
+    )
     monkeypatch.setattr("review_suite_arena._print_next_steps", lambda **kwargs: None)
-    monkeypatch.setattr("review_suite_arena._record_grade_result", lambda **kwargs: {"status": "graded", "round_id": kwargs["round_id"]})
+    monkeypatch.setattr(
+        "review_suite_arena._record_grade_result",
+        lambda **kwargs: {"status": "graded", "round_id": kwargs["round_id"]},
+    )
     monkeypatch.setattr("review_suite_arena.emit_toon", lambda payload: None)
 
     result = run_benchmarked_round(
@@ -1112,14 +1443,25 @@ def test_run_benchmarked_round_complete_grade_inputs_without_pending_falls_throu
     assert result == 0
 
 
-def test_run_benchmarked_round_direct_grade_without_caller_uses_single_repo_pending_round(monkeypatch, tmp_path) -> None:
+def test_run_benchmarked_round_direct_grade_without_caller_uses_single_repo_pending_round(
+    monkeypatch, tmp_path
+) -> None:
     captured: dict[str, object] = {}
     emitted: list[dict[str, object]] = []
 
-    monkeypatch.setattr("review_suite_arena._ensure_no_pending_grades", lambda **kwargs: (_ for _ in ()).throw(AssertionError("should not check pending before direct grade")))
+    monkeypatch.setattr(
+        "review_suite_arena._ensure_no_pending_grades",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("should not check pending before direct grade")
+        ),
+    )
     monkeypatch.setattr("review_suite_arena.load_roster", lambda path: {"variants": []})
-    monkeypatch.setattr("review_suite_arena.load_rubric", lambda path: {"categories": []})
-    monkeypatch.setattr("review_suite_arena.find_pending_rounds_for_caller", lambda **kwargs: [])
+    monkeypatch.setattr(
+        "review_suite_arena.load_rubric", lambda path: {"categories": []}
+    )
+    monkeypatch.setattr(
+        "review_suite_arena.find_pending_rounds_for_caller", lambda **kwargs: []
+    )
     monkeypatch.setattr(
         "review_suite_arena.iter_round_payloads",
         lambda state_dir: [
@@ -1129,8 +1471,16 @@ def test_run_benchmarked_round_direct_grade_without_caller_uses_single_repo_pend
                 "status": "completed",
                 "review_cwd_normalized": str(tmp_path),
                 "runs": [
-                    {"slot": "alpha", "review_status": "completed", "grade_blocked": False},
-                    {"slot": "bravo", "review_status": "completed", "grade_blocked": False},
+                    {
+                        "slot": "alpha",
+                        "review_status": "completed",
+                        "grade_blocked": False,
+                    },
+                    {
+                        "slot": "bravo",
+                        "review_status": "completed",
+                        "grade_blocked": False,
+                    },
                 ],
             }
         ],
@@ -1140,8 +1490,12 @@ def test_run_benchmarked_round_direct_grade_without_caller_uses_single_repo_pend
         captured.update(kwargs)
         return {"status": "graded", "round_id": kwargs["round_id"]}
 
-    monkeypatch.setattr("review_suite_arena._record_grade_result", fake_record_grade_result)
-    monkeypatch.setattr("review_suite_arena.emit_toon", lambda payload: emitted.append(payload))
+    monkeypatch.setattr(
+        "review_suite_arena._record_grade_result", fake_record_grade_result
+    )
+    monkeypatch.setattr(
+        "review_suite_arena.emit_toon", lambda payload: emitted.append(payload)
+    )
 
     result = run_benchmarked_round(
         task_class="pr_review",
@@ -1168,17 +1522,30 @@ def test_run_benchmarked_round_direct_grade_without_caller_uses_single_repo_pend
 
     assert result == 0
     assert captured["round_id"] == "repo-round"
-    assert emitted == [{"status": "graded", "round_id": "repo-round", "task": "review_t3"}]
+    assert emitted == [
+        {"status": "graded", "round_id": "repo-round", "task": "review_t3"}
+    ]
 
 
-def test_run_benchmarked_round_direct_grade_with_caller_falls_back_to_unique_repo_pending_round(monkeypatch, tmp_path) -> None:
+def test_run_benchmarked_round_direct_grade_with_caller_falls_back_to_unique_repo_pending_round(
+    monkeypatch, tmp_path
+) -> None:
     captured: dict[str, object] = {}
     emitted: list[dict[str, object]] = []
 
-    monkeypatch.setattr("review_suite_arena._ensure_no_pending_grades", lambda **kwargs: (_ for _ in ()).throw(AssertionError("should not check pending before direct grade")))
+    monkeypatch.setattr(
+        "review_suite_arena._ensure_no_pending_grades",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("should not check pending before direct grade")
+        ),
+    )
     monkeypatch.setattr("review_suite_arena.load_roster", lambda path: {"variants": []})
-    monkeypatch.setattr("review_suite_arena.load_rubric", lambda path: {"categories": []})
-    monkeypatch.setattr("review_suite_arena.find_pending_rounds_for_caller", lambda **kwargs: [])
+    monkeypatch.setattr(
+        "review_suite_arena.load_rubric", lambda path: {"categories": []}
+    )
+    monkeypatch.setattr(
+        "review_suite_arena.find_pending_rounds_for_caller", lambda **kwargs: []
+    )
     monkeypatch.setattr(
         "review_suite_arena.iter_round_payloads",
         lambda state_dir: [
@@ -1188,8 +1555,16 @@ def test_run_benchmarked_round_direct_grade_with_caller_falls_back_to_unique_rep
                 "status": "completed",
                 "review_cwd_normalized": str(tmp_path),
                 "runs": [
-                    {"slot": "alpha", "review_status": "completed", "grade_blocked": False},
-                    {"slot": "bravo", "review_status": "completed", "grade_blocked": False},
+                    {
+                        "slot": "alpha",
+                        "review_status": "completed",
+                        "grade_blocked": False,
+                    },
+                    {
+                        "slot": "bravo",
+                        "review_status": "completed",
+                        "grade_blocked": False,
+                    },
                 ],
             }
         ],
@@ -1199,8 +1574,12 @@ def test_run_benchmarked_round_direct_grade_with_caller_falls_back_to_unique_rep
         captured.update(kwargs)
         return {"status": "graded", "round_id": kwargs["round_id"]}
 
-    monkeypatch.setattr("review_suite_arena._record_grade_result", fake_record_grade_result)
-    monkeypatch.setattr("review_suite_arena.emit_toon", lambda payload: emitted.append(payload))
+    monkeypatch.setattr(
+        "review_suite_arena._record_grade_result", fake_record_grade_result
+    )
+    monkeypatch.setattr(
+        "review_suite_arena.emit_toon", lambda payload: emitted.append(payload)
+    )
 
     result = run_benchmarked_round(
         task_class="pr_review",
@@ -1227,16 +1606,34 @@ def test_run_benchmarked_round_direct_grade_with_caller_falls_back_to_unique_rep
 
     assert result == 0
     assert captured["round_id"] == "repo-round"
-    assert emitted == [{"status": "graded", "round_id": "repo-round", "task": "review_t3"}]
+    assert emitted == [
+        {"status": "graded", "round_id": "repo-round", "task": "review_t3"}
+    ]
 
 
-def test_run_benchmarked_round_direct_grade_without_caller_rejects_ambiguous_repo_pending_rounds(monkeypatch, tmp_path) -> None:
-    monkeypatch.setattr("review_suite_arena.find_pending_rounds_for_caller", lambda **kwargs: [])
+def test_run_benchmarked_round_direct_grade_without_caller_rejects_ambiguous_repo_pending_rounds(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setattr(
+        "review_suite_arena.find_pending_rounds_for_caller", lambda **kwargs: []
+    )
     monkeypatch.setattr(
         "review_suite_arena.iter_round_payloads",
         lambda state_dir: [
-            {"round_id": "round-a", "task_class": "pr_review", "status": "completed", "review_cwd_normalized": str(tmp_path), "runs": []},
-            {"round_id": "round-b", "task_class": "pr_review", "status": "completed", "review_cwd_normalized": str(tmp_path), "runs": []},
+            {
+                "round_id": "round-a",
+                "task_class": "pr_review",
+                "status": "completed",
+                "review_cwd_normalized": str(tmp_path),
+                "runs": [],
+            },
+            {
+                "round_id": "round-b",
+                "task_class": "pr_review",
+                "status": "completed",
+                "review_cwd_normalized": str(tmp_path),
+                "runs": [],
+            },
         ],
     )
 
@@ -1265,7 +1662,9 @@ def test_run_benchmarked_round_direct_grade_without_caller_rejects_ambiguous_rep
         )
 
 
-def test_cmd_reroll_slot_records_workflow_anchor_when_completed(monkeypatch, tmp_path) -> None:
+def test_cmd_reroll_slot_records_workflow_anchor_when_completed(
+    monkeypatch, tmp_path
+) -> None:
     anchor_calls: list[dict[str, object]] = []
     emitted: list[dict[str, object]] = []
 
@@ -1298,13 +1697,28 @@ def test_cmd_reroll_slot_records_workflow_anchor_when_completed(monkeypatch, tmp
         return {"round_id": "round-2", "task_class": "pr_review", "runs": []}
 
     monkeypatch.setattr("review_suite_arena.run_round", fake_run_round)
-    monkeypatch.setattr("review_suite_arena.public_round_result", lambda *args, **kwargs: {"blocked": False, "runs": []})
-    monkeypatch.setattr("review_suite_arena._print_findings", lambda *args, **kwargs: None)
-    monkeypatch.setattr("review_suite_arena._current_branch_name", lambda review_cwd: "branch-1")
+    monkeypatch.setattr(
+        "review_suite_arena.public_round_result",
+        lambda *args, **kwargs: {"blocked": False, "runs": []},
+    )
+    monkeypatch.setattr(
+        "review_suite_arena._print_findings", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        "review_suite_arena._current_branch_name", lambda review_cwd: "branch-1"
+    )
     monkeypatch.setattr("review_suite_arena._output_isatty", lambda: False)
-    monkeypatch.setattr("review_suite_arena.write_round", lambda state_dir, payload: writes.append(dict(payload)) or None)
-    monkeypatch.setattr("review_suite_arena.record_review_anchor", lambda **kwargs: anchor_calls.append(kwargs) or {})
-    monkeypatch.setattr("review_suite_arena.emit_toon", lambda payload: emitted.append(payload))
+    monkeypatch.setattr(
+        "review_suite_arena.write_round",
+        lambda state_dir, payload: writes.append(dict(payload)) or None,
+    )
+    monkeypatch.setattr(
+        "review_suite_arena.record_review_anchor",
+        lambda **kwargs: anchor_calls.append(kwargs) or {},
+    )
+    monkeypatch.setattr(
+        "review_suite_arena.emit_toon", lambda payload: emitted.append(payload)
+    )
 
     result = __import__("review_suite_arena").cmd_reroll_slot(
         Namespace(
@@ -1335,7 +1749,9 @@ def test_cmd_reroll_slot_records_workflow_anchor_when_completed(monkeypatch, tmp
     assert anchor_calls[0]["task_id"] == "branch-1"
 
 
-def test_cmd_reroll_slot_skips_workflow_anchor_for_orchestrated_round(monkeypatch, tmp_path) -> None:
+def test_cmd_reroll_slot_skips_workflow_anchor_for_orchestrated_round(
+    monkeypatch, tmp_path
+) -> None:
     anchor_calls: list[dict[str, object]] = []
 
     monkeypatch.setattr("review_suite_arena.load_roster", lambda path: {"variants": []})
@@ -1364,13 +1780,29 @@ def test_cmd_reroll_slot_skips_workflow_anchor_for_orchestrated_round(monkeypatc
         },
     )
     writes: list[dict[str, object]] = []
-    monkeypatch.setattr("review_suite_arena.run_round", lambda **kwargs: {"round_id": "round-2", "task_class": "pr_review", "runs": []})
-    monkeypatch.setattr("review_suite_arena.public_round_result", lambda *args, **kwargs: {"blocked": False, "runs": []})
-    monkeypatch.setattr("review_suite_arena._print_findings", lambda *args, **kwargs: None)
-    monkeypatch.setattr("review_suite_arena._current_branch_name", lambda review_cwd: "branch-1")
+    monkeypatch.setattr(
+        "review_suite_arena.run_round",
+        lambda **kwargs: {"round_id": "round-2", "task_class": "pr_review", "runs": []},
+    )
+    monkeypatch.setattr(
+        "review_suite_arena.public_round_result",
+        lambda *args, **kwargs: {"blocked": False, "runs": []},
+    )
+    monkeypatch.setattr(
+        "review_suite_arena._print_findings", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        "review_suite_arena._current_branch_name", lambda review_cwd: "branch-1"
+    )
     monkeypatch.setattr("review_suite_arena._output_isatty", lambda: False)
-    monkeypatch.setattr("review_suite_arena.write_round", lambda state_dir, payload: writes.append(dict(payload)) or None)
-    monkeypatch.setattr("review_suite_arena.record_review_anchor", lambda **kwargs: anchor_calls.append(kwargs) or {})
+    monkeypatch.setattr(
+        "review_suite_arena.write_round",
+        lambda state_dir, payload: writes.append(dict(payload)) or None,
+    )
+    monkeypatch.setattr(
+        "review_suite_arena.record_review_anchor",
+        lambda **kwargs: anchor_calls.append(kwargs) or {},
+    )
     monkeypatch.setattr("review_suite_arena.emit_toon", lambda payload: None)
 
     result = __import__("review_suite_arena").cmd_reroll_slot(
@@ -1395,7 +1827,9 @@ def test_cmd_reroll_slot_skips_workflow_anchor_for_orchestrated_round(monkeypatc
     assert anchor_calls == []
 
 
-def test_cmd_run_round_records_workflow_anchor_when_completed(monkeypatch, tmp_path, capsys) -> None:
+def test_cmd_run_round_records_workflow_anchor_when_completed(
+    monkeypatch, tmp_path, capsys
+) -> None:
     anchor_calls: list[dict[str, object]] = []
     emitted: list[dict[str, object]] = []
 
@@ -1420,7 +1854,13 @@ def test_cmd_run_round_records_workflow_anchor_when_completed(monkeypatch, tmp_p
             "round_id": "round-1",
             "task_class": "pr_review",
             "review_scope": {"base": "main", "reviewed_head": "head-sha"},
-            "runs": [{"slot": "alpha", "review_status": "completed", "reviewer_output": "Run-round body"}],
+            "runs": [
+                {
+                    "slot": "alpha",
+                    "review_status": "completed",
+                    "reviewer_output": "Run-round body",
+                }
+            ],
         }
 
     monkeypatch.setattr(
@@ -1428,12 +1868,22 @@ def test_cmd_run_round_records_workflow_anchor_when_completed(monkeypatch, tmp_p
         fake_run_round,
     )
     monkeypatch.setattr("review_suite_arena.write_round", lambda *args, **kwargs: None)
-    monkeypatch.setattr("review_suite_arena.public_round_result", lambda *args, **kwargs: {"blocked": False, "runs": []})
+    monkeypatch.setattr(
+        "review_suite_arena.public_round_result",
+        lambda *args, **kwargs: {"blocked": False, "runs": []},
+    )
     monkeypatch.setattr("review_suite_arena._resolve_review_cwd", lambda cd: tmp_path)
-    monkeypatch.setattr("review_suite_arena._current_branch_name", lambda review_cwd: "branch-1")
+    monkeypatch.setattr(
+        "review_suite_arena._current_branch_name", lambda review_cwd: "branch-1"
+    )
     monkeypatch.setattr("review_suite_arena._output_isatty", lambda: False)
-    monkeypatch.setattr("review_suite_arena.record_review_anchor", lambda **kwargs: anchor_calls.append(kwargs) or {})
-    monkeypatch.setattr("review_suite_arena.emit_toon", lambda payload: emitted.append(payload))
+    monkeypatch.setattr(
+        "review_suite_arena.record_review_anchor",
+        lambda **kwargs: anchor_calls.append(kwargs) or {},
+    )
+    monkeypatch.setattr(
+        "review_suite_arena.emit_toon", lambda payload: emitted.append(payload)
+    )
 
     result = __import__("review_suite_arena").cmd_run_round(
         Namespace(
@@ -1457,7 +1907,9 @@ def test_cmd_run_round_records_workflow_anchor_when_completed(monkeypatch, tmp_p
     assert "Run-round body" in capsys.readouterr().out
 
 
-def test_cmd_run_round_skips_workflow_anchor_for_orchestrated_round(monkeypatch, tmp_path) -> None:
+def test_cmd_run_round_skips_workflow_anchor_for_orchestrated_round(
+    monkeypatch, tmp_path
+) -> None:
     anchor_calls: list[dict[str, object]] = []
 
     monkeypatch.setattr("review_suite_arena.load_roster", lambda path: {"variants": []})
@@ -1480,15 +1932,29 @@ def test_cmd_run_round_skips_workflow_anchor_for_orchestrated_round(monkeypatch,
             "round_id": "round-1",
             "task_class": "pr_review",
             "review_scope": {"base": "main", "reviewed_head": "head-sha"},
-            "runs": [{"slot": "alpha", "review_status": "completed", "reviewer_output": "Run-round body"}],
+            "runs": [
+                {
+                    "slot": "alpha",
+                    "review_status": "completed",
+                    "reviewer_output": "Run-round body",
+                }
+            ],
         },
     )
     monkeypatch.setattr("review_suite_arena.write_round", lambda *args, **kwargs: None)
-    monkeypatch.setattr("review_suite_arena.public_round_result", lambda *args, **kwargs: {"blocked": False, "runs": []})
+    monkeypatch.setattr(
+        "review_suite_arena.public_round_result",
+        lambda *args, **kwargs: {"blocked": False, "runs": []},
+    )
     monkeypatch.setattr("review_suite_arena._resolve_review_cwd", lambda cd: tmp_path)
-    monkeypatch.setattr("review_suite_arena._current_branch_name", lambda review_cwd: "branch-1")
+    monkeypatch.setattr(
+        "review_suite_arena._current_branch_name", lambda review_cwd: "branch-1"
+    )
     monkeypatch.setattr("review_suite_arena._output_isatty", lambda: False)
-    monkeypatch.setattr("review_suite_arena.record_review_anchor", lambda **kwargs: anchor_calls.append(kwargs) or {})
+    monkeypatch.setattr(
+        "review_suite_arena.record_review_anchor",
+        lambda **kwargs: anchor_calls.append(kwargs) or {},
+    )
     monkeypatch.setattr("review_suite_arena.emit_toon", lambda payload: None)
 
     result = __import__("review_suite_arena").cmd_run_round(
@@ -1508,7 +1974,9 @@ def test_cmd_run_round_skips_workflow_anchor_for_orchestrated_round(monkeypatch,
     assert anchor_calls == []
 
 
-def test_cmd_resume_round_records_workflow_anchor_when_completed(monkeypatch, tmp_path, capsys) -> None:
+def test_cmd_resume_round_records_workflow_anchor_when_completed(
+    monkeypatch, tmp_path, capsys
+) -> None:
     anchor_calls: list[dict[str, object]] = []
     emitted: list[dict[str, object]] = []
 
@@ -1529,14 +1997,30 @@ def test_cmd_resume_round_records_workflow_anchor_when_completed(monkeypatch, tm
             "round_id": "round-1",
             "task_class": "pr_review",
             "review_scope": {"base": "main"},
-            "runs": [{"slot": "alpha", "review_status": "completed", "reviewer_output": "Resume body"}],
+            "runs": [
+                {
+                    "slot": "alpha",
+                    "review_status": "completed",
+                    "reviewer_output": "Resume body",
+                }
+            ],
         },
     )
-    monkeypatch.setattr("review_suite_arena.public_round_result", lambda *args, **kwargs: {"blocked": False, "runs": []})
-    monkeypatch.setattr("review_suite_arena._current_branch_name", lambda review_cwd: "branch-1")
+    monkeypatch.setattr(
+        "review_suite_arena.public_round_result",
+        lambda *args, **kwargs: {"blocked": False, "runs": []},
+    )
+    monkeypatch.setattr(
+        "review_suite_arena._current_branch_name", lambda review_cwd: "branch-1"
+    )
     monkeypatch.setattr("review_suite_arena._output_isatty", lambda: False)
-    monkeypatch.setattr("review_suite_arena.record_review_anchor", lambda **kwargs: anchor_calls.append(kwargs) or {})
-    monkeypatch.setattr("review_suite_arena.emit_toon", lambda payload: emitted.append(payload))
+    monkeypatch.setattr(
+        "review_suite_arena.record_review_anchor",
+        lambda **kwargs: anchor_calls.append(kwargs) or {},
+    )
+    monkeypatch.setattr(
+        "review_suite_arena.emit_toon", lambda payload: emitted.append(payload)
+    )
 
     result = cmd_resume_round(
         Namespace(
@@ -1557,7 +2041,9 @@ def test_cmd_resume_round_records_workflow_anchor_when_completed(monkeypatch, tm
     assert "Resume body" in capsys.readouterr().out
 
 
-def test_cmd_resume_round_skips_workflow_anchor_for_orchestrated_round(monkeypatch, tmp_path) -> None:
+def test_cmd_resume_round_skips_workflow_anchor_for_orchestrated_round(
+    monkeypatch, tmp_path
+) -> None:
     anchor_calls: list[dict[str, object]] = []
 
     monkeypatch.setattr("review_suite_arena.load_roster", lambda path: {"variants": []})
@@ -1580,13 +2066,27 @@ def test_cmd_resume_round_skips_workflow_anchor_for_orchestrated_round(monkeypat
             "round_id": "round-1",
             "task_class": "pr_review",
             "review_scope": {"base": "main"},
-            "runs": [{"slot": "alpha", "review_status": "completed", "reviewer_output": "Resume body"}],
+            "runs": [
+                {
+                    "slot": "alpha",
+                    "review_status": "completed",
+                    "reviewer_output": "Resume body",
+                }
+            ],
         },
     )
-    monkeypatch.setattr("review_suite_arena.public_round_result", lambda *args, **kwargs: {"blocked": False, "runs": []})
-    monkeypatch.setattr("review_suite_arena._current_branch_name", lambda review_cwd: "branch-1")
+    monkeypatch.setattr(
+        "review_suite_arena.public_round_result",
+        lambda *args, **kwargs: {"blocked": False, "runs": []},
+    )
+    monkeypatch.setattr(
+        "review_suite_arena._current_branch_name", lambda review_cwd: "branch-1"
+    )
     monkeypatch.setattr("review_suite_arena._output_isatty", lambda: False)
-    monkeypatch.setattr("review_suite_arena.record_review_anchor", lambda **kwargs: anchor_calls.append(kwargs) or {})
+    monkeypatch.setattr(
+        "review_suite_arena.record_review_anchor",
+        lambda **kwargs: anchor_calls.append(kwargs) or {},
+    )
     monkeypatch.setattr("review_suite_arena.emit_toon", lambda payload: None)
 
     result = cmd_resume_round(
@@ -1604,7 +2104,9 @@ def test_cmd_resume_round_skips_workflow_anchor_for_orchestrated_round(monkeypat
     assert anchor_calls == []
 
 
-def test_resume_orchestrator_review_step_collects_existing_running_round(monkeypatch, tmp_path) -> None:
+def test_resume_orchestrator_review_step_collects_existing_running_round(
+    monkeypatch, tmp_path
+) -> None:
     state_dir = tmp_path / "state"
     round_state_dir = state_dir / "orchestrator" / "review-rounds"
     review_cwd = tmp_path / "repo"
@@ -1659,8 +2161,13 @@ def test_resume_orchestrator_review_step_collects_existing_running_round(monkeyp
             ],
         }
 
-    monkeypatch.setattr("review_suite_arena.collect_round_results", fake_collect_round_results)
-    monkeypatch.setattr("review_suite_arena.refresh_review_cost_report_best_effort", lambda **kwargs: None)
+    monkeypatch.setattr(
+        "review_suite_arena.collect_round_results", fake_collect_round_results
+    )
+    monkeypatch.setattr(
+        "review_suite_arena.refresh_review_cost_report_best_effort",
+        lambda **kwargs: None,
+    )
     monkeypatch.setattr("review_suite_arena._print_findings", lambda result: False)
 
     result = resume_orchestrator_review_step(
@@ -1679,7 +2186,11 @@ def test_resume_orchestrator_review_step_collects_existing_running_round(monkeyp
     assert result["round_id"] == "phase_review-round-1"
     assert result["status"] == "completed"
     assert result["output_refs"] == ["rollout://phase_review-round-1/alpha"]
-    saved = json.loads((round_state_dir / "rounds" / "phase_review-round-1.json").read_text(encoding="utf-8"))
+    saved = json.loads(
+        (round_state_dir / "rounds" / "phase_review-round-1.json").read_text(
+            encoding="utf-8"
+        )
+    )
     assert saved["task_id_hint"] == "branch-1"
     assert saved["public_task"] == "review_t1"
     assert saved["orchestrator_step"] == "precision"
@@ -1700,17 +2211,31 @@ def test_cmd_sample_emits_public_task_alias(monkeypatch, tmp_path) -> None:
     captured: dict[str, object] = {}
     repo_root = tmp_path / "repo-root"
 
-    monkeypatch.setattr("review_suite_arena.resolve_caller_id", lambda caller_id: (None, None))
+    monkeypatch.setattr(
+        "review_suite_arena.resolve_caller_id", lambda caller_id: (None, None)
+    )
     monkeypatch.setattr("review_suite_arena._resolve_review_cwd", lambda cd: repo_root)
     monkeypatch.setattr("review_suite_arena.load_roster", lambda path: {"variants": []})
     monkeypatch.setattr("review_suite_arena.read_jsonl", lambda path: [])
-    monkeypatch.setattr("review_suite_arena.load_operational_state", lambda path: {"task_classes": {}})
+    monkeypatch.setattr(
+        "review_suite_arena.load_operational_state", lambda path: {"task_classes": {}}
+    )
     monkeypatch.setattr(
         "review_suite_arena.select_pair",
-        lambda **kwargs: captured.update(kwargs) or {"round_id": "round-1", "task_class": "phase_review", "status": "sampled", "runs": []},
+        lambda **kwargs: (
+            captured.update(kwargs)
+            or {
+                "round_id": "round-1",
+                "task_class": "phase_review",
+                "status": "sampled",
+                "runs": [],
+            }
+        ),
     )
     monkeypatch.setattr("review_suite_arena.write_round", lambda *args, **kwargs: None)
-    monkeypatch.setattr("review_suite_arena.emit_toon", lambda payload: emitted.append(payload))
+    monkeypatch.setattr(
+        "review_suite_arena.emit_toon", lambda payload: emitted.append(payload)
+    )
 
     result = __import__("review_suite_arena").cmd_sample(
         Namespace(
@@ -1727,4 +2252,12 @@ def test_cmd_sample_emits_public_task_alias(monkeypatch, tmp_path) -> None:
     assert result == 0
     assert captured["task_class"] == "phase_review"
     assert captured["review_cwd"] == repo_root
-    assert emitted == [{"round_id": "round-1", "task": "review_t1", "status": "sampled", "sampled_at": None, "reviewers": []}]
+    assert emitted == [
+        {
+            "round_id": "round-1",
+            "task": "review_t1",
+            "status": "sampled",
+            "sampled_at": None,
+            "reviewers": [],
+        }
+    ]

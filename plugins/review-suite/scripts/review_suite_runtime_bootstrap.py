@@ -22,7 +22,9 @@ METADATA_FILENAME = "runtime_metadata.json"
 RUNTIME_ITEMS = ("scripts", "references", "assets", "config", ".codex-plugin")
 EXCLUDED_NAMES = {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"}
 EXCLUDED_SUFFIXES = {".pyc", ".pyo"}
-RUNTIME_RETIRE_AFTER_SECONDS = 24 * 60 * 60  # ponytail: age guard; add process leases if multi-day runtime reuse matters.
+RUNTIME_RETIRE_AFTER_SECONDS = (
+    24 * 60 * 60
+)  # ponytail: age guard; add process leases if multi-day runtime reuse matters.
 RUNTIME_LEASE_STALE_AFTER_SECONDS = 10 * 60
 RUNTIME_LEASE_REFRESH_SECONDS = 60
 _RUNTIME_LEASES: dict[str, tuple[threading.Event, Path]] = {}
@@ -55,13 +57,19 @@ def bootstrap_from_installed_cache(
         executable=executable,
     )
     if plan is None:
-        _activate_runtime_lease(Path(script_file), os.environ if environ is None else environ)
+        _activate_runtime_lease(
+            Path(script_file), os.environ if environ is None else environ
+        )
         return False
     previous_launcher = os.environ.get(LAUNCHER_SCRIPT_ENV)
     os.environ[LAUNCHER_SCRIPT_ENV] = str(plan.source_script)
     try:
         if (platform_name or os.name) == "nt":
-            exit_code = run(plan.executable, plan.argv) if run else _run_runtime_process(plan.executable, plan.argv)
+            exit_code = (
+                run(plan.executable, plan.argv)
+                if run
+                else _run_runtime_process(plan.executable, plan.argv)
+            )
             raise SystemExit(exit_code)
         execv(plan.executable, plan.argv)
         raise RuntimeError("runtime bootstrap exec returned unexpectedly")
@@ -72,7 +80,9 @@ def bootstrap_from_installed_cache(
             os.environ[LAUNCHER_SCRIPT_ENV] = previous_launcher
 
 
-def launcher_script_path(current_file: str | os.PathLike[str], name: str | None = None) -> Path:
+def launcher_script_path(
+    current_file: str | os.PathLike[str], name: str | None = None
+) -> Path:
     launcher = os.environ.get(LAUNCHER_SCRIPT_ENV)
     current = Path(current_file).resolve(strict=False)
     base = Path(launcher).resolve(strict=False) if launcher else current
@@ -80,7 +90,9 @@ def launcher_script_path(current_file: str | os.PathLike[str], name: str | None 
 
 
 def _activate_runtime_lease(script_path: Path, environ: Mapping[str, str]) -> None:
-    runtime_root = _runtime_root_for_script(script_path, codex_home=_codex_home(environ))
+    runtime_root = _runtime_root_for_script(
+        script_path, codex_home=_codex_home(environ)
+    )
     if runtime_root is None:
         return
     key = os.path.normcase(str(runtime_root.resolve(strict=False)))
@@ -95,7 +107,9 @@ def _activate_runtime_lease(script_path: Path, environ: Mapping[str, str]) -> No
             "updated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         }
         try:
-            lease_path.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+            lease_path.write_text(
+                json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8"
+            )
         except OSError:
             pass
 
@@ -104,7 +118,9 @@ def _activate_runtime_lease(script_path: Path, environ: Mapping[str, str]) -> No
         while not stop.wait(RUNTIME_LEASE_REFRESH_SECONDS):
             touch()
 
-    thread = threading.Thread(target=heartbeat, name=f"{PLUGIN_NAME}-runtime-lease", daemon=True)
+    thread = threading.Thread(
+        target=heartbeat, name=f"{PLUGIN_NAME}-runtime-lease", daemon=True
+    )
     _RUNTIME_LEASES[key] = (stop, lease_path)
     thread.start()
 
@@ -122,7 +138,9 @@ def _runtime_root_for_script(script_path: Path, *, codex_home: Path) -> Path | N
     parent = codex_home / "plugin-runtimes" / PLUGIN_NAME
     resolved_script = script_path.resolve(strict=False)
     for candidate in (resolved_script.parent, *resolved_script.parents):
-        if os.path.normcase(str(candidate.parent.resolve(strict=False))) != os.path.normcase(str(parent.resolve(strict=False))):
+        if os.path.normcase(
+            str(candidate.parent.resolve(strict=False))
+        ) != os.path.normcase(str(parent.resolve(strict=False))):
             continue
         if (candidate / METADATA_FILENAME).is_file():
             return candidate
@@ -148,7 +166,11 @@ def prepare_runtime_bootstrap(
     runtime_root = ensure_runtime_copy(source_root, codex_home=codex_home)
     runtime_script = runtime_root / relative_script
     current_argv = tuple(sys.argv if argv is None else argv)
-    next_argv = (str(executable or sys.executable), str(runtime_script), *current_argv[1:])
+    next_argv = (
+        str(executable or sys.executable),
+        str(runtime_script),
+        *current_argv[1:],
+    )
     return RuntimeBootstrapPlan(
         source_root=source_root,
         source_script=source_root / relative_script,
@@ -229,7 +251,11 @@ def find_plugin_root(path: Path) -> Path | None:
 
 def _codex_home(environ: Mapping[str, str]) -> Path:
     value = str(environ.get("CODEX_HOME") or "").strip()
-    return Path(value).expanduser().resolve(strict=False) if value else (Path.home() / ".codex").resolve(strict=False)
+    return (
+        Path(value).expanduser().resolve(strict=False)
+        if value
+        else (Path.home() / ".codex").resolve(strict=False)
+    )
 
 
 def _is_installed_cache_root(source_root: Path, codex_home: Path) -> bool:
@@ -251,7 +277,9 @@ def _load_manifest(source_root: Path) -> dict[str, object]:
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        raise RuntimeError(f"invalid {PLUGIN_NAME} plugin manifest: {manifest_path}") from exc
+        raise RuntimeError(
+            f"invalid {PLUGIN_NAME} plugin manifest: {manifest_path}"
+        ) from exc
     if str(manifest.get("name") or "") != PLUGIN_NAME:
         raise RuntimeError(f"plugin manifest is not {PLUGIN_NAME}: {manifest_path}")
     return dict(manifest)
@@ -279,7 +307,11 @@ def _excluded(path: Path) -> bool:
 
 
 def _ignore_runtime_items(_directory: str, names: list[str]) -> set[str]:
-    return {name for name in names if name in EXCLUDED_NAMES or Path(name).suffix in EXCLUDED_SUFFIXES}
+    return {
+        name
+        for name in names
+        if name in EXCLUDED_NAMES or Path(name).suffix in EXCLUDED_SUFFIXES
+    }
 
 
 def _copy_runtime_items(source_root: Path, temp_root: Path) -> None:
@@ -310,12 +342,18 @@ def _write_metadata(
         "runtime_key": runtime_key,
         "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
     }
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
 
 
 def _cleanup_stale_runtime_roots(parent: Path, *, keep_root: Path) -> None:
     try:
-        roots = [path for path in parent.iterdir() if path.is_dir() and not path.name.startswith(".")]
+        roots = [
+            path
+            for path in parent.iterdir()
+            if path.is_dir() and not path.name.startswith(".")
+        ]
     except OSError:
         return
 
@@ -344,7 +382,9 @@ def _runtime_age_seconds(runtime_root: Path) -> float:
     created_at = metadata.get("created_at")
     if isinstance(created_at, str):
         try:
-            created = datetime.fromisoformat(created_at.replace("Z", "+00:00")).timestamp()
+            created = datetime.fromisoformat(
+                created_at.replace("Z", "+00:00")
+            ).timestamp()
             return time.time() - created
         except ValueError:
             pass
@@ -393,5 +433,7 @@ def _promote_temp_runtime(temp_root: Path, runtime_root: Path) -> None:
 
 
 def _safe_key_part(value: str) -> str:
-    safe = "".join(char if char.isalnum() or char in {".", "-", "_"} else "-" for char in value)
+    safe = "".join(
+        char if char.isalnum() or char in {".", "-", "_"} else "-" for char in value
+    )
     return safe.strip(".-_") or "0.0.0"

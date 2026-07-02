@@ -27,7 +27,9 @@ class _FailingStdout:
 
     def write(self, value: str) -> int:
         self.text_writes.append(value)
-        raise UnicodeEncodeError("charmap", value, 0, 1, "character maps to <undefined>")
+        raise UnicodeEncodeError(
+            "charmap", value, 0, 1, "character maps to <undefined>"
+        )
 
 
 def test_emit_toon_falls_back_when_stdout_cannot_encode_unicode(monkeypatch) -> None:
@@ -63,7 +65,7 @@ def test_emit_toon_separates_consecutive_payloads(monkeypatch) -> None:
     emit_toon({"To-Do": {"grade": "cmd"}})
 
     rendered = b"".join(fake_stdout.chunks).decode("utf-8")
-    assert rendered == 'To-Do:\n  grade: cmd\nTo-Do:\n  grade: cmd\n'
+    assert rendered == "To-Do:\n  grade: cmd\nTo-Do:\n  grade: cmd\n"
 
 
 def test_write_text_falls_back_when_stdout_cannot_encode_unicode(monkeypatch) -> None:

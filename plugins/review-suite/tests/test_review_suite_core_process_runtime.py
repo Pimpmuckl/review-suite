@@ -10,7 +10,10 @@ SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts"
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from review_suite_core.process_runtime import launch_captured_child_process, wait_for_captured_child_process
+from review_suite_core.process_runtime import (
+    launch_captured_child_process,
+    wait_for_captured_child_process,
+)
 
 
 def test_launch_captured_child_process_starts_clock_before_stdin_write(
@@ -37,8 +40,12 @@ def test_launch_captured_child_process_starts_clock_before_stdin_write(
         events.append("popen")
         return FakeProcess()
 
-    monkeypatch.setattr("review_suite_core.process_runtime.time.monotonic", fake_monotonic)
-    monkeypatch.setattr("review_suite_core.process_runtime.subprocess.Popen", fake_popen)
+    monkeypatch.setattr(
+        "review_suite_core.process_runtime.time.monotonic", fake_monotonic
+    )
+    monkeypatch.setattr(
+        "review_suite_core.process_runtime.subprocess.Popen", fake_popen
+    )
 
     child = launch_captured_child_process(
         command=[sys.executable, "-c", "pass"],

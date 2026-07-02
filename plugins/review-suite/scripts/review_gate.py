@@ -62,8 +62,6 @@ from review_suite_local import (
     total_usage_tokens,
     variant_service_tier,
     write_json,
-    aggregate_records,
-    eligible_variants,
 )
 from review_costs import refresh_review_cost_report_best_effort
 
@@ -101,7 +99,13 @@ INLINE_GATE_FALLBACK_MAX_ATTEMPTS_PER_SLOT = 1
 
 
 def _print_round_banner(*, gate_task_class: str, round_id: str) -> None:
-    print(f"[review-suite] round {PUBLIC_TASK_BY_GATE[gate_task_class]} {round_id}", file=sys.stderr, flush=True)
+    print(
+        f"[review-suite] round {PUBLIC_TASK_BY_GATE[gate_task_class]} {round_id}",
+        file=sys.stderr,
+        flush=True,
+    )
+
+
 PROVISIONAL_MIN_MODEL_RUNS = 10
 PROVISIONAL_TOTAL_REVIEWER_RUNS = 50
 OPERATIONAL_RETRY_DELAY_SECONDS = 1
@@ -134,7 +138,9 @@ class GateSelection:
 
 
 def _task_champion_ids(task_state: dict[str, Any]) -> tuple[str, ...]:
-    champion_ids = tuple(str(item) for item in list(task_state.get("champion_variant_ids") or []))
+    champion_ids = tuple(
+        str(item) for item in list(task_state.get("champion_variant_ids") or [])
+    )
     if champion_ids:
         return champion_ids
     legacy = str(task_state.get("champion_variant_id") or "").strip()
@@ -167,10 +173,20 @@ def _gate_leaderboard_path(state_dir: Path) -> Path:
     return state_dir / GATE_LEADERBOARD_FILENAME
 
 
-def _gate_partial_path(*, state_dir: Path, gate_task_class: str, review_cwd: Path, task_id: str, review_scope: dict[str, str]) -> Path:
+def _gate_partial_path(
+    *,
+    state_dir: Path,
+    gate_task_class: str,
+    review_cwd: Path,
+    task_id: str,
+    review_scope: dict[str, str],
+) -> Path:
     review_token = normalize_review_cwd_value(review_cwd) or str(review_cwd)
     scope_token = json.dumps(review_scope, sort_keys=True)
-    digest = blake2s(f"{gate_task_class}:{review_token}:{task_id}:{scope_token}".encode("utf-8"), digest_size=6).hexdigest()
+    digest = blake2s(
+        f"{gate_task_class}:{review_token}:{task_id}:{scope_token}".encode("utf-8"),
+        digest_size=6,
+    ).hexdigest()
     return _gate_partial_dir(state_dir) / f"{gate_task_class}-{digest}.json"
 
 
@@ -183,14 +199,26 @@ def _snapshot_queue_item(item: dict[str, Any]) -> dict[str, Any]:
     for key in ("fallback_attempts", "fallback_for_variant_id", "fallback_reason"):
         if item.get(key) is not None:
             snapshot[key] = item[key]
-    for key in ("pid", "title", "command", "stdout_path", "stderr_path", "final_message_path", "started_at"):
+    for key in (
+        "pid",
+        "title",
+        "command",
+        "stdout_path",
+        "stderr_path",
+        "final_message_path",
+        "started_at",
+    ):
         if item.get(key) is not None:
             value = item[key]
             snapshot[key] = str(value) if isinstance(value, Path) else value
     if item.get("retry_after") is not None:
-        snapshot["retry_delay_seconds"] = max(0.0, float(item.get("retry_after") or 0.0) - time.monotonic())
+        snapshot["retry_delay_seconds"] = max(
+            0.0, float(item.get("retry_after") or 0.0) - time.monotonic()
+        )
     elif item.get("retry_delay_seconds") is not None:
-        snapshot["retry_delay_seconds"] = max(0.0, float(item.get("retry_delay_seconds") or 0.0))
+        snapshot["retry_delay_seconds"] = max(
+            0.0, float(item.get("retry_delay_seconds") or 0.0)
+        )
     return snapshot
 
 
@@ -203,7 +231,9 @@ def _load_gate_partial(path: Path) -> dict[str, Any] | None:
         return None
 
 
-def _gate_partial_reference_time(path: Path, payload: dict[str, Any]) -> datetime | None:
+def _gate_partial_reference_time(
+    path: Path, payload: dict[str, Any]
+) -> datetime | None:
     timestamps = [
         _parse_timestamp(str(payload.get(key) or ""))
         for key in ("round_started_at", "recorded_at", "review_completed_at")
@@ -215,7 +245,9 @@ def _gate_partial_reference_time(path: Path, payload: dict[str, Any]) -> datetim
             for key in ("round_started_at", "recorded_at", "review_completed_at")
         )
     timestamps = [
-        timestamp if timestamp.tzinfo is not None else timestamp.replace(tzinfo=timezone.utc)
+        timestamp
+        if timestamp.tzinfo is not None
+        else timestamp.replace(tzinfo=timezone.utc)
         for timestamp in timestamps
         if timestamp is not None
     ]
@@ -235,14 +267,19 @@ def _gate_partial_has_live_process(payload: dict[str, Any]) -> bool:
     return False
 
 
-def _archive_gate_partial(path: Path, payload: dict[str, Any], *, dismissed_at: str, reason: str) -> Path:
+def _archive_gate_partial(
+    path: Path, payload: dict[str, Any], *, dismissed_at: str, reason: str
+) -> Path:
     dismissed_dir = path.parent / "dismissed"
     dismissed_dir.mkdir(parents=True, exist_ok=True)
     base = f"{path.stem}-stale-{dismissed_at.replace('-', '').replace(':', '')}{path.suffix}"
     destination = dismissed_dir / base
     counter = 1
     while destination.exists():
-        destination = dismissed_dir / f"{path.stem}-stale-{counter}-{dismissed_at.replace('-', '').replace(':', '')}{path.suffix}"
+        destination = (
+            dismissed_dir
+            / f"{path.stem}-stale-{counter}-{dismissed_at.replace('-', '').replace(':', '')}{path.suffix}"
+        )
         counter += 1
     payload = dict(payload)
     payload["status"] = "dismissed"
@@ -277,15 +314,24 @@ def cleanup_stale_gate_partials(
             if isinstance(final_record, dict):
                 if path.resolve() in preserved:
                     continue
-                round_id = str(final_record.get("round_id") or payload.get("round_id") or "")
-                if not round_id or not _gate_round_already_recorded(state_dir, round_id):
+                round_id = str(
+                    final_record.get("round_id") or payload.get("round_id") or ""
+                )
+                if not round_id or not _gate_round_already_recorded(
+                    state_dir, round_id
+                ):
                     continue
             reference_time = _gate_partial_reference_time(path, payload)
-            if reference_time is None or (now - reference_time).total_seconds() < stale_seconds:
+            if (
+                reference_time is None
+                or (now - reference_time).total_seconds() < stale_seconds
+            ):
                 continue
             if _gate_partial_has_live_process(payload):
                 continue
-            destination = _archive_gate_partial(path, payload, dismissed_at=dismissed_at, reason=reason)
+            destination = _archive_gate_partial(
+                path, payload, dismissed_at=dismissed_at, reason=reason
+            )
             cleaned.append(
                 {
                     "file": path.name,
@@ -298,7 +344,10 @@ def cleanup_stale_gate_partials(
 
 
 def _gate_round_already_recorded(state_dir: Path, round_id: str) -> bool:
-    return any(str(record.get("round_id") or "") == round_id for record in read_jsonl(_gate_runs_path(state_dir)))
+    return any(
+        str(record.get("round_id") or "") == round_id
+        for record in read_jsonl(_gate_runs_path(state_dir))
+    )
 
 
 def load_gate_record(state_dir: Path, round_id: str) -> dict[str, Any] | None:
@@ -317,7 +366,9 @@ def gate_signoff_decisions_by_round(state_dir: Path) -> dict[str, dict[str, Any]
     return decisions
 
 
-def gate_signoff_decision_for_round(state_dir: Path, round_id: str) -> dict[str, Any] | None:
+def gate_signoff_decision_for_round(
+    state_dir: Path, round_id: str
+) -> dict[str, Any] | None:
     return gate_signoff_decisions_by_round(state_dir).get(round_id)
 
 
@@ -326,7 +377,9 @@ def _gate_record_has_blocked_runs(record: dict[str, Any]) -> bool:
     return bool(runs) and any(bool(run.get("grade_blocked")) for run in runs)
 
 
-def gate_record_status(record: dict[str, Any], decision: dict[str, Any] | None = None) -> str:
+def gate_record_status(
+    record: dict[str, Any], decision: dict[str, Any] | None = None
+) -> str:
     runs = [run for run in list(record.get("runs") or []) if isinstance(run, dict)]
     if not runs:
         return "unknown"
@@ -377,7 +430,11 @@ def public_gate_completion_payload(payload: dict[str, Any]) -> dict[str, Any]:
     action = payload.get("action")
     if isinstance(action, dict) and action:
         return {"Action": action}
-    return {"Action": {"note": "review blocked; read Output, resolve blocker, then rerun the gate"}}
+    return {
+        "Action": {
+            "note": "review blocked; read Output, resolve blocker, then rerun the gate"
+        }
+    }
 
 
 def record_gate_signoff_decision(
@@ -398,7 +455,9 @@ def record_gate_signoff_decision(
     if existing:
         existing_verdict = str(existing.get("verdict") or "").strip()
         if existing_verdict != normalized_verdict:
-            raise ValueError(f"gate round already closed as {existing_verdict}: {round_id}")
+            raise ValueError(
+                f"gate round already closed as {existing_verdict}: {round_id}"
+            )
         return existing, False
     decision: dict[str, Any] = {
         "recorded_at": utc_now_iso(),
@@ -445,11 +504,19 @@ def pending_gate_signoff_records(
         scope = dict(record.get("review_scope") or {})
         if requested_base and str(scope.get("base") or "").strip() != requested_base:
             continue
-        record_head = str(scope.get("reviewed_head") or scope.get("commit_end") or scope.get("commit") or "").strip()
+        record_head = str(
+            scope.get("reviewed_head")
+            or scope.get("commit_end")
+            or scope.get("commit")
+            or ""
+        ).strip()
         if requested_head and record_head and record_head != requested_head:
             continue
         pending.append(dict(record))
-    return sorted(pending, key=lambda item: str(item.get("recorded_at") or item.get("round_id") or ""))
+    return sorted(
+        pending,
+        key=lambda item: str(item.get("recorded_at") or item.get("round_id") or ""),
+    )
 
 
 def _current_branch_name(review_cwd: Path) -> str | None:
@@ -481,7 +548,14 @@ def _target_label(review_scope: dict[str, str]) -> str:
     return "review target"
 
 
-def _gate_run_title(*, gate_task_class: str, round_id: str, slot: str, variant_id: str, retry_attempts: int) -> str:
+def _gate_run_title(
+    *,
+    gate_task_class: str,
+    round_id: str,
+    slot: str,
+    variant_id: str,
+    retry_attempts: int,
+) -> str:
     title = f"review-gate::{gate_task_class}::{round_id}::{slot}::{variant_id}"
     if retry_attempts <= 0:
         return title
@@ -512,12 +586,17 @@ def _timed_out(run: dict[str, Any], *, timeout_seconds: int) -> bool:
     return int(time.monotonic() - started) >= timeout_seconds
 
 
-def _gate_variant_counts(records: list[dict[str, Any]], gate_task_class: str) -> dict[str, int]:
+def _gate_variant_counts(
+    records: list[dict[str, Any]], gate_task_class: str
+) -> dict[str, int]:
     counts: dict[str, int] = {}
     for record in records:
         if str(record.get("task_class") or "") != gate_task_class:
             continue
-        for run in [*list(record.get("retry_runs") or []), *list(record.get("runs") or [])]:
+        for run in [
+            *list(record.get("retry_runs") or []),
+            *list(record.get("runs") or []),
+        ]:
             variant_id = str(run.get("variant_id") or "")
             if not variant_id:
                 continue
@@ -560,7 +639,9 @@ def _gate_fallback_variants(
             and arena_task_class in list(variant.get("task_classes") or [])
             and str(variant.get("id") or "") not in probation_ids
         ]
-    return [variant for variant in fallbacks if str(variant.get("id") or "") not in cooling]
+    return [
+        variant for variant in fallbacks if str(variant.get("id") or "") not in cooling
+    ]
 
 
 def _inline_gate_fallback_variant(
@@ -588,7 +669,9 @@ def _inline_gate_fallback_variant(
     return None
 
 
-def _prior_gate_record_count(*, state_dir: Path, gate_task_class: str, review_cwd: Path, task_id: str) -> int:
+def _prior_gate_record_count(
+    *, state_dir: Path, gate_task_class: str, review_cwd: Path, task_id: str
+) -> int:
     normalized_cwd = normalize_review_cwd_value(review_cwd)
     decisions = gate_signoff_decisions_by_round(state_dir)
     count = 0
@@ -597,15 +680,26 @@ def _prior_gate_record_count(*, state_dir: Path, gate_task_class: str, review_cw
             continue
         if str(record.get("task_id") or "") != task_id:
             continue
-        if normalized_cwd and normalize_record_review_cwd_value(record) != normalized_cwd:
+        if (
+            normalized_cwd
+            and normalize_record_review_cwd_value(record) != normalized_cwd
+        ):
             continue
-        if gate_record_status(dict(record), decisions.get(str(record.get("round_id") or ""))) in {"blocked", "unknown"}:
+        if gate_record_status(
+            dict(record), decisions.get(str(record.get("round_id") or ""))
+        ) in {"blocked", "unknown"}:
             continue
         count += 1
     return count
 
 
-def _gate_phase(*, gate_task_class: str, state_dir: Path, review_cwd: Path | None, task_id: str | None) -> str:
+def _gate_phase(
+    *,
+    gate_task_class: str,
+    state_dir: Path,
+    review_cwd: Path | None,
+    task_id: str | None,
+) -> str:
     if review_cwd is None or not task_id:
         return "discovery"
     configured_gate = gate_config(gate_task_class, state_dir=state_dir)
@@ -622,16 +716,32 @@ def _gate_phase(*, gate_task_class: str, state_dir: Path, review_cwd: Path | Non
     return "signoff"
 
 
-def _gate_reviewer_count(*, gate_task_class: str, state_dir: Path | None = None, review_cwd: Path | None = None, task_id: str | None = None) -> int:
+def _gate_reviewer_count(
+    *,
+    gate_task_class: str,
+    state_dir: Path | None = None,
+    review_cwd: Path | None = None,
+    task_id: str | None = None,
+) -> int:
     configured_gate = gate_config(gate_task_class, state_dir=state_dir)
     if state_dir is None:
         return configured_gate.discovery_reviewer_count
-    if _gate_phase(gate_task_class=gate_task_class, state_dir=state_dir, review_cwd=review_cwd, task_id=task_id) == "discovery":
+    if (
+        _gate_phase(
+            gate_task_class=gate_task_class,
+            state_dir=state_dir,
+            review_cwd=review_cwd,
+            task_id=task_id,
+        )
+        == "discovery"
+    ):
         return configured_gate.discovery_reviewer_count
     return configured_gate.signoff_reviewer_count
 
 
-def _gate_max_active_reviewers(gate_task_class: str, target_count: int, *, state_dir: Path | None = None) -> int:
+def _gate_max_active_reviewers(
+    gate_task_class: str, target_count: int, *, state_dir: Path | None = None
+) -> int:
     configured = gate_config(gate_task_class, state_dir=state_dir).max_active_reviewers
     return min(configured, max(1, target_count))
 
@@ -643,11 +753,15 @@ def _gate_slots(count: int) -> list[str]:
     return labels + [f"reviewer_{idx}" for idx in range(len(labels) + 1, count + 1)]
 
 
-def _repeat_gate_variant(variant: dict[str, Any], count: int) -> tuple[dict[str, Any], ...]:
+def _repeat_gate_variant(
+    variant: dict[str, Any], count: int
+) -> tuple[dict[str, Any], ...]:
     return tuple(variant for _ in range(count))
 
 
-def _cycle_gate_variants(variants: list[dict[str, Any]], count: int) -> tuple[dict[str, Any], ...]:
+def _cycle_gate_variants(
+    variants: list[dict[str, Any]], count: int
+) -> tuple[dict[str, Any], ...]:
     if not variants:
         return ()
     return tuple(variants[idx % len(variants)] for idx in range(count))
@@ -710,22 +824,37 @@ def _select_gate_variants(
             )
         ),
     )
-    phase = _gate_phase(gate_task_class=gate_task_class, state_dir=state_dir, review_cwd=review_cwd, task_id=task_id)
+    phase = _gate_phase(
+        gate_task_class=gate_task_class,
+        state_dir=state_dir,
+        review_cwd=review_cwd,
+        task_id=task_id,
+    )
     operational_state = load_operational_state(state_dir / OPERATIONAL_STATE_FILENAME)
     task_state = dict(operational_state["task_classes"][arena_task_class] or {})
     champion_ids = _task_champion_ids(task_state)
-    probation_ids = {str(item) for item in list(task_state.get("probation_variant_ids") or []) if str(item).strip()}
-    indexed = {str(variant["id"]): variant for variant in list(roster.get("variants") or [])}
+    probation_ids = {
+        str(item)
+        for item in list(task_state.get("probation_variant_ids") or [])
+        if str(item).strip()
+    }
+    indexed = {
+        str(variant["id"]): variant for variant in list(roster.get("variants") or [])
+    }
     cooling = _active_cooldowns(operational_state, arena_task_class)
     champion_override_id = str(champion_override or "").strip()
     if champion_override_id:
         override = indexed.get(champion_override_id)
         if override is None:
-            raise ValueError(f"champion override is not in the roster: {champion_override_id}")
+            raise ValueError(
+                f"champion override is not in the roster: {champion_override_id}"
+            )
         if str(override.get("state", "active")) != "active":
             raise ValueError(f"champion override is not active: {champion_override_id}")
         if arena_task_class not in list(override.get("task_classes") or []):
-            raise ValueError(f"champion override is not eligible for {arena_task_class}: {champion_override_id}")
+            raise ValueError(
+                f"champion override is not eligible for {arena_task_class}: {champion_override_id}"
+            )
         return GateSelection(
             gate_task_class=gate_task_class,
             arena_task_class=arena_task_class,
@@ -750,7 +879,10 @@ def _select_gate_variants(
             variants=_repeat_gate_variant(primary, reviewer_count),
             champion_ids=configured_phase_ids,
         )
-    def backup_selection(*, mode_prefix: str, champion_ids: tuple[str, ...], empty_message: str) -> GateSelection:
+
+    def backup_selection(
+        *, mode_prefix: str, champion_ids: tuple[str, ...], empty_message: str
+    ) -> GateSelection:
         fallbacks = _gate_fallback_variants(
             roster=roster,
             indexed=indexed,
@@ -774,11 +906,14 @@ def _select_gate_variants(
     champions = [
         indexed[variant_id]
         for variant_id in champion_ids
-        if variant_id in indexed and str(indexed[variant_id].get("state", "active")) == "active"
+        if variant_id in indexed
+        and str(indexed[variant_id].get("state", "active")) == "active"
     ]
     active_champion_ids = tuple(str(variant["id"]) for variant in champions)
     if not champion_ids or not champions:
-        configured = ", ".join(gate_config(gate_task_class, state_dir=state_dir).backup_variant_ids)
+        configured = ", ".join(
+            gate_config(gate_task_class, state_dir=state_dir).backup_variant_ids
+        )
         return backup_selection(
             mode_prefix="provisional_backup",
             champion_ids=(),
@@ -787,7 +922,9 @@ def _select_gate_variants(
                 f"are active and eligible for {arena_task_class}: {configured}"
             ),
         )
-    ready_champions = [variant for variant in champions if str(variant["id"]) not in cooling]
+    ready_champions = [
+        variant for variant in champions if str(variant["id"]) not in cooling
+    ]
     if not ready_champions:
         cooled = ", ".join(str(variant["id"]) for variant in champions)
         return backup_selection(
@@ -805,8 +942,12 @@ def _select_gate_variants(
             variants=_repeat_gate_variant(champion, reviewer_count),
             champion_ids=active_champion_ids,
         )
-    counts = _gate_variant_counts(read_jsonl(_gate_runs_path(state_dir)), gate_task_class)
-    champion_order = {variant_id: idx for idx, variant_id in enumerate(active_champion_ids)}
+    counts = _gate_variant_counts(
+        read_jsonl(_gate_runs_path(state_dir)), gate_task_class
+    )
+    champion_order = {
+        variant_id: idx for idx, variant_id in enumerate(active_champion_ids)
+    }
     ranked = sorted(
         selection_pool,
         key=lambda variant: (
@@ -818,7 +959,9 @@ def _select_gate_variants(
     return GateSelection(
         gate_task_class=gate_task_class,
         arena_task_class=arena_task_class,
-        mode="dual_champion" if reviewer_count == 2 else f"multi_champion_{reviewer_count}_pass",
+        mode="dual_champion"
+        if reviewer_count == 2
+        else f"multi_champion_{reviewer_count}_pass",
         variants=_cycle_gate_variants(ranked, reviewer_count),
         champion_ids=active_champion_ids,
     )
@@ -836,7 +979,10 @@ def _public_gate_run(run: dict[str, Any]) -> dict[str, Any]:
 
 
 def _print_live_gate_completed_run(run: dict[str, Any]) -> None:
-    write_text(f"{reviewer_output_heading(run)} {reviewer_completion_status(run)}", stream=sys.stderr)
+    write_text(
+        f"{reviewer_output_heading(run)} {reviewer_completion_status(run)}",
+        stream=sys.stderr,
+    )
 
 
 def _record_gate_run(run: dict[str, Any]) -> dict[str, Any]:
@@ -872,8 +1018,18 @@ def summarize_gate_round(
     review_scope: dict[str, str],
     runs: list[dict[str, Any]],
 ) -> tuple[dict[str, Any], int]:
-    ordered = sorted(runs, key=lambda item: (0 if str(item.get("slot")) == "alpha" else 1, str(item.get("slot"))))
-    status = "blocked" if any(bool(run.get("grade_blocked")) for run in ordered) else "signoff_pending"
+    ordered = sorted(
+        runs,
+        key=lambda item: (
+            0 if str(item.get("slot")) == "alpha" else 1,
+            str(item.get("slot")),
+        ),
+    )
+    status = (
+        "blocked"
+        if any(bool(run.get("grade_blocked")) for run in ordered)
+        else "signoff_pending"
+    )
     payload: dict[str, Any] = {
         "round_id": round_id,
         "task": PUBLIC_TASK_BY_GATE[gate_task_class],
@@ -956,7 +1112,9 @@ def _reviewer_run_counts(records: list[dict[str, Any]], gate_task_class: str) ->
     )
 
 
-def aggregate_gate_records(*, state_dir: Path, operational_state: dict[str, Any]) -> dict[str, Any]:
+def aggregate_gate_records(
+    *, state_dir: Path, operational_state: dict[str, Any]
+) -> dict[str, Any]:
     records = read_jsonl(_gate_runs_path(state_dir))
     summary: dict[str, Any] = {
         "generated_at": utc_now_iso(),
@@ -968,10 +1126,17 @@ def aggregate_gate_records(*, state_dir: Path, operational_state: dict[str, Any]
     }
     for gate_task_class in GATE_TASK_CLASSES:
         arena_task_class = ARENA_TASK_BY_GATE[gate_task_class]
-        task_records = [record for record in records if str(record.get("task_class") or "") == gate_task_class]
+        task_records = [
+            record
+            for record in records
+            if str(record.get("task_class") or "") == gate_task_class
+        ]
         metrics: dict[str, dict[str, Any]] = {}
         for record in task_records:
-            for run in [*list(record.get("retry_runs") or []), *list(record.get("runs") or [])]:
+            for run in [
+                *list(record.get("retry_runs") or []),
+                *list(record.get("runs") or []),
+            ]:
                 variant_id = str(run.get("variant_id") or "")
                 if not variant_id:
                     continue
@@ -1019,14 +1184,22 @@ def aggregate_gate_records(*, state_dir: Path, operational_state: dict[str, Any]
                     "variant_id": variant_id,
                     "variant_label": variant_id,
                     "runs": runs,
-                    "blocker_pct": round((bucket["blocked_runs"] / runs) * 100.0, 3) if runs else None,
-                    "median_elapsed_seconds": round(statistics.median(bucket["elapsed_values"]), 3)
+                    "blocker_pct": round((bucket["blocked_runs"] / runs) * 100.0, 3)
+                    if runs
+                    else None,
+                    "median_elapsed_seconds": round(
+                        statistics.median(bucket["elapsed_values"]), 3
+                    )
                     if bucket["elapsed_values"]
                     else None,
-                    "median_total_tokens": round(statistics.median(bucket["token_values"]), 1)
+                    "median_total_tokens": round(
+                        statistics.median(bucket["token_values"]), 1
+                    )
                     if bucket["token_values"]
                     else None,
-                    "median_cost_usd": round(statistics.median(bucket["cost_values"]), 6)
+                    "median_cost_usd": round(
+                        statistics.median(bucket["cost_values"]), 6
+                    )
                     if bucket["cost_values"]
                     else None,
                 }
@@ -1034,7 +1207,9 @@ def aggregate_gate_records(*, state_dir: Path, operational_state: dict[str, Any]
         leaderboard.sort(
             key=lambda row: (
                 -int(row["runs"]),
-                float(row["blocker_pct"]) if row["blocker_pct"] is not None else sys.maxsize,
+                float(row["blocker_pct"])
+                if row["blocker_pct"] is not None
+                else sys.maxsize,
                 str(row["variant_id"]),
             )
         )
@@ -1053,15 +1228,21 @@ def write_gate_reports(*, state_dir: Path, summary: dict[str, Any]) -> None:
     lines = ["# Review Gate Statistics", ""]
     for gate_task_class in GATE_TASK_CLASSES:
         task = dict(summary["task_classes"].get(gate_task_class) or {})
-        champions = [str(item) for item in list(task.get("champions") or []) if str(item).strip()]
+        champions = [
+            str(item) for item in list(task.get("champions") or []) if str(item).strip()
+        ]
         lines.append(f"## {PUBLIC_TASK_BY_GATE[gate_task_class]}")
         lines.append("")
-        lines.append(f"- Gate source: `{', '.join(champions) if champions else 'provisional backup'}`")
+        lines.append(
+            f"- Gate source: `{', '.join(champions) if champions else 'provisional backup'}`"
+        )
         lines.append(
             f"- Provisional until about `{PROVISIONAL_MIN_MODEL_RUNS}` model runs and `{PROVISIONAL_TOTAL_REVIEWER_RUNS}` total reviewer runs."
         )
         lines.append("")
-        lines.append("| reviewer | runs | blocker % | median sec | median tok/run | median cost/run |")
+        lines.append(
+            "| reviewer | runs | blocker % | median sec | median tok/run | median cost/run |"
+        )
         lines.append("|---|---:|---:|---:|---:|---:|")
         for row in list(task.get("leaderboard") or []):
             lines.append(
@@ -1076,12 +1257,16 @@ def write_gate_reports(*, state_dir: Path, summary: dict[str, Any]) -> None:
         f"- This page is operational reviewer statistics, not a model-quality leaderboard. It is meant to stabilize after about `{PROVISIONAL_MIN_MODEL_RUNS}` runs per model and `{PROVISIONAL_TOTAL_REVIEWER_RUNS}` total reviewer runs per gate class."
     )
     lines.append("")
-    _gate_leaderboard_path(state_dir).write_text("\n".join(lines) + "\n", encoding="utf-8")
+    _gate_leaderboard_path(state_dir).write_text(
+        "\n".join(lines) + "\n", encoding="utf-8"
+    )
 
 
 def refresh_gate_reports(*, state_dir: Path) -> dict[str, Any]:
     operational_state = load_operational_state(state_dir / OPERATIONAL_STATE_FILENAME)
-    summary = aggregate_gate_records(state_dir=state_dir, operational_state=operational_state)
+    summary = aggregate_gate_records(
+        state_dir=state_dir, operational_state=operational_state
+    )
     write_gate_reports(state_dir=state_dir, summary=summary)
     return summary
 
@@ -1110,7 +1295,9 @@ def run_gate_round(
     if review_scope.get("base"):
         ensure_clean_git_worktree(review_cwd, review_scope=review_scope)
     roster = load_roster(roster_path)
-    resolved_task_id = task_id or _current_branch_name(review_cwd) or _target_label(review_scope)
+    resolved_task_id = (
+        task_id or _current_branch_name(review_cwd) or _target_label(review_scope)
+    )
     partial_path = _gate_partial_path(
         state_dir=state_dir,
         gate_task_class=gate_task_class,
@@ -1118,7 +1305,9 @@ def run_gate_round(
         task_id=resolved_task_id,
         review_scope=review_scope,
     )
-    cleaned_partials = cleanup_stale_gate_partials(state_dir, preserve_final_paths={partial_path})
+    cleaned_partials = cleanup_stale_gate_partials(
+        state_dir, preserve_final_paths={partial_path}
+    )
     if cleaned_partials:
         print(
             f"[review-suite] archived {len(cleaned_partials)} stale gate partial(s) older than 24h.",
@@ -1138,7 +1327,12 @@ def run_gate_round(
                 round_id=str(final_record["round_id"]),
                 task_id=str(final_record["task_id"]),
                 mode=str(final_record["selection_mode"]),
-                champion_ids=tuple(str(item) for item in list(final_record.get("selection_champion_variant_ids") or [])),
+                champion_ids=tuple(
+                    str(item)
+                    for item in list(
+                        final_record.get("selection_champion_variant_ids") or []
+                    )
+                ),
                 review_scope=dict(final_record.get("review_scope") or {}),
                 runs=list(final_record.get("runs") or []),
             )
@@ -1150,22 +1344,40 @@ def run_gate_round(
                     state_dir=state_dir,
                     include_show_cmd=False,
                 )
-            with state_lock(state_dir, "gate-runs"), state_lock(state_dir, "gate-reports"):
-                if not _gate_round_already_recorded(state_dir, str(final_record["round_id"])):
+            with (
+                state_lock(state_dir, "gate-runs"),
+                state_lock(state_dir, "gate-reports"),
+            ):
+                if not _gate_round_already_recorded(
+                    state_dir, str(final_record["round_id"])
+                ):
                     append_jsonl(_gate_runs_path(state_dir), final_record)
                 refresh_gate_reports(state_dir=state_dir)
-            refresh_review_cost_report_best_effort(state_dir=state_dir, review_cwd=review_cwd)
+            refresh_review_cost_report_best_effort(
+                state_dir=state_dir, review_cwd=review_cwd
+            )
             with state_lock(state_dir, "gate-partial"):
                 partial_path.unlink(missing_ok=True)
             print_reviewer_output_section(
-                [run for run in list(final_record.get("runs") or []) if isinstance(run, dict)]
+                [
+                    run
+                    for run in list(final_record.get("runs") or [])
+                    if isinstance(run, dict)
+                ]
             )
             return payload, exit_code
-    round_started_at = str(partial.get("round_started_at") or utc_now_iso()) if partial else utc_now_iso()
+    round_started_at = (
+        str(partial.get("round_started_at") or utc_now_iso())
+        if partial
+        else utc_now_iso()
+    )
     if partial:
         override_id = str(champion_override or "").strip()
         if override_id:
-            partial_variants = [str(item.get("id") or "") for item in list(partial.get("selection_variants") or [])]
+            partial_variants = [
+                str(item.get("id") or "")
+                for item in list(partial.get("selection_variants") or [])
+            ]
             if any(variant_id != override_id for variant_id in partial_variants):
                 raise ValueError(
                     "cannot apply --champion-override to an existing in-flight gate round with different selected reviewers. "
@@ -1175,8 +1387,13 @@ def run_gate_round(
             gate_task_class=gate_task_class,
             arena_task_class=ARENA_TASK_BY_GATE[gate_task_class],
             mode=str(partial["selection_mode"]),
-            variants=tuple(dict(item) for item in list(partial.get("selection_variants") or [])),
-            champion_ids=tuple(str(item) for item in list(partial.get("selection_champion_variant_ids") or [])),
+            variants=tuple(
+                dict(item) for item in list(partial.get("selection_variants") or [])
+            ),
+            champion_ids=tuple(
+                str(item)
+                for item in list(partial.get("selection_champion_variant_ids") or [])
+            ),
         )
         round_id = str(partial["round_id"])
     else:
@@ -1197,7 +1414,10 @@ def run_gate_round(
         round_id = make_round_id(gate_task_class, review_cwd=review_cwd)
     if not selection.variants:
         raise ValueError(f"no gate reviewers selected for {gate_task_class}")
-    roster_indexed = {str(variant["id"]): dict(variant) for variant in list(roster.get("variants") or [])}
+    roster_indexed = {
+        str(variant["id"]): dict(variant)
+        for variant in list(roster.get("variants") or [])
+    }
     indexed = {str(variant["id"]): dict(variant) for variant in selection.variants}
     active: list[dict[str, Any]] = []
     waiting_retry: list[dict[str, Any]] = []
@@ -1205,19 +1425,29 @@ def run_gate_round(
         for item in list(partial.get("waiting_retry") or []):
             queued = dict(item)
             if queued.get("retry_delay_seconds") is not None:
-                queued["retry_after"] = time.monotonic() + max(0.0, float(queued.get("retry_delay_seconds") or 0.0))
+                queued["retry_after"] = time.monotonic() + max(
+                    0.0, float(queued.get("retry_delay_seconds") or 0.0)
+                )
             waiting_retry.append(queued)
-    retry_records: list[dict[str, Any]] = list(partial.get("retry_runs") or []) if partial else []
-    completed: list[dict[str, Any]] = list(partial.get("completed_runs") or []) if partial else []
+    retry_records: list[dict[str, Any]] = (
+        list(partial.get("retry_runs") or []) if partial else []
+    )
+    completed: list[dict[str, Any]] = (
+        list(partial.get("completed_runs") or []) if partial else []
+    )
     target_reviewer_count = len(selection.variants)
-    max_active_reviewers = _gate_max_active_reviewers(gate_task_class, target_reviewer_count, state_dir=state_dir)
+    max_active_reviewers = _gate_max_active_reviewers(
+        gate_task_class, target_reviewer_count, state_dir=state_dir
+    )
     pending = (
         [dict(item) for item in list(partial.get("pending") or [])]
         + [dict(item) for item in list(partial.get("active") or [])]
         if partial
         else [
             {"slot": slot, "variant": variant, "retry_attempts": 0}
-            for slot, variant in zip(_gate_slots(target_reviewer_count), selection.variants)
+            for slot, variant in zip(
+                _gate_slots(target_reviewer_count), selection.variants
+            )
         ]
     )
     last_progress = time.monotonic()
@@ -1280,7 +1510,11 @@ def run_gate_round(
     def launch_ready(now: float) -> None:
         nonlocal last_pending_launch_at, last_progress
         while waiting_retry and len(active) < max_active_reviewers:
-            ready = [run for run in waiting_retry if float(run.get("retry_after") or 0.0) <= now]
+            ready = [
+                run
+                for run in waiting_retry
+                if float(run.get("retry_after") or 0.0) <= now
+            ]
             if not ready:
                 break
             queued = ready[0]
@@ -1346,14 +1580,19 @@ def run_gate_round(
                 started_at=str(run.get("started_at") or "") or None,
                 sqlite_path=sqlite_path,
                 review_cwd=review_cwd,
-                final_message_path=Path(str(run["final_message_path"])) if run.get("final_message_path") else None,
+                final_message_path=Path(str(run["final_message_path"]))
+                if run.get("final_message_path")
+                else None,
                 timed_out=bool(run.get("timed_out")),
                 transport_stalled=bool(run.get("transport_stalled")),
             )
             _cleanup_paths(run)
             active.remove(run)
             block_reason = str(capture.get("grade_block_reason") or "")
-            if block_reason in RETRYABLE_GATE_BLOCK_REASONS and int(run.get("retry_attempts", 0) or 0) < CAPACITY_RETRY_MAX_ATTEMPTS:
+            if (
+                block_reason in RETRYABLE_GATE_BLOCK_REASONS
+                and int(run.get("retry_attempts", 0) or 0) < CAPACITY_RETRY_MAX_ATTEMPTS
+            ):
                 retry_attempts = int(run.get("retry_attempts", 0) or 0) + 1
                 retry_delay_seconds = _gate_retry_delay_seconds(block_reason)
                 print(
@@ -1375,16 +1614,21 @@ def run_gate_round(
                 continue
             if (
                 block_reason in RETRYABLE_GATE_BLOCK_REASONS
-                and int(run.get("fallback_attempts", 0) or 0) < INLINE_GATE_FALLBACK_MAX_ATTEMPTS_PER_SLOT
+                and int(run.get("fallback_attempts", 0) or 0)
+                < INLINE_GATE_FALLBACK_MAX_ATTEMPTS_PER_SLOT
             ):
-                operational_state = load_operational_state(state_dir / OPERATIONAL_STATE_FILENAME)
+                operational_state = load_operational_state(
+                    state_dir / OPERATIONAL_STATE_FILENAME
+                )
                 fallback = _inline_gate_fallback_variant(
                     roster=roster,
                     indexed=roster_indexed,
                     gate_task_class=gate_task_class,
                     arena_task_class=selection.arena_task_class,
                     failed_variant_id=str(variant.get("id") or ""),
-                    cooling=_active_cooldowns(operational_state, selection.arena_task_class),
+                    cooling=_active_cooldowns(
+                        operational_state, selection.arena_task_class
+                    ),
                     state_dir=state_dir,
                 )
                 if fallback is not None:
@@ -1402,7 +1646,8 @@ def run_gate_round(
                             "slot": run["slot"],
                             "variant": fallback,
                             "retry_attempts": 0,
-                            "retry_after": time.monotonic() + OPERATIONAL_RETRY_DELAY_SECONDS,
+                            "retry_after": time.monotonic()
+                            + OPERATIONAL_RETRY_DELAY_SECONDS,
                             "fallback_attempts": fallback_attempts,
                             "fallback_for_variant_id": str(variant.get("id") or ""),
                             "fallback_reason": block_reason,
@@ -1444,7 +1689,11 @@ def run_gate_round(
         round_payload={
             "task_class": selection.arena_task_class,
             "runs": [
-                *[dict(run) for run in retry_records if bool(dict(run).get("cooldown_eligible"))],
+                *[
+                    dict(run)
+                    for run in retry_records
+                    if bool(dict(run).get("cooldown_eligible"))
+                ],
                 *record_runs,
             ],
         },
@@ -1480,7 +1729,9 @@ def run_gate_round(
         "caller_id": caller_id,
         "caller_id_source": caller_id_source,
         "review_scope": dict(review_scope),
-        "signoff_status": "pending" if payload.get("status") == "signoff_pending" else "blocked",
+        "signoff_status": "pending"
+        if payload.get("status") == "signoff_pending"
+        else "blocked",
         "signoff_required": payload.get("status") == "signoff_pending",
         "retry_runs": retry_records,
         "runs": record_runs,

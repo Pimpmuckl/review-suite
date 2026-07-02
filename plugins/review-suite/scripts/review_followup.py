@@ -5,7 +5,10 @@ import argparse
 import sys
 from pathlib import Path
 
-from review_suite_runtime_bootstrap import bootstrap_from_installed_cache, launcher_script_path
+from review_suite_runtime_bootstrap import (
+    bootstrap_from_installed_cache,
+    launcher_script_path,
+)
 
 bootstrap_from_installed_cache(__file__)
 
@@ -33,27 +36,39 @@ from review_suite_core import (
     use_unsafe_windows_wsl_fallback,
     validated_linear_review_range,
 )
-from review_suite_local import build_correctness_review_contract, default_state_dir, ensure_clean_git_worktree
+from review_suite_local import (
+    build_correctness_review_contract,
+    default_state_dir,
+    ensure_clean_git_worktree,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = AxiArgumentParser(description="Review the interdiff after a reviewer-driven fix pass.")
+    parser = AxiArgumentParser(
+        description="Review the interdiff after a reviewer-driven fix pass."
+    )
     parser.add_argument("--cd")
     parser.add_argument("--base", default="main")
     parser.add_argument("--since")
     parser.add_argument("--note")
     parser.add_argument("--note-file")
-    parser.add_argument("--state-dir", default=str(default_state_dir()), help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--state-dir", default=str(default_state_dir()), help=argparse.SUPPRESS
+    )
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--wsl", action="store_true")
     return parser
 
 
 def _help_command() -> str:
-    return format_command([sys.executable, str(launcher_script_path(__file__)), "--help"])
+    return format_command(
+        [sys.executable, str(launcher_script_path(__file__)), "--help"]
+    )
 
 
-def load_followup_note(*, note: str | None, note_file: str | None, review_root: Path | None = None) -> str:
+def load_followup_note(
+    *, note: str | None, note_file: str | None, review_root: Path | None = None
+) -> str:
     if note is not None and note_file is not None:
         raise ValueError("use either --note or --note-file")
     if note_file is not None:
@@ -96,62 +111,98 @@ def resolve_since_head(
             raise ValueError("--since must not be empty")
         if force:
             return since_head
-        status = inspect_workflow_status(state_dir=state_dir, review_cwd=review_cwd, base=base)
-        if str(status.get("reason") or "") in {"branch_review_pressure_exceeded", "followup_cycle_limit_exceeded"}:
+        status = inspect_workflow_status(
+            state_dir=state_dir, review_cwd=review_cwd, base=base
+        )
+        if str(status.get("reason") or "") in {
+            "branch_review_pressure_exceeded",
+            "followup_cycle_limit_exceeded",
+        }:
             raise ValueError(
                 _followup_guard_error(
                     recommendation=str(status.get("recommendation") or ""),
-                    note=str(status.get("note") or "follow-up review is not appropriate for this branch state."),
+                    note=str(
+                        status.get("note")
+                        or "follow-up review is not appropriate for this branch state."
+                    ),
                 )
             )
         resolved_since = resolve_ref(review_cwd, since_head)
         if not is_ancestor(review_cwd, resolved_since, "HEAD"):
             status_anchor = str(status.get("last_reviewed_head") or "").strip()
             try:
-                resolved_status_anchor = resolve_ref(review_cwd, status_anchor) if status_anchor else ""
+                resolved_status_anchor = (
+                    resolve_ref(review_cwd, status_anchor) if status_anchor else ""
+                )
             except ValueError:
                 resolved_status_anchor = ""
-            if str(status.get("reason") or "") != "gate_findings_fix_delta" or resolved_status_anchor != resolved_since:
+            if (
+                str(status.get("reason") or "") != "gate_findings_fix_delta"
+                or resolved_status_anchor != resolved_since
+            ):
                 raise ValueError(
                     "--since must resolve to an ancestor of HEAD for a non-forced follow-up review. "
                     "Use review.py --status to choose the right lane, or pass --force to override."
                 )
-        decision = classify_delta_recommendation(diff_stats(review_cwd, resolved_since, "HEAD"))
+        decision = classify_delta_recommendation(
+            diff_stats(review_cwd, resolved_since, "HEAD")
+        )
         if str(decision.get("recommendation") or "") != "review-followup":
             raise ValueError(
                 _followup_guard_error(
                     recommendation=str(decision.get("recommendation") or ""),
-                    note=str(decision.get("note") or "follow-up review is not appropriate for this delta."),
+                    note=str(
+                        decision.get("note")
+                        or "follow-up review is not appropriate for this delta."
+                    ),
                 )
             )
         return resolved_since
-    status = inspect_workflow_status(state_dir=state_dir, review_cwd=review_cwd, base=base)
+    status = inspect_workflow_status(
+        state_dir=state_dir, review_cwd=review_cwd, base=base
+    )
     since_head = str(status.get("last_reviewed_head") or "").strip()
     if not since_head:
-        raise ValueError("review-followup requires --since or an existing recorded review anchor for this branch")
+        raise ValueError(
+            "review-followup requires --since or an existing recorded review anchor for this branch"
+        )
     recommendation = str(status.get("recommendation") or "")
     if recommendation == "none":
-        raise ValueError("current HEAD already matches the latest recorded review anchor")
+        raise ValueError(
+            "current HEAD already matches the latest recorded review anchor"
+        )
     if recommendation != "review-followup" and not force:
         raise ValueError(
             _followup_guard_error(
                 recommendation=recommendation,
-                note=str(status.get("note") or "follow-up review is not appropriate for this branch state."),
+                note=str(
+                    status.get("note")
+                    or "follow-up review is not appropriate for this branch state."
+                ),
             )
         )
     return since_head
 
 
-def gate_findings_source_context(*, state_dir: Path, review_cwd: Path, base: str, since_head: str) -> dict[str, str]:
+def gate_findings_source_context(
+    *, state_dir: Path, review_cwd: Path, base: str, since_head: str
+) -> dict[str, str]:
     try:
-        status = inspect_workflow_status(state_dir=state_dir, review_cwd=review_cwd, base=base)
+        status = inspect_workflow_status(
+            state_dir=state_dir, review_cwd=review_cwd, base=base
+        )
     except ValueError:
         return {}
-    if str(status.get("reason") or "") not in {"gate_findings_fix_delta", "gate_findings_dirty_fix_delta"}:
+    if str(status.get("reason") or "") not in {
+        "gate_findings_fix_delta",
+        "gate_findings_dirty_fix_delta",
+    }:
         return {}
     source_head = str(status.get("last_reviewed_head") or "").strip()
     try:
-        if not source_head or resolve_ref(review_cwd, source_head) != resolve_ref(review_cwd, since_head):
+        if not source_head or resolve_ref(review_cwd, source_head) != resolve_ref(
+            review_cwd, since_head
+        ):
             return {}
     except ValueError:
         return {}
@@ -166,7 +217,9 @@ def gate_findings_source_context(*, state_dir: Path, review_cwd: Path, base: str
     }
 
 
-def build_followup_prompt(*, since_head: str, head: str, note: str, target_label: str | None = None) -> str:
+def build_followup_prompt(
+    *, since_head: str, head: str, note: str, target_label: str | None = None
+) -> str:
     resolved_target_label = target_label or f"interdiff `{since_head}..{head}`"
     return (
         "Review this follow-up diff for correctness and regression risk.\n"
@@ -179,7 +232,11 @@ def build_followup_prompt(*, since_head: str, head: str, note: str, target_label
 
 
 def _record_anchor_warning(exc: Exception) -> None:
-    print(f"[review-suite] WARNING: failed to record workflow anchor: {exc}", file=sys.stderr, flush=True)
+    print(
+        f"[review-suite] WARNING: failed to record workflow anchor: {exc}",
+        file=sys.stderr,
+        flush=True,
+    )
 
 
 def main() -> int:
@@ -188,7 +245,9 @@ def main() -> int:
         args = parser.parse_args()
         review_root = resolve_repo_root(args.cd)
         state_dir = Path(args.state_dir)
-        note_text = load_followup_note(note=args.note, note_file=args.note_file, review_root=review_root)
+        note_text = load_followup_note(
+            note=args.note, note_file=args.note_file, review_root=review_root
+        )
         requested_base = str(args.base)
         base_info = effective_base_ref(review_root, requested_base)
         branch_base = str(base_info["base"])
@@ -213,8 +272,12 @@ def main() -> int:
         )
         head = current_head(review_root)
         if since_head == head:
-            raise ValueError("current HEAD already matches the requested follow-up anchor")
-        validated_linear_review_range(review_root, since_head, head, label="native follow-up review")
+            raise ValueError(
+                "current HEAD already matches the requested follow-up anchor"
+            )
+        validated_linear_review_range(
+            review_root, since_head, head, label="native follow-up review"
+        )
         if not has_committed_diff(review_root, since_head, head):
             raise ValueError(
                 f"follow-up review found no committed diff between `{since_head}` and `{head}`. "
@@ -242,7 +305,11 @@ def main() -> int:
         )
         if int(result["returncode"]) == 0:
             try:
-                output_ref = f"session:{result['session_id']}" if result.get("session_id") else None
+                output_ref = (
+                    f"session:{result['session_id']}"
+                    if result.get("session_id")
+                    else None
+                )
                 branch_scope = {
                     "branch_base": branch_base,
                     "merge_base": merge_base(review_root, branch_base),

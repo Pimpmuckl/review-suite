@@ -33,7 +33,11 @@ DECISION_COMMANDS = {DECISION_CLEAN, DECISION_FINDINGS}
 GITHUB_RESULT_CLEAN = "clean"
 GITHUB_RESULT_FINDINGS = "findings"
 GITHUB_RESULT_WAIVED = "waived"
-GITHUB_RESULT_COMMANDS = {GITHUB_RESULT_CLEAN, GITHUB_RESULT_FINDINGS, GITHUB_RESULT_WAIVED}
+GITHUB_RESULT_COMMANDS = {
+    GITHUB_RESULT_CLEAN,
+    GITHUB_RESULT_FINDINGS,
+    GITHUB_RESULT_WAIVED,
+}
 
 DESLOP_STATUS_TRACKED = "tracked"
 DESLOP_STATUS_DONE = "done"
@@ -87,11 +91,19 @@ def _base_drift_equivalent_head(state: dict[str, Any], head: str) -> str:
 def _review_ladder_heads(state: dict[str, Any]) -> list[str]:
     review_heads = dict(state.get("review_heads") or {})
     heads: list[str] = []
-    for key in ("last_gate_clean_head", "last_followup_head", "last_reviewed_head", "last_fix_head", "head"):
+    for key in (
+        "last_gate_clean_head",
+        "last_followup_head",
+        "last_reviewed_head",
+        "last_fix_head",
+        "head",
+    ):
         value = str(review_heads.get(key) or "").strip()
         if value:
             heads.append(_base_drift_equivalent_head(state, value))
-    identity_head = _base_drift_equivalent_head(state, str(dict(state.get("identity") or {}).get("head") or "").strip())
+    identity_head = _base_drift_equivalent_head(
+        state, str(dict(state.get("identity") or {}).get("head") or "").strip()
+    )
     if identity_head:
         heads.append(identity_head)
     return heads
@@ -107,15 +119,22 @@ def _review_ladder_head(state: dict[str, Any], *, current_head: str = "") -> str
 
 
 def _github_review_required(state: dict[str, Any]) -> bool:
-    github_status = str(dict(state.get("github_review") or {}).get("status") or "unknown").strip()
+    github_status = str(
+        dict(state.get("github_review") or {}).get("status") or "unknown"
+    ).strip()
     return not (_effective_mode(state) == "emergency" and github_status == "unknown")
 
 
 def _github_review_matches_head(state: dict[str, Any], comparison_head: str) -> bool:
     github_review = dict(state.get("github_review") or {})
-    if str(github_review.get("status") or "").strip() not in {GITHUB_RESULT_CLEAN, GITHUB_RESULT_WAIVED}:
+    if str(github_review.get("status") or "").strip() not in {
+        GITHUB_RESULT_CLEAN,
+        GITHUB_RESULT_WAIVED,
+    }:
         return False
-    reviewed_head = _base_drift_equivalent_head(state, str(github_review.get("reviewed_head") or "").strip())
+    reviewed_head = _base_drift_equivalent_head(
+        state, str(github_review.get("reviewed_head") or "").strip()
+    )
     return bool(reviewed_head and comparison_head and reviewed_head == comparison_head)
 
 
@@ -130,10 +149,15 @@ def _validation_ready(state: dict[str, Any]) -> bool:
 
 def _deslop_closed_or_untracked(state: dict[str, Any]) -> bool:
     deslop = dict(state.get("deslop") or {})
-    return not bool(deslop.get("tracked")) or str(deslop.get("status") or "").strip() == DESLOP_STATUS_CLOSED
+    return (
+        not bool(deslop.get("tracked"))
+        or str(deslop.get("status") or "").strip() == DESLOP_STATUS_CLOSED
+    )
 
 
-def review_ladder_summary(state: dict[str, Any], *, current_head: str | None = None) -> dict[str, Any]:
+def review_ladder_summary(
+    state: dict[str, Any], *, current_head: str | None = None
+) -> dict[str, Any]:
     stage = str(state.get("stage") or "").strip()
     summary: dict[str, Any] = {"done": False, "review_ladder": "pending"}
     if stage not in {STAGE_REVIEW_GREEN, STAGE_LOCAL_GREEN_HANDOFF}:
@@ -143,14 +167,33 @@ def review_ladder_summary(state: dict[str, Any], *, current_head: str | None = N
     reviewed_head = _review_ladder_head(state, current_head=comparison_head)
     comparison_head = comparison_head or reviewed_head
     if reviewed_head and comparison_head and reviewed_head != comparison_head:
-        summary.update({"review_ladder": "invalidated", "reviewed_head": reviewed_head, "current_head": comparison_head})
+        summary.update(
+            {
+                "review_ladder": "invalidated",
+                "reviewed_head": reviewed_head,
+                "current_head": comparison_head,
+            }
+        )
         return summary
 
     github_review = dict(state.get("github_review") or {})
     github_status = str(github_review.get("status") or "").strip()
-    github_head = _base_drift_equivalent_head(state, str(github_review.get("reviewed_head") or "").strip())
-    if github_status in {GITHUB_RESULT_CLEAN, GITHUB_RESULT_WAIVED} and github_head and comparison_head and github_head != comparison_head:
-        summary.update({"review_ladder": "invalidated", "reviewed_head": github_head, "current_head": comparison_head})
+    github_head = _base_drift_equivalent_head(
+        state, str(github_review.get("reviewed_head") or "").strip()
+    )
+    if (
+        github_status in {GITHUB_RESULT_CLEAN, GITHUB_RESULT_WAIVED}
+        and github_head
+        and comparison_head
+        and github_head != comparison_head
+    ):
+        summary.update(
+            {
+                "review_ladder": "invalidated",
+                "reviewed_head": github_head,
+                "current_head": comparison_head,
+            }
+        )
         return summary
 
     github_required = _github_review_required(state)
@@ -176,7 +219,11 @@ def _changed_since_review_paths(
     if not cwd:
         return None
     try:
-        return sorted(diff_paths_between(cwd_path_from_normalized(cwd), reviewed_head, current_head))
+        return sorted(
+            diff_paths_between(
+                cwd_path_from_normalized(cwd), reviewed_head, current_head
+            )
+        )
     except (OSError, ValueError):
         return None
 
@@ -187,24 +234,42 @@ def green_review_head_change_summary(
     current_head: str | None = None,
     summary: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
-    base_summary = dict(summary or review_ladder_summary(state, current_head=current_head))
+    base_summary = dict(
+        summary or review_ladder_summary(state, current_head=current_head)
+    )
     if base_summary.get("review_ladder") != "invalidated":
         return None
-    if str(state.get("stage") or "").strip() not in {STAGE_REVIEW_GREEN, STAGE_LOCAL_GREEN_HANDOFF}:
+    if str(state.get("stage") or "").strip() not in {
+        STAGE_REVIEW_GREEN,
+        STAGE_LOCAL_GREEN_HANDOFF,
+    }:
         return None
     if not _deslop_closed_or_untracked(state):
         return None
 
     reviewed_head = str(base_summary.get("reviewed_head") or "").strip()
-    current_head_value = str(base_summary.get("current_head") or current_head or "").strip()
-    if not reviewed_head or not current_head_value or reviewed_head == current_head_value:
+    current_head_value = str(
+        base_summary.get("current_head") or current_head or ""
+    ).strip()
+    if (
+        not reviewed_head
+        or not current_head_value
+        or reviewed_head == current_head_value
+    ):
         return None
 
     github_review = dict(state.get("github_review") or {})
     github_status = str(github_review.get("status") or "unknown").strip() or "unknown"
-    github_reviewed_head = _base_drift_equivalent_head(state, str(github_review.get("reviewed_head") or "").strip())
-    github_ready = github_status in {GITHUB_RESULT_CLEAN, GITHUB_RESULT_WAIVED} and github_reviewed_head == reviewed_head
-    github_optional = _effective_mode(state) == "emergency" and github_status == "unknown"
+    github_reviewed_head = _base_drift_equivalent_head(
+        state, str(github_review.get("reviewed_head") or "").strip()
+    )
+    github_ready = (
+        github_status in {GITHUB_RESULT_CLEAN, GITHUB_RESULT_WAIVED}
+        and github_reviewed_head == reviewed_head
+    )
+    github_optional = (
+        _effective_mode(state) == "emergency" and github_status == "unknown"
+    )
     if not (github_ready or github_optional):
         return None
 
@@ -215,9 +280,13 @@ def green_review_head_change_summary(
         "head_changed_after_review": True,
         "note": HEAD_CHANGED_AFTER_GREEN_REVIEW_NOTE,
     }
-    paths = _changed_since_review_paths(state, reviewed_head=reviewed_head, current_head=current_head_value)
+    paths = _changed_since_review_paths(
+        state, reviewed_head=reviewed_head, current_head=current_head_value
+    )
     if paths is not None:
-        changed_summary["changed_since_review"] = paths[:CHANGED_SINCE_REVIEW_PATH_LIMIT]
+        changed_summary["changed_since_review"] = paths[
+            :CHANGED_SINCE_REVIEW_PATH_LIMIT
+        ]
         if len(paths) > CHANGED_SINCE_REVIEW_PATH_LIMIT:
             changed_summary["changed_since_review_count"] = len(paths)
     return changed_summary
@@ -270,9 +339,13 @@ def cycle_key(
     merge_base: str,
     restart_token: str | None = None,
 ) -> str:
-    identity = normalize_cycle_identity(cwd=cwd, base=base, branch=branch, head=head, merge_base=merge_base)
+    identity = normalize_cycle_identity(
+        cwd=cwd, base=base, branch=branch, head=head, merge_base=merge_base
+    )
     token = _optional_text(restart_token)
-    material_payload: dict[str, Any] = identity if token is None else {"identity": identity, "restart_token": token}
+    material_payload: dict[str, Any] = (
+        identity if token is None else {"identity": identity, "restart_token": token}
+    )
     material = json.dumps(material_payload, sort_keys=True, separators=(",", ":"))
     return f"orc-{blake2s(material.encode('utf-8'), digest_size=10).hexdigest()}"
 
@@ -293,12 +366,18 @@ def create_cycle(
     cycle_token: str | None = None,
     restart_token: str | None = None,
 ) -> dict[str, Any]:
-    identity = normalize_cycle_identity(cwd=cwd, base=base, branch=branch, head=head, merge_base=merge_base)
+    identity = normalize_cycle_identity(
+        cwd=cwd, base=base, branch=branch, head=head, merge_base=merge_base
+    )
     requested = _normalize_mode(requested_mode, field="requested_mode")
     effective = _normalize_mode(effective_mode or requested, field="effective_mode")
     requested_selection = _normalize_selection(selection, field="selection")
-    resolved_selection = _normalize_selection(effective_selection or requested_selection, field="effective_selection")
-    deslop_tracked = bool(deslop_enabled) if deslop_enabled is not None else effective != "emergency"
+    resolved_selection = _normalize_selection(
+        effective_selection or requested_selection, field="effective_selection"
+    )
+    deslop_tracked = (
+        bool(deslop_enabled) if deslop_enabled is not None else effective != "emergency"
+    )
     if deslop_tracked:
         deslop_status = DESLOP_STATUS_TRACKED
         deslop_skip = None
@@ -315,7 +394,14 @@ def create_cycle(
     key_token = restart or fresh_token
     state = {
         "schema_version": ORCHESTRATOR_STATE_SCHEMA_VERSION,
-        "cycle_key": cycle_key(cwd=cwd, base=base, branch=branch, head=head, merge_base=merge_base, restart_token=key_token),
+        "cycle_key": cycle_key(
+            cwd=cwd,
+            base=base,
+            branch=branch,
+            head=head,
+            merge_base=merge_base,
+            restart_token=key_token,
+        ),
         "identity": identity,
         "mode": {
             "requested": requested,
@@ -377,19 +463,24 @@ def _copy_state(state: dict[str, Any]) -> dict[str, Any]:
 
 def _compact(payload: dict[str, Any]) -> dict[str, Any]:
     return {
-        key: value
-        for key, value in payload.items()
-        if value not in (None, "", [], {})
+        key: value for key, value in payload.items() if value not in (None, "", [], {})
     }
 
 
 def _state_head(state: dict[str, Any]) -> str:
-    return _required_text(dict(state.get("identity") or {}).get("head"), field="state.identity.head")
+    return _required_text(
+        dict(state.get("identity") or {}).get("head"), field="state.identity.head"
+    )
 
 
 def _last_reviewed_head(state: dict[str, Any]) -> str | None:
     review_heads = dict(state.get("review_heads") or {})
-    for key in ("last_reviewed_head", "last_gate_clean_head", "last_followup_head", "head"):
+    for key in (
+        "last_reviewed_head",
+        "last_gate_clean_head",
+        "last_followup_head",
+        "head",
+    ):
         value = _optional_text(review_heads.get(key))
         if value:
             return value
@@ -452,7 +543,9 @@ def _upsert_decision(
     gate: str | None = None,
 ) -> None:
     if command not in DECISION_COMMANDS:
-        raise ValueError(f"decision command must be one of: {', '.join(sorted(DECISION_COMMANDS))}")
+        raise ValueError(
+            f"decision command must be one of: {', '.join(sorted(DECISION_COMMANDS))}"
+        )
     payload = _compact(
         {
             "round_id": _required_text(round_id, field="round_id"),
@@ -468,13 +561,17 @@ def _upsert_decision(
             continue
         existing = str(item.get("command") or "")
         if existing != command:
-            raise ValueError(f"round {payload['round_id']} already has decision command {existing}")
+            raise ValueError(
+                f"round {payload['round_id']} already has decision command {existing}"
+            )
         item.update(payload)
         return
     decisions.append(payload)
 
 
-def _set_stage(state: dict[str, Any], stage: str, pending_action: dict[str, Any] | None = None) -> None:
+def _set_stage(
+    state: dict[str, Any], stage: str, pending_action: dict[str, Any] | None = None
+) -> None:
     state["stage"] = stage
     state["pending_action"] = _compact(deepcopy(pending_action or {})) or None
 
@@ -493,18 +590,31 @@ def _review_plan_steps(state: dict[str, Any]) -> list[dict[str, Any]]:
     plan = state.get("review_plan")
     if not isinstance(plan, dict):
         return []
-    return [dict(item) for item in list(plan.get("steps") or []) if isinstance(item, dict)]
+    return [
+        dict(item) for item in list(plan.get("steps") or []) if isinstance(item, dict)
+    ]
 
 
 def _review_progress(state: dict[str, Any]) -> dict[str, Any]:
     progress = dict(state.get("review_progress") or {})
-    completed = [dict(item) for item in list(progress.get("completed_steps") or []) if isinstance(item, dict)]
+    completed = [
+        dict(item)
+        for item in list(progress.get("completed_steps") or [])
+        if isinstance(item, dict)
+    ]
     current = progress.get("current_step")
     return {
-        "next_step_index": _nonnegative_int(progress.get("next_step_index", len(completed)), field="review_progress.next_step_index"),
+        "next_step_index": _nonnegative_int(
+            progress.get("next_step_index", len(completed)),
+            field="review_progress.next_step_index",
+        ),
         "current_step": dict(current) if isinstance(current, dict) else None,
         "completed_steps": completed,
-        **({"next_step_name": str(progress.get("next_step_name"))} if str(progress.get("next_step_name") or "").strip() else {}),
+        **(
+            {"next_step_name": str(progress.get("next_step_name"))}
+            if str(progress.get("next_step_name") or "").strip()
+            else {}
+        ),
     }
 
 
@@ -522,7 +632,9 @@ def _review_step_rerun_on_findings(state: dict[str, Any], step_index: int) -> bo
     return bool(steps[step_index].get("rerun_on_findings"))
 
 
-def _review_step_max_review_rounds(state: dict[str, Any], step_index: int) -> int | None:
+def _review_step_max_review_rounds(
+    state: dict[str, Any], step_index: int
+) -> int | None:
     steps = _review_plan_steps(state)
     if step_index < 0 or step_index >= len(steps):
         return None
@@ -567,14 +679,18 @@ def _next_profile_step_action(state: dict[str, Any]) -> dict[str, Any]:
     return action
 
 
-def _rewind_profile_step_action(state: dict[str, Any], profile_step: dict[str, Any]) -> dict[str, Any]:
+def _rewind_profile_step_action(
+    state: dict[str, Any], profile_step: dict[str, Any]
+) -> dict[str, Any]:
     index = _nonnegative_int(profile_step.get("index"), field="profile_step.index")
     completed = [
         item
         for item in _review_progress(state)["completed_steps"]
         if int(item.get("index") or 0) < index
     ]
-    _set_review_progress(state, next_step_index=index, current_step=None, completed_steps=completed)
+    _set_review_progress(
+        state, next_step_index=index, current_step=None, completed_steps=completed
+    )
     return _next_profile_step_action(state)
 
 
@@ -729,26 +845,39 @@ def mark_gate_step_pending(
     }
     for item in list(next_state.get("rounds") or []):
         if isinstance(item, dict) and item.get("round_id") == round_id:
-            item["profile_step"] = {"index": index, "name": name, "kind": "gate", "gate": gate_context}
+            item["profile_step"] = {
+                "index": index,
+                "name": name,
+                "kind": "gate",
+                "gate": gate_context,
+            }
             break
     active = next_state.get("active_findings")
     if isinstance(active, dict) and isinstance(active.get("gate"), dict):
         active_gate = dict(active["gate"])
         if active_gate.get("lane") != lane or active_gate.get("gate") != gate_context:
-            raise ValueError("gate findings require rerunning the same gate before advancing")
+            raise ValueError(
+                "gate findings require rerunning the same gate before advancing"
+            )
         active["rerun_round_id"] = _required_text(round_id, field="round_id")
         active["status"] = STAGE_DECISION_PENDING
     _set_review_progress(next_state, next_step_index=index, current_step=profile_step)
     return next_state
 
 
-def _profile_step_for_round(state: dict[str, Any], round_id: str) -> dict[str, Any] | None:
+def _profile_step_for_round(
+    state: dict[str, Any], round_id: str
+) -> dict[str, Any] | None:
     progress = _review_progress(state)
     current = progress.get("current_step")
     if isinstance(current, dict) and current.get("round_id") == round_id:
         return dict(current)
     pending = dict(state.get("pending_action") or {})
-    if pending.get("round_id") == round_id and "step_index" in pending and pending.get("step"):
+    if (
+        pending.get("round_id") == round_id
+        and "step_index" in pending
+        and pending.get("step")
+    ):
         payload = {
             "index": pending.get("step_index"),
             "name": pending.get("step"),
@@ -800,7 +929,9 @@ def _profile_step_for_round(state: dict[str, Any], round_id: str) -> dict[str, A
     return None
 
 
-def _profile_round_id_for_findings(state: dict[str, Any], active: dict[str, Any]) -> str | None:
+def _profile_round_id_for_findings(
+    state: dict[str, Any], active: dict[str, Any]
+) -> str | None:
     candidates = (
         active.get("profile_round_id"),
         active.get("previous_round_id"),
@@ -845,11 +976,18 @@ def _complete_profile_step_from_metadata(
             break
     else:
         completed.append(completed_item)
-    _set_review_progress(state, next_step_index=max(int(progress["next_step_index"]), index + 1), current_step=None, completed_steps=completed)
+    _set_review_progress(
+        state,
+        next_step_index=max(int(progress["next_step_index"]), index + 1),
+        current_step=None,
+        completed_steps=completed,
+    )
     return True
 
 
-def _complete_profile_step(state: dict[str, Any], *, round_id: str, lane: str, reviewed_head: str) -> bool:
+def _complete_profile_step(
+    state: dict[str, Any], *, round_id: str, lane: str, reviewed_head: str
+) -> bool:
     profile_step = _profile_step_for_round(state, round_id)
     if not profile_step:
         return False
@@ -867,7 +1005,9 @@ def _profile_step_is_discovery(profile_step: dict[str, Any]) -> bool:
     return "discovery" in name and not bool(profile_step.get("arena_round"))
 
 
-def _skip_remaining_discovery_to_signoff(state: dict[str, Any], profile_step: dict[str, Any]) -> None:
+def _skip_remaining_discovery_to_signoff(
+    state: dict[str, Any], profile_step: dict[str, Any]
+) -> None:
     if not _profile_step_is_discovery(profile_step):
         return
     index = _nonnegative_int(profile_step.get("index"), field="profile_step.index")
@@ -877,11 +1017,15 @@ def _skip_remaining_discovery_to_signoff(state: dict[str, Any], profile_step: di
         if "signoff" in name:
             progress = _review_progress(state)
             if int(progress["next_step_index"]) < next_index:
-                _set_review_progress(state, next_step_index=next_index, current_step=None)
+                _set_review_progress(
+                    state, next_step_index=next_index, current_step=None
+                )
             return
 
 
-def _profile_step_reruns_after_findings(state: dict[str, Any], profile_step: dict[str, Any]) -> bool:
+def _profile_step_reruns_after_findings(
+    state: dict[str, Any], profile_step: dict[str, Any]
+) -> bool:
     if bool(profile_step.get("rerun_on_findings")):
         return True
     try:
@@ -891,19 +1035,27 @@ def _profile_step_reruns_after_findings(state: dict[str, Any], profile_step: dic
     return _review_step_rerun_on_findings(state, index)
 
 
-def _profile_step_has_fixed_findings_budget(state: dict[str, Any], profile_step: dict[str, Any]) -> bool:
+def _profile_step_has_fixed_findings_budget(
+    state: dict[str, Any], profile_step: dict[str, Any]
+) -> bool:
     try:
         index = _nonnegative_int(profile_step.get("index"), field="profile_step.index")
     except ValueError:
         return False
     if index + 1 >= len(_review_plan_steps(state)):
         return False
-    if bool(profile_step.get("rerun_on_findings")) or _review_step_rerun_on_findings(state, index):
+    if bool(profile_step.get("rerun_on_findings")) or _review_step_rerun_on_findings(
+        state, index
+    ):
         return False
-    return _profile_step_is_discovery(profile_step) or bool(profile_step.get("arena_round"))
+    return _profile_step_is_discovery(profile_step) or bool(
+        profile_step.get("arena_round")
+    )
 
 
-def _profile_step_max_review_rounds(state: dict[str, Any], profile_step: dict[str, Any]) -> int | None:
+def _profile_step_max_review_rounds(
+    state: dict[str, Any], profile_step: dict[str, Any]
+) -> int | None:
     if bool(profile_step.get("rerun_on_findings")):
         return None
     try:
@@ -921,7 +1073,9 @@ def _profile_step_max_review_rounds(state: dict[str, Any], profile_step: dict[st
     return rounds
 
 
-def _profile_step_review_round_count(state: dict[str, Any], profile_step: dict[str, Any]) -> int:
+def _profile_step_review_round_count(
+    state: dict[str, Any], profile_step: dict[str, Any]
+) -> int:
     index = _nonnegative_int(profile_step.get("index"), field="profile_step.index")
     count = 0
     for item in list(state.get("rounds") or []):
@@ -931,7 +1085,9 @@ def _profile_step_review_round_count(state: dict[str, Any], profile_step: dict[s
         if not isinstance(item_step, dict):
             continue
         try:
-            item_index = _nonnegative_int(item_step.get("index"), field="round.profile_step.index")
+            item_index = _nonnegative_int(
+                item_step.get("index"), field="round.profile_step.index"
+            )
         except ValueError:
             continue
         if item_index == index:
@@ -972,9 +1128,13 @@ def _findings_fix_context(active: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-def _mark_profile_fix_review_needed_inplace(state: dict[str, Any], active: dict[str, Any]) -> bool:
+def _mark_profile_fix_review_needed_inplace(
+    state: dict[str, Any], active: dict[str, Any]
+) -> bool:
     profile_round_id = _profile_round_id_for_findings(state, active)
-    profile_step = _profile_step_for_round(state, profile_round_id) if profile_round_id else None
+    profile_step = (
+        _profile_step_for_round(state, profile_round_id) if profile_round_id else None
+    )
     if not profile_step:
         return False
     max_review_rounds = _profile_step_max_review_rounds(state, profile_step)
@@ -994,9 +1154,13 @@ def _mark_profile_fix_review_needed_inplace(state: dict[str, Any], active: dict[
         _complete_profile_step_from_metadata(
             state,
             profile_step=profile_step,
-            round_id=_required_text(active.get("round_id"), field="active_findings.round_id"),
+            round_id=_required_text(
+                active.get("round_id"), field="active_findings.round_id"
+            ),
             lane=_required_text(active.get("lane"), field="active_findings.lane"),
-            reviewed_head=_required_text(active.get("reviewed_head"), field="active_findings.reviewed_head"),
+            reviewed_head=_required_text(
+                active.get("reviewed_head"), field="active_findings.reviewed_head"
+            ),
         )
         action = _next_profile_step_action(state)
     else:
@@ -1020,10 +1184,16 @@ def _last_completed_profile_round_id(state: dict[str, Any]) -> str | None:
     return None
 
 
-def mark_latest_profile_step_rerun_needed(state: dict[str, Any], *, head: str) -> dict[str, Any]:
+def mark_latest_profile_step_rerun_needed(
+    state: dict[str, Any], *, head: str
+) -> dict[str, Any]:
     next_state = _copy_state(state)
     profile_round_id = _last_completed_profile_round_id(next_state)
-    profile_step = _profile_step_for_round(next_state, profile_round_id) if profile_round_id else None
+    profile_step = (
+        _profile_step_for_round(next_state, profile_round_id)
+        if profile_round_id
+        else None
+    )
     if not profile_step:
         raise ValueError("cannot rerun review signoff without a completed profile step")
     review_heads = next_state.setdefault("review_heads", {})
@@ -1059,9 +1229,16 @@ def deslop_should_run(state: dict[str, Any]) -> bool:
         return False
     if state.get("stage") not in {STAGE_CREATED, STAGE_RETRY_REQUESTED}:
         return False
-    if dict(state.get("pending_action") or {}).get("kind") not in (None, "run-deslop", "resume-after-deslop"):
+    if dict(state.get("pending_action") or {}).get("kind") not in (
+        None,
+        "run-deslop",
+        "resume-after-deslop",
+    ):
         return False
-    return str(deslop.get("status") or "") in {DESLOP_STATUS_TRACKED, DESLOP_STATUS_FAILED}
+    return str(deslop.get("status") or "") in {
+        DESLOP_STATUS_TRACKED,
+        DESLOP_STATUS_FAILED,
+    }
 
 
 def mark_deslop_done(state: dict[str, Any], *, command: str) -> dict[str, Any]:
@@ -1092,7 +1269,10 @@ def mark_deslop_closed(state: dict[str, Any]) -> dict[str, Any]:
         "tracked": False,
         "status": DESLOP_STATUS_CLOSED,
     }
-    if next_state.get("stage") == STAGE_RETRY_REQUESTED and dict(next_state.get("pending_action") or {}).get("kind") == "run-deslop":
+    if (
+        next_state.get("stage") == STAGE_RETRY_REQUESTED
+        and dict(next_state.get("pending_action") or {}).get("kind") == "run-deslop"
+    ):
         recovery = dict(next_state.get("recovery") or {})
         next_state["recovery"] = {
             "status": "none",
@@ -1102,7 +1282,9 @@ def mark_deslop_closed(state: dict[str, Any]) -> dict[str, Any]:
     return next_state
 
 
-def mark_deslop_failed(state: dict[str, Any], *, command: str, returncode: int | None, reason: str) -> dict[str, Any]:
+def mark_deslop_failed(
+    state: dict[str, Any], *, command: str, returncode: int | None, reason: str
+) -> dict[str, Any]:
     next_state = _copy_state(state)
     next_state["deslop"] = {
         **dict(next_state.get("deslop") or {}),
@@ -1124,7 +1306,9 @@ def mark_deslop_failed(state: dict[str, Any], *, command: str, returncode: int |
 
 def _set_review_green(state: dict[str, Any], value: str) -> None:
     if value not in VALIDATION_STATUSES:
-        raise ValueError(f"review_green must be one of: {', '.join(sorted(VALIDATION_STATUSES))}")
+        raise ValueError(
+            f"review_green must be one of: {', '.join(sorted(VALIDATION_STATUSES))}"
+        )
     state.setdefault("validation", {})["review_green"] = value
 
 
@@ -1138,7 +1322,14 @@ def mark_running(
 ) -> dict[str, Any]:
     next_state = _copy_state(state)
     head = reviewed_head or _state_head(next_state)
-    _upsert_round(next_state, round_id=round_id, lane=lane, status=STAGE_RUNNING, reviewed_head=head, gate=gate)
+    _upsert_round(
+        next_state,
+        round_id=round_id,
+        lane=lane,
+        status=STAGE_RUNNING,
+        reviewed_head=head,
+        gate=gate,
+    )
     _set_stage(next_state, STAGE_RUNNING)
     return next_state
 
@@ -1159,7 +1350,9 @@ def mark_review_step_running(
 ) -> dict[str, Any]:
     index = _nonnegative_int(step_index, field="step_index")
     name = _required_text(step_name, field="step_name")
-    next_state = mark_running(state, round_id=round_id, lane=lane, reviewed_head=reviewed_head)
+    next_state = mark_running(
+        state, round_id=round_id, lane=lane, reviewed_head=reviewed_head
+    )
     action = {
         "kind": "collect-review-step",
         "round_id": round_id,
@@ -1231,7 +1424,14 @@ def mark_decision_pending(
 ) -> dict[str, Any]:
     next_state = _copy_state(state)
     head = reviewed_head or _state_head(next_state)
-    _upsert_round(next_state, round_id=round_id, lane=lane, status=STAGE_DECISION_PENDING, reviewed_head=head, gate=gate)
+    _upsert_round(
+        next_state,
+        round_id=round_id,
+        lane=lane,
+        status=STAGE_DECISION_PENDING,
+        reviewed_head=head,
+        gate=gate,
+    )
     next_state.setdefault("review_heads", {})["last_reviewed_head"] = head
     _set_stage(next_state, STAGE_DECISION_PENDING, pending_action)
     return next_state
@@ -1249,7 +1449,14 @@ def record_findings_decision(
     head = reviewed_head or _state_head(next_state)
     gate_context = _gate_name(lane, gate)
     profile_step = _profile_step_for_round(next_state, round_id)
-    _upsert_decision(next_state, round_id=round_id, lane=lane, command=DECISION_FINDINGS, reviewed_head=head, gate=gate_context)
+    _upsert_decision(
+        next_state,
+        round_id=round_id,
+        lane=lane,
+        command=DECISION_FINDINGS,
+        reviewed_head=head,
+        gate=gate_context,
+    )
     _upsert_round(
         next_state,
         round_id=round_id,
@@ -1356,7 +1563,9 @@ def mark_followup_review_pending(
     active["status"] = STAGE_DECISION_PENDING
     for item in list(next_state.get("rounds") or []):
         if isinstance(item, dict) and item.get("round_id") == round_id:
-            item["source_round_id"] = _required_text(source_round_id, field="source_round_id")
+            item["source_round_id"] = _required_text(
+                source_round_id, field="source_round_id"
+            )
             break
     next_state.setdefault("review_heads", {})["last_followup_head"] = reviewed_head
     return next_state
@@ -1370,7 +1579,9 @@ def _mark_gate_rerun_needed_inplace(state: dict[str, Any]) -> None:
     followup_round_id = _optional_text(active.get("followup_round_id"))
     active["status"] = STAGE_GATE_RERUN_NEEDED
     profile_round_id = _profile_round_id_for_findings(state, active)
-    profile_step = _profile_step_for_round(state, profile_round_id) if profile_round_id else None
+    profile_step = (
+        _profile_step_for_round(state, profile_round_id) if profile_round_id else None
+    )
     action = {
         "kind": "rerun-gate",
         "lane": gate.get("lane"),
@@ -1427,14 +1638,27 @@ def record_followup_clean(
         return next_state
     next_state["active_findings"] = None
     profile_round_id = _profile_round_id_for_findings(next_state, active)
-    profile_step = _profile_step_for_round(next_state, profile_round_id) if profile_round_id else None
-    if profile_step and (bool(active.get("rerun_profile_round")) or _profile_step_reruns_after_findings(next_state, profile_step)):
+    profile_step = (
+        _profile_step_for_round(next_state, profile_round_id)
+        if profile_round_id
+        else None
+    )
+    if profile_step and (
+        bool(active.get("rerun_profile_round"))
+        or _profile_step_reruns_after_findings(next_state, profile_step)
+    ):
         _set_review_green(next_state, "unknown")
-        _set_stage(next_state, STAGE_CREATED, _rewind_profile_step_action(next_state, profile_step))
+        _set_stage(
+            next_state,
+            STAGE_CREATED,
+            _rewind_profile_step_action(next_state, profile_step),
+        )
         return next_state
     completed_profile_step = False
     if profile_round_id:
-        profile_step = profile_step or _profile_step_for_round(next_state, profile_round_id) or {}
+        profile_step = (
+            profile_step or _profile_step_for_round(next_state, profile_round_id) or {}
+        )
         completed_profile_step = _complete_profile_step(
             next_state,
             round_id=profile_round_id,
@@ -1477,7 +1701,9 @@ def record_followup_findings(
         source_round_id=str(active.get("round_id") or ""),
     )
     next_state.setdefault("review_heads", {})["last_followup_head"] = head
-    profile_round_id = active.get("profile_round_id") or _profile_round_id_for_findings(next_state, active)
+    profile_round_id = active.get("profile_round_id") or _profile_round_id_for_findings(
+        next_state, active
+    )
     next_state["active_findings"] = _compact(
         {
             "round_id": _required_text(round_id, field="round_id"),
@@ -1507,17 +1733,37 @@ def record_clean_decision(
     head = reviewed_head or _state_head(next_state)
     pending_action = dict(next_state.get("pending_action") or {})
     active = next_state.get("active_findings")
-    active_gate = active.get("gate") if isinstance(active, dict) and isinstance(active.get("gate"), dict) else None
+    active_gate = (
+        active.get("gate")
+        if isinstance(active, dict) and isinstance(active.get("gate"), dict)
+        else None
+    )
     if active_gate:
-        if pending_action.get("kind") != "decision" or pending_action.get("round_id") != round_id:
-            raise ValueError("gate findings require fix, follow-up clean, and same gate rerun before advancing")
-        if pending_action.get("lane") != resolved_lane or pending_action.get("gate") != _gate_name(resolved_lane, gate):
-            raise ValueError("gate findings require rerunning the same gate before advancing")
+        if (
+            pending_action.get("kind") != "decision"
+            or pending_action.get("round_id") != round_id
+        ):
+            raise ValueError(
+                "gate findings require fix, follow-up clean, and same gate rerun before advancing"
+            )
+        if pending_action.get("lane") != resolved_lane or pending_action.get(
+            "gate"
+        ) != _gate_name(resolved_lane, gate):
+            raise ValueError(
+                "gate findings require rerunning the same gate before advancing"
+            )
     elif isinstance(active, dict):
         raise ValueError("findings require a clean follow-up before advancing")
 
     gate_context = _gate_name(resolved_lane, gate)
-    _upsert_decision(next_state, round_id=round_id, lane=resolved_lane, command=DECISION_CLEAN, reviewed_head=head, gate=gate_context)
+    _upsert_decision(
+        next_state,
+        round_id=round_id,
+        lane=resolved_lane,
+        command=DECISION_CLEAN,
+        reviewed_head=head,
+        gate=gate_context,
+    )
     _upsert_round(
         next_state,
         round_id=round_id,
@@ -1534,7 +1780,9 @@ def record_clean_decision(
         resolved = _compact(
             {
                 "source_round_id": active_gate.get("round_id"),
-                "followup_round_id": active.get("followup_round_id") if isinstance(active, dict) else None,
+                "followup_round_id": active.get("followup_round_id")
+                if isinstance(active, dict)
+                else None,
                 "rerun_round_id": _required_text(round_id, field="round_id"),
                 "lane": resolved_lane,
                 "gate": gate_context,
@@ -1542,12 +1790,20 @@ def record_clean_decision(
             }
         )
         resolved_items = next_state.setdefault("resolved_gate_findings", [])
-        if not any(isinstance(item, dict) and item.get("source_round_id") == resolved.get("source_round_id") for item in resolved_items):
+        if not any(
+            isinstance(item, dict)
+            and item.get("source_round_id") == resolved.get("source_round_id")
+            for item in resolved_items
+        ):
             resolved_items.append(resolved)
         profile_step = _profile_step_for_round(next_state, round_id)
         if not profile_step and isinstance(active, dict):
             profile_round_id = _profile_round_id_for_findings(next_state, active)
-            profile_step = _profile_step_for_round(next_state, profile_round_id) if profile_round_id else None
+            profile_step = (
+                _profile_step_for_round(next_state, profile_round_id)
+                if profile_round_id
+                else None
+            )
         if profile_step:
             completed_profile_step = _complete_profile_step_from_metadata(
                 next_state,
@@ -1594,7 +1850,9 @@ def record_github_result(
 ) -> dict[str, Any]:
     resolved_result = _required_text(result, field="github_result")
     if resolved_result not in GITHUB_RESULT_COMMANDS:
-        raise ValueError(f"github_result must be one of: {', '.join(sorted(GITHUB_RESULT_COMMANDS))}")
+        raise ValueError(
+            f"github_result must be one of: {', '.join(sorted(GITHUB_RESULT_COMMANDS))}"
+        )
     if resolved_result == GITHUB_RESULT_WAIVED and not _optional_text(note):
         raise ValueError("--github-note is required when --github-result waived")
     if not can_advance_or_anchor(state):
@@ -1614,7 +1872,9 @@ def record_github_result(
 
     profile_round_id = _last_completed_profile_round_id(next_state)
     if not profile_round_id:
-        raise ValueError("--github-result findings requires a completed local signoff step")
+        raise ValueError(
+            "--github-result findings requires a completed local signoff step"
+        )
     round_id = _next_github_round_id(next_state)
     _upsert_round(
         next_state,
@@ -1753,7 +2013,9 @@ def mark_crashed(
     return next_state
 
 
-def mark_retry_requested(state: dict[str, Any], *, reason: str | None = None) -> dict[str, Any]:
+def mark_retry_requested(
+    state: dict[str, Any], *, reason: str | None = None
+) -> dict[str, Any]:
     next_state = _copy_state(state)
     recovery = dict(next_state.get("recovery") or {})
     recovery["status"] = STAGE_RETRY_REQUESTED
@@ -1765,7 +2027,9 @@ def mark_retry_requested(state: dict[str, Any], *, reason: str | None = None) ->
     return next_state
 
 
-def dismiss_recovery(state: dict[str, Any], *, reason: str | None = None) -> dict[str, Any]:
+def dismiss_recovery(
+    state: dict[str, Any], *, reason: str | None = None
+) -> dict[str, Any]:
     next_state = _copy_state(state)
     recovery = dict(next_state.get("recovery") or {})
     recovery["status"] = STAGE_DISMISSED
@@ -1791,7 +2055,9 @@ def _set_validation_status(state: dict[str, Any], key: str, value: str | None) -
     if value is None:
         return
     if value not in VALIDATION_STATUSES:
-        raise ValueError(f"{key} must be one of: {', '.join(sorted(VALIDATION_STATUSES))}")
+        raise ValueError(
+            f"{key} must be one of: {', '.join(sorted(VALIDATION_STATUSES))}"
+        )
     state.setdefault("validation", {})[key] = value
 
 
@@ -1817,8 +2083,12 @@ def mark_local_green_handoff(
     ci: str | None = None,
 ) -> dict[str, Any]:
     if not can_advance_or_anchor(state):
-        raise ValueError("local-green handoff requires review_green without unresolved findings or gate rerun")
-    next_state = record_validation_statuses(state, focused=focused, full_suite=full_suite, ci=ci)
+        raise ValueError(
+            "local-green handoff requires review_green without unresolved findings or gate rerun"
+        )
+    next_state = record_validation_statuses(
+        state, focused=focused, full_suite=full_suite, ci=ci
+    )
     _set_stage(next_state, STAGE_LOCAL_GREEN_HANDOFF)
     return next_state
 

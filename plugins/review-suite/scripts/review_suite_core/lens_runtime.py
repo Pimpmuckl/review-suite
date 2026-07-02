@@ -14,8 +14,16 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .axi_output import emit_toon
-from .codex_runtime import use_unsafe_windows_wsl_fallback, validate_codex_runtime, wrapper_launch_cwd
-from .process_runtime import CapturedChildProcess, launch_captured_child_process, wait_for_captured_child_process
+from .codex_runtime import (
+    use_unsafe_windows_wsl_fallback,
+    validate_codex_runtime,
+    wrapper_launch_cwd,
+)
+from .process_runtime import (
+    CapturedChildProcess,
+    launch_captured_child_process,
+    wait_for_captured_child_process,
+)
 from .workflow_state import validated_linear_review_range
 
 
@@ -25,7 +33,12 @@ DEFAULT_PROGRESS_INTERVAL_SECONDS = 60
 DEFAULT_TIMEOUT_SECONDS = 0
 WRAPPER_SESSION_LOG_FILENAME = "wrapper_sessions.jsonl"
 SUPPORTED_CODEX_SERVICE_TIERS = {"fast", "flex"}
-ISOLATED_RUNTIME_USER_CONFIG_ROOTS = ("model_provider", "model_providers", "openai_base_url", "oss_provider")
+ISOLATED_RUNTIME_USER_CONFIG_ROOTS = (
+    "model_provider",
+    "model_providers",
+    "openai_base_url",
+    "oss_provider",
+)
 TECHNICAL_REVIEW_CHARTER_TOOLS = {"review-suite"}
 TECHNICAL_REVIEW_DEVELOPER_INSTRUCTIONS = (
     "Review only for concrete technical merge-readiness risks caused or exposed by the target diff. "
@@ -53,7 +66,9 @@ def normalize_service_tier(value: str | None) -> str | None:
     if not service_tier:
         return None
     if service_tier not in SUPPORTED_CODEX_SERVICE_TIERS:
-        raise ValueError(f"service_tier must be one of: {', '.join(sorted(SUPPORTED_CODEX_SERVICE_TIERS))}")
+        raise ValueError(
+            f"service_tier must be one of: {', '.join(sorted(SUPPORTED_CODEX_SERVICE_TIERS))}"
+        )
     return service_tier
 
 
@@ -115,7 +130,9 @@ def _flatten_config_overrides(value: object, path: tuple[str, ...]) -> list[str]
     return [f"{dotted_path}={literal}"]
 
 
-def isolated_runtime_user_config_overrides(config_path: Path | None = None) -> list[str]:
+def isolated_runtime_user_config_overrides(
+    config_path: Path | None = None,
+) -> list[str]:
     path = config_path or _codex_user_config_path()
     try:
         with path.open("rb") as handle:
@@ -161,7 +178,9 @@ def _codex_command_prefix(
         allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
         unsafe_command_hint=unsafe_command_hint,
     )
-    unsafe_fallback = use_unsafe_windows_wsl_fallback(review_root, allow_unsafe_windows_wsl_fallback)
+    unsafe_fallback = use_unsafe_windows_wsl_fallback(
+        review_root, allow_unsafe_windows_wsl_fallback
+    )
     command = [codex_executable]
     if subcommand == "exec":
         command.append("exec")
@@ -259,7 +278,9 @@ def codex_review_stdin_text(
             "Use local git commands to inspect that bounded range; no inline diff is provided."
         )
     elif bool(base_ref) == bool(commit_ref):
-        raise ValueError("targeted review prompt requires exactly one of base or commit")
+        raise ValueError(
+            "targeted review prompt requires exactly one of base or commit"
+        )
     elif base_ref:
         target = (
             f"Review target: compare the current checkout against base ref `{base_ref}`. "
@@ -311,7 +332,9 @@ def codex_exec_review_command(
     if base_ref and commit_ref:
         raise ValueError("native exec review requires at most one of base or commit")
     if (base_ref or commit_ref) and prompt_text:
-        raise ValueError("native exec review cannot combine --base/--commit with a custom prompt")
+        raise ValueError(
+            "native exec review cannot combine --base/--commit with a custom prompt"
+        )
     if not (base_ref or commit_ref or prompt_text):
         raise ValueError("exec review requires --base, --commit, or a custom prompt")
     command = _codex_command_prefix(
@@ -406,7 +429,9 @@ def prepare_codex_review_launch(
     command = codex_exec_review_command(**command_kwargs)
     cwd = (
         wrapper_launch_cwd()
-        if use_unsafe_windows_wsl_fallback(review_root, allow_unsafe_windows_wsl_fallback)
+        if use_unsafe_windows_wsl_fallback(
+            review_root, allow_unsafe_windows_wsl_fallback
+        )
         else review_root
     )
     return CodexReviewLaunch(
@@ -454,7 +479,9 @@ def _review_branch(review_root: Path) -> str:
     return proc.stdout.strip() if proc.returncode == 0 else ""
 
 
-def record_wrapper_session(*, session_id: str | None, tool_name: str, review_root: Path, elapsed_seconds: float) -> None:
+def record_wrapper_session(
+    *, session_id: str | None, tool_name: str, review_root: Path, elapsed_seconds: float
+) -> None:
     if not session_id:
         return
     state_dir = default_review_suite_state_dir()
@@ -469,7 +496,9 @@ def record_wrapper_session(*, session_id: str | None, tool_name: str, review_roo
             "elapsed_seconds": round(float(elapsed_seconds), 3),
             "recorded_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
-        with (state_dir / WRAPPER_SESSION_LOG_FILENAME).open("a", encoding="utf-8") as handle:
+        with (state_dir / WRAPPER_SESSION_LOG_FILENAME).open(
+            "a", encoding="utf-8"
+        ) as handle:
             handle.write(json.dumps(payload, sort_keys=True) + "\n")
     except OSError:
         return
@@ -516,8 +545,16 @@ def _run_captured_codex_command(
             progress_interval_seconds=progress_interval_seconds,
             timeout_seconds=timeout_seconds,
         )
-        stdout_text = child.stdout_path.read_text(encoding="utf-8", errors="replace") if child.stdout_path.exists() else ""
-        stderr_text = child.stderr_path.read_text(encoding="utf-8", errors="replace") if child.stderr_path.exists() else ""
+        stdout_text = (
+            child.stdout_path.read_text(encoding="utf-8", errors="replace")
+            if child.stdout_path.exists()
+            else ""
+        )
+        stderr_text = (
+            child.stderr_path.read_text(encoding="utf-8", errors="replace")
+            if child.stderr_path.exists()
+            else ""
+        )
         session_id = extract_session_id(stderr_text)
         record_wrapper_session(
             session_id=session_id,
@@ -527,7 +564,11 @@ def _run_captured_codex_command(
         )
         final_message = stdout_text.strip()
         if final_message_path is not None:
-            final_message = final_message_path.read_text(encoding="utf-8").strip() if final_message_path.exists() else ""
+            final_message = (
+                final_message_path.read_text(encoding="utf-8").strip()
+                if final_message_path.exists()
+                else ""
+            )
         return {
             "returncode": wait_result.returncode,
             "stdout": stdout_text,
@@ -538,7 +579,9 @@ def _run_captured_codex_command(
             "timed_out": wait_result.timed_out,
         }
     finally:
-        child_paths = (child.stdout_path, child.stderr_path) if child is not None else ()
+        child_paths = (
+            (child.stdout_path, child.stderr_path) if child is not None else ()
+        )
         for path in (*cleanup_paths, *child_paths):
             try:
                 path.unlink(missing_ok=True)
@@ -558,7 +601,9 @@ def run_codex(
     timeout_seconds: int,
     allow_unsafe_windows_wsl_fallback: bool,
 ) -> dict[str, object]:
-    with tempfile.NamedTemporaryFile(prefix=f"{tool_name}-message-", suffix=".txt", delete=False) as handle:
+    with tempfile.NamedTemporaryFile(
+        prefix=f"{tool_name}-message-", suffix=".txt", delete=False
+    ) as handle:
         output_path = Path(handle.name)
     command = codex_exec_command(
         tool_name=tool_name,
@@ -621,7 +666,9 @@ def run_codex_review(
         progress_interval_seconds=progress_interval_seconds,
         timeout_seconds=timeout_seconds,
         final_message_path=launch.final_message_path,
-        cleanup_paths=(launch.final_message_path,) if launch.final_message_path is not None else (),
+        cleanup_paths=(launch.final_message_path,)
+        if launch.final_message_path is not None
+        else (),
     )
 
 
@@ -633,13 +680,17 @@ def emit_result(
     if int(result["returncode"]) != 0:
         payload = {
             "status": "timeout" if result.get("timed_out") else "error",
-            "error": f"{tool_name} run timed out" if result.get("timed_out") else f"{tool_name} run failed",
+            "error": f"{tool_name} run timed out"
+            if result.get("timed_out")
+            else f"{tool_name} run failed",
             "session": result["session_id"],
             "elapsed_s": result.get("elapsed_seconds"),
             "stderr": truncate(str(result["stderr"])),
             "stdout": truncate(str(result["stdout"])),
         }
-        emit_toon({key: value for key, value in payload.items() if value not in (None, "")})
+        emit_toon(
+            {key: value for key, value in payload.items() if value not in (None, "")}
+        )
         return int(result["returncode"])
     emit_toon(
         {

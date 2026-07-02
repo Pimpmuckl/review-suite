@@ -16,7 +16,9 @@ def wrapper_launch_cwd() -> Path:
     return Path.home().resolve()
 
 
-def effective_execution_cwd(review_root: Path, allow_unsafe_windows_wsl_fallback: bool) -> Path:
+def effective_execution_cwd(
+    review_root: Path, allow_unsafe_windows_wsl_fallback: bool
+) -> Path:
     if use_unsafe_windows_wsl_fallback(review_root, allow_unsafe_windows_wsl_fallback):
         return wrapper_launch_cwd()
     return review_root.resolve()
@@ -69,11 +71,17 @@ def _env_flag_enabled(name: str) -> bool:
 
 
 def unsafe_windows_wsl_fallback_requested(explicit_flag: bool) -> bool:
-    return bool(explicit_flag) or _env_flag_enabled(AUTO_UNSAFE_WINDOWS_WSL_FALLBACK_ENV)
+    return bool(explicit_flag) or _env_flag_enabled(
+        AUTO_UNSAFE_WINDOWS_WSL_FALLBACK_ENV
+    )
 
 
-def use_unsafe_windows_wsl_fallback(review_root: Path, allow_unsafe_windows_wsl_fallback: bool) -> bool:
-    return unsafe_windows_wsl_fallback_requested(allow_unsafe_windows_wsl_fallback) and is_windows_wsl_unc_path(review_root)
+def use_unsafe_windows_wsl_fallback(
+    review_root: Path, allow_unsafe_windows_wsl_fallback: bool
+) -> bool:
+    return unsafe_windows_wsl_fallback_requested(
+        allow_unsafe_windows_wsl_fallback
+    ) and is_windows_wsl_unc_path(review_root)
 
 
 def _windows_unc_fallback_hint(review_root: Path) -> str | None:

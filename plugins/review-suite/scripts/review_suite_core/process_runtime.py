@@ -34,8 +34,12 @@ def launch_captured_child_process(
     stdout_suffix: str = ".stdout.txt",
     stderr_suffix: str = ".stderr.txt",
 ) -> CapturedChildProcess:
-    stdout_tmp = tempfile.NamedTemporaryFile(prefix=stdout_prefix, suffix=stdout_suffix, delete=False)
-    stderr_tmp = tempfile.NamedTemporaryFile(prefix=stderr_prefix or stdout_prefix, suffix=stderr_suffix, delete=False)
+    stdout_tmp = tempfile.NamedTemporaryFile(
+        prefix=stdout_prefix, suffix=stdout_suffix, delete=False
+    )
+    stderr_tmp = tempfile.NamedTemporaryFile(
+        prefix=stderr_prefix or stdout_prefix, suffix=stderr_suffix, delete=False
+    )
     stdout_path = Path(stdout_tmp.name)
     stderr_path = Path(stderr_tmp.name)
     started_monotonic = time.monotonic()
@@ -96,7 +100,10 @@ def wait_for_captured_child_process(
             timed_out = True
             print(timeout_line(elapsed), file=sys.stderr, flush=True)
             break
-        if progress_interval_seconds >= 0 and now - last_progress >= progress_interval_seconds:
+        if (
+            progress_interval_seconds >= 0
+            and now - last_progress >= progress_interval_seconds
+        ):
             print(heartbeat_line(elapsed), file=sys.stderr, flush=True)
             last_progress = now
         time.sleep(max(0.0, poll_interval_seconds))
