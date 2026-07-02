@@ -50,7 +50,13 @@ jobs:
 
       - parallel:
           - name: Run tests
-            run: uv run --locked pytest -n auto --dist=worksteal plugins/review-suite/tests -q
+            shell: pwsh
+            run: |
+              $profileArgs = @()
+              if ($env:RUNNER_OS -eq "Windows") {
+                $profileArgs = @("--durations=100", "--durations-min=0.25", "--junitxml=pytest-profile.xml")
+              }
+              uv run --locked pytest -n auto --dist=worksteal @profileArgs plugins/review-suite/tests -q
 
           - name: Syntax check scripts
             shell: pwsh
@@ -60,3 +66,34 @@ jobs:
                 Get-ChildItem -LiteralPath plugins/review-suite/scripts/review_suite_core -Filter *.py -File
               )
               uv run --locked python -m py_compile @($files.FullName)
+
+      - name: Summarize Windows pytest profile
+        if: runner.os == 'Windows' && always()
+        shell: pwsh
+        run: |
+          if (!(Test-Path -LiteralPath pytest-profile.xml)) {
+            Write-Host "pytest-profile.xml missing"
+            exit 0
+          }
+          @'
+          from collections import defaultdict
+          import xml.etree.ElementTree as ET
+
+          root = ET.parse("pytest-profile.xml").getroot()
+          cases = []
+          by_module = defaultdict(float)
+          for case in root.iter("testcase"):
+              seconds = float(case.get("time") or 0)
+              classname = case.get("classname") or "<unknown>"
+              name = case.get("name") or "<unknown>"
+              cases.append((seconds, classname, name))
+              by_module[classname] += seconds
+
+          print("Top Windows pytest cases:")
+          for seconds, classname, name in sorted(cases, reverse=True)[:30]:
+              print(f"{seconds:7.3f}s {classname}::{name}")
+
+          print("\nTop Windows pytest modules:")
+          for classname, seconds in sorted(by_module.items(), key=lambda item: item[1], reverse=True)[:20]:
+              print(f"{seconds:7.3f}s {classname}")
+          '@ | uv run --locked python -
