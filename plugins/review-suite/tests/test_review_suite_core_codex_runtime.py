@@ -16,9 +16,11 @@ from review_suite_core.codex_runtime import (
     validate_codex_runtime,
 )
 from review_suite_core.lens_runtime import (
+    TECHNICAL_REVIEW_DEVELOPER_INSTRUCTIONS,
     _codex_user_config_path,
     codex_exec_command,
     codex_exec_review_command,
+    codex_review_prompt_instructions,
     codex_review_stdin_text,
     isolated_runtime_user_config_overrides,
     prepare_codex_review_launch,
@@ -246,7 +248,11 @@ def test_prepare_codex_review_launch_creates_prompted_exec_without_native_target
         assert launch.command.index('service_tier="fast"') < launch.command.index("--title")
         assert launch.stdin_text is not None
         assert "base ref `origin/main`" in launch.stdin_text
+        assert "Review only for concrete technical merge-readiness risks" in launch.stdin_text
+        assert "because AI is involved" in launch.stdin_text
+        assert "Review Suite instructions:" in launch.stdin_text
         assert "Review for correctness." in launch.stdin_text
+        assert "BEGIN DIFF" not in launch.stdin_text
         assert launch.final_message_path is not None
         assert launch.final_message_path.parent == state_dir / "tmp"
         assert str(launch.final_message_path) in launch.command
@@ -294,6 +300,40 @@ def test_prepare_codex_review_launch_uses_native_exec_review_without_prompt(
             launch.final_message_path.unlink(missing_ok=True)
 
 
+def test_prepare_codex_review_launch_keeps_prompt_only_stdin(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    state_dir = tmp_path / "state"
+    monkeypatch.setattr("review_suite_core.lens_runtime.shutil.which", lambda name: "codex")
+    monkeypatch.setattr("review_suite_core.lens_runtime.validate_codex_runtime", lambda **kwargs: None)
+    monkeypatch.setattr("review_suite_core.lens_runtime.default_review_suite_state_dir", lambda: state_dir)
+    monkeypatch.setattr("review_suite_core.lens_runtime.isolated_runtime_user_config_overrides", lambda: [])
+
+    launch = prepare_codex_review_launch(
+        tool_name="review-suite",
+        model="gpt-5.5",
+        reasoning_effort="medium",
+        title="review-suite::round::alpha::gpt-5.5-medium",
+        review_root=tmp_path,
+        prompt="Review this checkout.",
+        output_prefix="review-test-",
+        allow_unsafe_windows_wsl_fallback=False,
+    )
+
+    try:
+        assert launch.command[-1] == "-"
+        assert launch.stdin_text is not None
+        assert "Do not modify files." in launch.stdin_text
+        assert "Review only for concrete technical merge-readiness risks" in launch.stdin_text
+        assert "Review Suite instructions:" in launch.stdin_text
+        assert "Review this checkout." in launch.stdin_text
+        assert launch.final_message_path is not None
+    finally:
+        if launch.final_message_path is not None:
+            launch.final_message_path.unlink(missing_ok=True)
+
+
 def test_codex_exec_review_command_rejects_prompted_native_target(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -313,6 +353,81 @@ def test_codex_exec_review_command_rejects_prompted_native_target(
             prompt="Review for correctness.",
             allow_unsafe_windows_wsl_fallback=False,
         )
+
+
+def test_codex_review_prompt_instructions_prefixes_exact_charter() -> None:
+    instructions = codex_review_prompt_instructions("Review result: clean")
+
+    assert instructions.startswith(TECHNICAL_REVIEW_DEVELOPER_INSTRUCTIONS)
+    assert instructions.endswith("Review result: clean")
+    assert "Review Suite instructions:" in instructions
+
+
+def test_prepare_codex_review_launch_does_not_prefix_deslop_prompt_with_technical_charter(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    state_dir = tmp_path / "state"
+    monkeypatch.setattr("review_suite_core.lens_runtime.shutil.which", lambda name: "codex")
+    monkeypatch.setattr("review_suite_core.lens_runtime.validate_codex_runtime", lambda **kwargs: None)
+    monkeypatch.setattr("review_suite_core.lens_runtime.default_review_suite_state_dir", lambda: state_dir)
+    monkeypatch.setattr("review_suite_core.lens_runtime.isolated_runtime_user_config_overrides", lambda: [])
+
+    launch = prepare_codex_review_launch(
+        tool_name="review-deslop",
+        model="gpt-5.5",
+        reasoning_effort="medium",
+        title="review-deslop::gpt-5.5-medium",
+        review_root=tmp_path,
+        base="origin/main",
+        prompt="Find redundant code.",
+        output_prefix="review-test-",
+        allow_unsafe_windows_wsl_fallback=False,
+    )
+
+    try:
+        assert launch.command[-1] == "-"
+        assert launch.stdin_text is not None
+        assert "base ref `origin/main`" in launch.stdin_text
+        assert "Find redundant code." in launch.stdin_text
+        assert "Review only for concrete technical merge-readiness risks" not in launch.stdin_text
+        assert "Review Suite instructions:" not in launch.stdin_text
+    finally:
+        if launch.final_message_path is not None:
+            launch.final_message_path.unlink(missing_ok=True)
+
+
+def test_prepare_codex_review_launch_does_not_prefix_followup_prompt_with_technical_charter(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    state_dir = tmp_path / "state"
+    monkeypatch.setattr("review_suite_core.lens_runtime.shutil.which", lambda name: "codex")
+    monkeypatch.setattr("review_suite_core.lens_runtime.validate_codex_runtime", lambda **kwargs: None)
+    monkeypatch.setattr("review_suite_core.lens_runtime.default_review_suite_state_dir", lambda: state_dir)
+    monkeypatch.setattr("review_suite_core.lens_runtime.isolated_runtime_user_config_overrides", lambda: [])
+
+    launch = prepare_codex_review_launch(
+        tool_name="review-followup",
+        model="gpt-5.5",
+        reasoning_effort="medium",
+        title="review-followup::gpt-5.5-medium",
+        review_root=tmp_path,
+        base="origin/main",
+        prompt="Verify the previous finding was fixed.",
+        output_prefix="review-test-",
+        allow_unsafe_windows_wsl_fallback=False,
+    )
+
+    try:
+        assert launch.command[-1] == "-"
+        assert launch.stdin_text is not None
+        assert "Verify the previous finding was fixed." in launch.stdin_text
+        assert "Review only for concrete technical merge-readiness risks" not in launch.stdin_text
+        assert "Review Suite instructions:" not in launch.stdin_text
+    finally:
+        if launch.final_message_path is not None:
+            launch.final_message_path.unlink(missing_ok=True)
 
 
 def test_prepare_codex_review_launch_validates_base_commit_end_range(
@@ -347,6 +462,9 @@ def test_prepare_codex_review_launch_validates_base_commit_end_range(
         assert launch.stdin_text is not None
         assert "commit range `old-head..new-head`" in launch.stdin_text
         assert "current checkout against base ref" not in launch.stdin_text
+        assert "Review only for concrete technical merge-readiness risks" in launch.stdin_text
+        assert "because AI is involved" in launch.stdin_text
+        assert "Review interdiff." in launch.stdin_text
         assert "--base" not in launch.command
         assert "--commit" not in launch.command
         assert launch.command[-1] == "-"
@@ -386,7 +504,10 @@ def test_prepare_codex_review_launch_uses_prompt_for_promptless_commit_end(
         assert calls == [(tmp_path, "old-head", "new-head", "native commit-range review launch")]
         assert launch.stdin_text is not None
         assert "commit range `old-head..new-head`" in launch.stdin_text
-        assert "Review instructions:" not in launch.stdin_text
+        assert "Review instructions:" in launch.stdin_text
+        assert "Review only for concrete technical merge-readiness risks" in launch.stdin_text
+        assert "because AI is involved" in launch.stdin_text
+        assert "Review Suite instructions:" not in launch.stdin_text
         assert "--base" not in launch.command
         assert "--commit" not in launch.command
         assert launch.command[-1] == "-"

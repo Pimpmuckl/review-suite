@@ -1252,9 +1252,11 @@ def test_launch_reviewer_process_writes_prompt_for_prompted_base_mode(
     assert command[-1] == "-"
     assert 'approval_policy="never"' in command
     assert len(proc.stdin.writes) == 1
+    assert "Review only for concrete technical merge-readiness risks" in proc.stdin.writes[0]
     assert "manual prompt" in proc.stdin.writes[0]
     assert "base ref `main`" in proc.stdin.writes[0]
     assert "BEGIN DIFF" not in proc.stdin.writes[0]
+    assert captured["stdin"] == subprocess.PIPE
     assert proc.stdin.closed is True
     assert launched["pid"] == 4242
     assert "final_message_path" in launched

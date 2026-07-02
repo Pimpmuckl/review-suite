@@ -26,6 +26,18 @@ DEFAULT_TIMEOUT_SECONDS = 0
 WRAPPER_SESSION_LOG_FILENAME = "wrapper_sessions.jsonl"
 SUPPORTED_CODEX_SERVICE_TIERS = {"fast", "flex"}
 ISOLATED_RUNTIME_USER_CONFIG_ROOTS = ("model_provider", "model_providers", "openai_base_url", "oss_provider")
+TECHNICAL_REVIEW_CHARTER_TOOLS = {"review-suite"}
+TECHNICAL_REVIEW_DEVELOPER_INSTRUCTIONS = (
+    "Review only for concrete technical merge-readiness risks caused or exposed by the target diff. "
+    "Do not invent product requirements, broad guardrails, fallback or compatibility promises, or live browser/editor behavior "
+    "unless required by the task, docs, tests, API contracts, security boundaries, or existing code invariants.\n\n"
+    "For AI calls, model outputs, prompts, summaries, classifications, or generated content, do not demand extra safety filters, "
+    "validation layers, confidence gates, fallback rewrites, human-review flows, prompt restrictions, or output guardrails merely "
+    "because AI is involved.\n\n"
+    "Flag only concrete render, accessibility, data-integrity, security, injection, contract, regression, or operational failure modes "
+    "introduced by this diff. Missing-validation findings must name the changed path, the specific narrow evidence needed, and the "
+    "concrete failure mode."
+)
 
 
 @dataclass(frozen=True)
@@ -264,6 +276,21 @@ def codex_review_stdin_text(
     return message
 
 
+def codex_review_prompt_instructions(prompt: str) -> str:
+    review_prompt = prompt.strip()
+    if not review_prompt:
+        return TECHNICAL_REVIEW_DEVELOPER_INSTRUCTIONS
+    return f"{TECHNICAL_REVIEW_DEVELOPER_INSTRUCTIONS}\n\nReview Suite instructions:\n{review_prompt}"
+
+
+def codex_review_prompt_only_stdin_text(prompt: str) -> str:
+    return f"You are running a focused code review. Do not modify files.\n\nReview instructions:\n{prompt.strip()}\n"
+
+
+def should_apply_technical_review_charter(tool_name: str) -> bool:
+    return tool_name in TECHNICAL_REVIEW_CHARTER_TOOLS
+
+
 def codex_exec_review_command(
     *,
     tool_name: str,
@@ -331,6 +358,7 @@ def prepare_codex_review_launch(
     allow_unsafe_windows_wsl_fallback: bool,
 ) -> CodexReviewLaunch:
     base_ref = str(base or "").strip()
+    commit_ref = str(commit or "").strip()
     commit_end_ref = str(commit_end or "").strip()
     if base_ref and commit_end_ref:
         validated_linear_review_range(
@@ -339,9 +367,25 @@ def prepare_codex_review_launch(
             commit_end_ref,
             label="native commit-range review launch",
         )
-    stdin_text = codex_review_stdin_text(prompt=prompt, base=base, commit=commit, commit_end=commit_end)
+    prompt_text = prompt.strip()
+    review_prompt = (
+        codex_review_prompt_instructions(prompt_text)
+        if should_apply_technical_review_charter(tool_name)
+        else prompt_text
+    )
+    if prompt_text and not (base_ref or commit_ref or commit_end_ref):
+        stdin_text = codex_review_prompt_only_stdin_text(review_prompt)
+    elif prompt_text or commit_end_ref:
+        stdin_text = codex_review_stdin_text(
+            prompt=review_prompt,
+            base=base,
+            commit=commit,
+            commit_end=commit_end,
+        )
+    else:
+        stdin_text = None
     final_message_path: Path | None = None
-    if stdin_text is not None:
+    if stdin_text is not None or prompt_text:
         prefix = output_prefix or f"{tool_name}-message-"
         final_message_path = _review_output_path(prefix)
     command_kwargs = {
@@ -355,8 +399,6 @@ def prepare_codex_review_launch(
         "allow_unsafe_windows_wsl_fallback": allow_unsafe_windows_wsl_fallback,
     }
     if stdin_text is not None:
-        # Codex rejects native --base/--commit targets when custom review instructions are supplied.
-        # Keep the review subcommand, but put the git target in stdin with the lens instructions.
         command_kwargs["prompt"] = stdin_text
     else:
         command_kwargs["base"] = base
