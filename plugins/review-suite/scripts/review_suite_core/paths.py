@@ -124,7 +124,7 @@ def resolve_repo_root(cd: str | None) -> Path:
     if cd:
         translated = _translate_windows_posix_path(cd)
         if translated:
-            return _git_top_level(Path(translated).resolve())
+            return _git_top_level(Path(translated))
         path_message = _windows_posix_path_message(cd)
         if path_message:
             raise ValueError(path_message)
