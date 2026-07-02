@@ -886,6 +886,7 @@ def test_collect_completed_review_capture_uses_started_at_for_title_fallback(
 
     monkeypatch.setattr(review_suite_local, "find_thread_by_id", lambda **_: None)
     monkeypatch.setattr(review_suite_local, "find_review_child_thread", lambda **_: None)
+    monkeypatch.setattr(review_suite_local.time, "sleep", lambda _: None)
 
     def fake_find_thread_by_title(**kwargs: object) -> None:
         observed["created_after"] = kwargs["created_after"]
@@ -935,6 +936,7 @@ def test_collect_completed_review_capture_prefers_final_message_path(
     monkeypatch.setattr(review_suite_local, "find_review_child_thread", lambda **_: None)
     monkeypatch.setattr(review_suite_local, "find_thread_by_title", lambda **_: None)
     monkeypatch.setattr(review_suite_local, "enrich_thread_record", lambda thread: {})
+    monkeypatch.setattr(review_suite_local.time, "sleep", lambda _: None)
 
     variant = {
         "id": "gpt-5.4-mini-medium",

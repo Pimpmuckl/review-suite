@@ -6,45 +6,57 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   tests:
-    name: ${{ matrix.os }} / Python ${{ matrix.python-version }}
+    name: ${{ matrix.os }} / Python 3.14
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     env:
-      UV_PYTHON: ${{ matrix.python-version }}
+      UV_PYTHON: "3.14"
     strategy:
       fail-fast: false
       matrix:
         os:
           - ubuntu-latest
           - windows-latest
-        python-version:
-          - "3.11"
-          - "3.14"
+          - macos-latest
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
+        with:
+          clean: false
+          persist-credentials: false
+          set-safe-directory: false
+          show-progress: false
 
       - name: Install uv
         uses: astral-sh/setup-uv@v8.2.0
         with:
-          version: "0.11.22"
+          version: "0.11.26"
           enable-cache: true
 
       - name: Install Python
-        run: uv python install ${{ matrix.python-version }}
+        run: uv python install 3.14
 
       - name: Install dependencies
         run: uv sync --locked
 
-      - name: Run tests
-        run: uv run --locked pytest plugins/review-suite/tests -q
+      - parallel:
+          - name: Run tests
+            run: uv run --locked pytest -n auto --dist=worksteal plugins/review-suite/tests -q
 
-      - name: Syntax check scripts
-        shell: pwsh
-        run: |
-          $files = @(
-            Get-ChildItem -LiteralPath plugins/review-suite/scripts -Filter *.py -File
-            Get-ChildItem -LiteralPath plugins/review-suite/scripts/review_suite_core -Filter *.py -File
-          )
-          uv run --locked python -m py_compile @($files.FullName)
+          - name: Syntax check scripts
+            shell: pwsh
+            run: |
+              $files = @(
+                Get-ChildItem -LiteralPath plugins/review-suite/scripts -Filter *.py -File
+                Get-ChildItem -LiteralPath plugins/review-suite/scripts/review_suite_core -Filter *.py -File
+              )
+              uv run --locked python -m py_compile @($files.FullName)

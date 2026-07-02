@@ -1220,6 +1220,8 @@ def test_run_gate_round_retries_operational_block_once(monkeypatch, tmp_path: Pa
     )
     monkeypatch.setattr("review_gate.make_round_id", lambda *args, **kwargs: "gate-1")
     monkeypatch.setattr("review_gate._current_branch_name", lambda path: "feature/test")
+    monkeypatch.setattr("review_gate.MULTI_REVIEW_DISPATCH_STAGGER_SECONDS", 0)
+    monkeypatch.setattr("review_gate._gate_retry_delay_seconds", lambda reason: 0)
     monkeypatch.setattr("review_gate.time.sleep", lambda seconds: None)
 
     launches: list[tuple[str, int]] = []
@@ -1302,7 +1304,7 @@ def test_run_gate_round_retries_operational_block_once(monkeypatch, tmp_path: Pa
         prompt="",
     )
 
-    assert launches == [("alpha", 0), ("alpha", 1), ("bravo", 0)]
+    assert launches == [("alpha", 0), ("bravo", 0), ("alpha", 1)]
     assert exit_code == 0
     assert payload["status"] == "signoff_pending"
     assert "close-gate" in payload["action"]["cmd"]

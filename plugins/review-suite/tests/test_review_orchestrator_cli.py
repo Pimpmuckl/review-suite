@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from copy import deepcopy
@@ -21,6 +22,15 @@ from review_suite_core import orchestrator_runner, orchestrator_store
 from review_suite_local import write_round
 
 
+_GIT_ENV = os.environ | {
+    "GIT_AUTHOR_EMAIL": "codex@example.invalid",
+    "GIT_AUTHOR_NAME": "Codex",
+    "GIT_COMMITTER_EMAIL": "codex@example.invalid",
+    "GIT_COMMITTER_NAME": "Codex",
+    "GIT_TERMINAL_PROMPT": "0",
+}
+
+
 @pytest.fixture(autouse=True)
 def _isolate_default_state_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(review, "default_state_dir", lambda: tmp_path / "default-state")
@@ -35,6 +45,7 @@ def _git(repo: Path, *args: str) -> str:
         encoding="utf-8",
         errors="replace",
         check=False,
+        env=_GIT_ENV,
     )
     if proc.returncode != 0:
         raise AssertionError(proc.stderr or proc.stdout or f"git {' '.join(args)} failed")
@@ -43,10 +54,7 @@ def _git(repo: Path, *args: str) -> str:
 
 def _init_repo(repo: Path) -> None:
     repo.mkdir()
-    _git(repo, "init")
-    _git(repo, "checkout", "-b", "main")
-    _git(repo, "config", "user.email", "codex@example.invalid")
-    _git(repo, "config", "user.name", "Codex")
+    _git(repo, "init", "-b", "main")
 
 
 def _commit_file(repo: Path, relative_path: str, content: str, message: str) -> str:

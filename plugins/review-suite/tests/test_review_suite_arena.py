@@ -780,10 +780,14 @@ def test_run_benchmarked_round_noninteractive_uses_toon_actions_without_stderr_n
     monkeypatch.setattr("review_suite_arena.load_operational_state", lambda path: {})
     monkeypatch.setattr("review_suite_arena.select_pair", lambda **kwargs: {"round_id": "round-1", "task_class": "phase_review"})
     monkeypatch.setattr("review_suite_arena.write_round", lambda *args, **kwargs: None)
+    monkeypatch.setattr("review_suite_arena.guard_no_stage_step_down", lambda **kwargs: None)
+    monkeypatch.setattr("review_suite_arena._validate_benchmarked_review_runtime", lambda **kwargs: None)
     monkeypatch.setattr("review_suite_arena.run_round", lambda **kwargs: {"round_id": "round-1", "task_class": "phase_review", "runs": []})
     monkeypatch.setattr("review_suite_arena.public_round_result", lambda *args, **kwargs: {"blocked": False, "runs": []})
     monkeypatch.setattr("review_suite_arena._print_findings", lambda *args, **kwargs: None)
     monkeypatch.setattr("review_suite_arena._current_branch_name", lambda review_cwd: "branch-1")
+    monkeypatch.setattr("review_suite_arena.refresh_review_cost_report_best_effort", lambda **kwargs: None)
+    monkeypatch.setattr("review_suite_arena._record_standalone_review_anchor_for_round", lambda **kwargs: True)
     monkeypatch.setattr("review_suite_arena._output_isatty", lambda: False)
     monkeypatch.setattr(
         "review_suite_arena._print_next_steps",

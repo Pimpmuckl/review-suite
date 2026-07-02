@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -25,6 +26,15 @@ from review_suite_core.workflow_state import (
 )
 
 
+_GIT_ENV = os.environ | {
+    "GIT_AUTHOR_EMAIL": "codex@example.invalid",
+    "GIT_AUTHOR_NAME": "Codex",
+    "GIT_COMMITTER_EMAIL": "codex@example.invalid",
+    "GIT_COMMITTER_NAME": "Codex",
+    "GIT_TERMINAL_PROMPT": "0",
+}
+
+
 def _git(repo: Path, *args: str) -> str:
     proc = subprocess.run(
         ["git", *args],
@@ -34,6 +44,7 @@ def _git(repo: Path, *args: str) -> str:
         encoding="utf-8",
         errors="replace",
         check=False,
+        env=_GIT_ENV,
     )
     if proc.returncode != 0:
         raise AssertionError(proc.stderr or proc.stdout or f"git {' '.join(args)} failed")
@@ -42,10 +53,7 @@ def _git(repo: Path, *args: str) -> str:
 
 def _init_repo(repo: Path) -> None:
     repo.mkdir()
-    _git(repo, "init")
-    _git(repo, "checkout", "-b", "main")
-    _git(repo, "config", "user.email", "codex@example.invalid")
-    _git(repo, "config", "user.name", "Codex")
+    _git(repo, "init", "-b", "main")
 
 
 def _commit_file(repo: Path, relative_path: str, content: str, message: str) -> str:
@@ -1230,16 +1238,27 @@ def test_inspect_workflow_status_recommends_coherence_for_large_delta(tmp_path: 
     assert payload["files_changed"] == 7
 
 
-def test_inspect_workflow_status_escalates_small_delta_when_branch_review_pressure_is_high(tmp_path: Path) -> None:
+def test_inspect_workflow_status_escalates_small_delta_when_branch_review_pressure_is_high(
+    monkeypatch, tmp_path: Path
+) -> None:
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
     _init_repo(repo)
     _commit_file(repo, "base.txt", "base\n", "initial")
     _git(repo, "checkout", "-b", "feature/pressure")
 
-    latest_reviewed_head = ""
+    latest_reviewed_head = _commit_file(repo, "app.txt", "reviewed\n", "latest reviewed")
+    merge_base = _git(repo, "merge-base", "main", "HEAD")
+    real_commit_distance = workflow_state_module.commit_distance
+
+    def fake_commit_distance(review_cwd: Path, start_ref: str, end_ref: str = "HEAD") -> int:
+        if start_ref == merge_base and end_ref == "HEAD":
+            return 25
+        return real_commit_distance(review_cwd, start_ref, end_ref)
+
+    monkeypatch.setattr(workflow_state_module, "commit_distance", fake_commit_distance)
+
     for index in range(12):
-        latest_reviewed_head = _commit_file(repo, "app.txt", f"{index}\n", f"reviewed {index}")
         record_review_anchor(
             state_dir=state_dir,
             review_cwd=repo,
@@ -1249,24 +1268,9 @@ def test_inspect_workflow_status_escalates_small_delta_when_branch_review_pressu
             review_scope={
                 "commit": latest_reviewed_head,
                 "commit_end": latest_reviewed_head,
-                "merge_base": _git(repo, "merge-base", "main", "HEAD"),
+                "merge_base": merge_base,
             },
         )
-    for index in range(12, 26):
-        _commit_file(repo, "app.txt", f"{index}\n", f"extra {index}")
-    latest_reviewed_head = _commit_file(repo, "app.txt", "reviewed\n", "latest reviewed")
-    record_review_anchor(
-        state_dir=state_dir,
-        review_cwd=repo,
-        lane="review-followup",
-        base="main",
-        reviewed_head=latest_reviewed_head,
-        review_scope={
-            "commit": latest_reviewed_head,
-            "commit_end": latest_reviewed_head,
-            "merge_base": _git(repo, "merge-base", "main", "HEAD"),
-        },
-    )
     _commit_file(repo, "app.txt", "tip\n", "small fix")
 
     payload = inspect_workflow_status(
