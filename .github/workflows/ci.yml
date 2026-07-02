@@ -30,12 +30,15 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Install uv
         uses: astral-sh/setup-uv@v8.2.0
         with:
           version: "0.11.26"
           enable-cache: true
+          cache-python: true
 
       - name: Install Python
         run: uv python install 3.14
@@ -45,7 +48,7 @@ jobs:
 
       - parallel:
           - name: Run tests
-            run: uv run --locked pytest plugins/review-suite/tests -q
+            run: uv run --locked pytest -n auto --dist=worksteal plugins/review-suite/tests -q
 
           - name: Syntax check scripts
             shell: pwsh
