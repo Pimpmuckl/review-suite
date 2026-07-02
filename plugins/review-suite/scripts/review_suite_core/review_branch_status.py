@@ -391,7 +391,7 @@ def _orchestrator_cycles(state_dir: Path) -> list[dict[str, object]]:
     for path in sorted((state_dir / "orchestrator" / "cycles").glob("*.json")):
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except OSError, json.JSONDecodeError:
             continue
         if isinstance(payload, dict):
             try:
@@ -437,7 +437,7 @@ def _orchestrator_progress_label(state: dict[str, object]) -> str | None:
                 if item.get("step_index") is not None
                 else item.get("index")
             )
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             continue
         step_name = str(item.get("step") or item.get("name") or "").strip()
         lane = str(item.get("lane") or "review_t1").strip()

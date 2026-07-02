@@ -1618,7 +1618,7 @@ def _live_review_thread(
             return False
         try:
             candidate_created_at = int(candidate.get("created_at"))
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             candidate_created_at = None
         if candidate_created_at is None or candidate_created_at < created_after:
             return False

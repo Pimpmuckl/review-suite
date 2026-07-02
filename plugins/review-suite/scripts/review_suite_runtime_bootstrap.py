@@ -242,7 +242,7 @@ def find_plugin_root(path: Path) -> Path | None:
             continue
         try:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except OSError, json.JSONDecodeError:
             continue
         if str(manifest.get("name") or "") == PLUGIN_NAME:
             return candidate.resolve(strict=False)
@@ -376,7 +376,7 @@ def _runtime_age_seconds(runtime_root: Path) -> float:
     metadata_path = runtime_root / METADATA_FILENAME
     try:
         metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except OSError, json.JSONDecodeError:
         metadata = {}
 
     created_at = metadata.get("created_at")

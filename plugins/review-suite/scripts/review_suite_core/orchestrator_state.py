@@ -224,7 +224,7 @@ def _changed_since_review_paths(
                 cwd_path_from_normalized(cwd), reviewed_head, current_head
             )
         )
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return None
 
 

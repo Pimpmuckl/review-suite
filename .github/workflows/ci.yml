@@ -19,7 +19,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     env:
-      UV_PYTHON: "3.14"
+      UV_PYTHON: "3.14.6"
     strategy:
       fail-fast: false
       matrix:
@@ -43,7 +43,7 @@ jobs:
           enable-cache: true
 
       - name: Install Python
-        run: uv python install 3.14
+        run: uv python install 3.14.6
 
       - name: Install dependencies
         run: uv sync --locked

@@ -217,7 +217,7 @@ def test_runtime_hash_ignores_volatile_state(tmp_path: Path) -> None:
     initial_hash = content_hash_for_runtime(plugin_root)
 
     _write(
-        plugin_root / "scripts" / "__pycache__" / "review.cpython-311.pyc", "bytecode"
+        plugin_root / "scripts" / "__pycache__" / "review.cpython-314.pyc", "bytecode"
     )
     _write(plugin_root / ".pytest_cache" / "README.md", "cache")
 

@@ -1049,7 +1049,7 @@ def _live_worktree_status(identity: dict[str, Any]) -> dict[str, Any] | str:
         if branch := current_branch(review_cwd):
             payload["branch"] = branch
         return payload
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return "unavailable"
 
 
@@ -1253,7 +1253,7 @@ def _identity_head(state: dict[str, Any]) -> str | None:
         return None
     try:
         return current_head(cwd_path_from_normalized(cwd))
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return None
 
 
@@ -1381,7 +1381,7 @@ def _current_cycle_identity_if_compatible(
             "merge_base": current_merge_base,
             "base_drift": base_drift,
         }
-    except (AttributeError, OSError, ValueError):
+    except AttributeError, OSError, ValueError:
         return None
 
 
@@ -1410,7 +1410,7 @@ def _fix_pending_head_change_identity_if_compatible(
             "merge_base": merge_base(review_root, base, "HEAD"),
             "base_drift": None,
         }
-    except (AttributeError, OSError, ValueError):
+    except AttributeError, OSError, ValueError:
         return None
 
 
@@ -1519,7 +1519,7 @@ def _resume_progress(
             return state
         try:
             identity = _current_cycle_identity_if_compatible(state)
-        except (OSError, ValueError):
+        except OSError, ValueError:
             return state
         if identity:
             head = str(identity.get("head") or "").strip()
@@ -1568,7 +1568,7 @@ def _resume_progress(
     reviewed_head = str(active.get("reviewed_head") or "").strip()
     try:
         identity = _current_cycle_identity_if_compatible(state)
-    except (OSError, ValueError):
+    except OSError, ValueError:
         identity = None
     if not identity:
         identity = _fix_pending_head_change_identity_if_compatible(state)
@@ -1836,7 +1836,7 @@ def _compatible_continuation_cycle(
                     reviewed_head=reviewed_head,
                     current_head_value=head,
                 )
-            except (OSError, ValueError):
+            except OSError, ValueError:
                 continue
             if base_drift is None:
                 continue
@@ -2211,7 +2211,7 @@ def _review_step_label(state: dict[str, Any], pending: dict[str, Any]) -> str:
     step = str(pending.get("step") or "").strip() or "next review step"
     try:
         position = int(pending.get("step_index")) + 1
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         position = None
     steps = list(dict(state.get("review_plan") or {}).get("steps") or [])
     if position is not None and steps:
@@ -2342,7 +2342,7 @@ def _github_pending_head_change_identity(
         return None
     try:
         identity = _current_cycle_identity_if_compatible(state)
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return None
     if not identity:
         return None

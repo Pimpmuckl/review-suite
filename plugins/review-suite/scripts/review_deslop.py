@@ -156,7 +156,7 @@ def _git_output(
             timeout=timeout_seconds,
             check=False,
         )
-    except (OSError, subprocess.SubprocessError):
+    except OSError, subprocess.SubprocessError:
         return ""
     if proc.returncode != 0:
         return ""
@@ -218,7 +218,7 @@ def _module_is_available(command: list[str]) -> bool:
             timeout=15,
             check=False,
         )
-    except (OSError, subprocess.SubprocessError):
+    except OSError, subprocess.SubprocessError:
         return False
     return proc.returncode == 0
 
@@ -275,7 +275,7 @@ def _start_static_cleanup_scan(
             stdout=stdout_handle,
             stderr=stderr_handle,
         )
-    except (OSError, subprocess.SubprocessError):
+    except OSError, subprocess.SubprocessError:
         stdout_handle.close()
         stderr_handle.close()
         _unlink_quietly(Path(stdout_handle.name))
@@ -305,7 +305,7 @@ def _stop_static_cleanup_scan(scan: StaticCleanupScan) -> None:
             scan.process.terminate()
             try:
                 scan.process.wait(timeout=1)
-            except (OSError, subprocess.TimeoutExpired):
+            except OSError, subprocess.TimeoutExpired:
                 scan.process.kill()
     finally:
         _unlink_quietly(scan.stdout_path)
@@ -327,7 +327,7 @@ def _collect_static_cleanup_scan(
             for path in (scan.stdout_path, scan.stderr_path)
             if path.exists()
         )
-    except (OSError, subprocess.SubprocessError):
+    except OSError, subprocess.SubprocessError:
         return []
     finally:
         _unlink_quietly(scan.stdout_path)

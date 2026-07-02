@@ -2,7 +2,7 @@
 name = "review-suite"
 version = "0.1.0"
 description = "Codex plugin for stateful local and GitHub review workflows."
-requires-python = ">=3.11"
+requires-python = ">=3.14.6"
 license = "MIT"
 readme = "README.md"
 
@@ -15,12 +15,13 @@ dev = [
 
 [tool.uv]
 exclude-newer = "1 week"
+required-version = ">=0.11.26"
 
 [tool.pytest.ini_options]
 testpaths = ["plugins/review-suite/tests"]
 
 [tool.ruff]
-target-version = "py311"
+target-version = "py314"
 
 [tool.ruff.lint]
 ignore = ["E402"]

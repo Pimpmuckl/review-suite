@@ -711,7 +711,7 @@ def _current_pr_number(review_cwd: Path) -> str:
             check=False,
             timeout=10,
         )
-    except (OSError, subprocess.TimeoutExpired):
+    except OSError, subprocess.TimeoutExpired:
         return ""
     if proc.returncode != 0:
         return ""
@@ -1144,7 +1144,7 @@ def _cost_row_from_payload(payload: dict[str, Any]) -> ReviewCostRow | None:
             tokens=int(payload["tokens"]),
             cost_usd=float(payload["cost_usd"]),
         )
-    except (KeyError, TypeError, ValueError):
+    except KeyError, TypeError, ValueError:
         return None
 
 
@@ -1153,7 +1153,7 @@ def read_review_cost_row_cache(state_dir: Path) -> list[ReviewCostRow]:
     for path in sorted(_cost_row_cache_dir(state_dir).glob("*.json")):
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except OSError, json.JSONDecodeError:
             continue
         row = _cost_row_from_payload(payload) if isinstance(payload, dict) else None
         if row is not None:
@@ -1170,7 +1170,7 @@ def update_review_cost_row_cache(*, state_dir: Path, rows: list[ReviewCostRow]) 
     for path in sorted(cache_dir.glob("*.json")):
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except OSError, json.JSONDecodeError:
             continue
         row = _cost_row_from_payload(payload) if isinstance(payload, dict) else None
         if row is None:

@@ -137,7 +137,7 @@ def isolated_runtime_user_config_overrides(
     try:
         with path.open("rb") as handle:
             config = tomllib.load(handle)
-    except (OSError, tomllib.TOMLDecodeError):
+    except OSError, tomllib.TOMLDecodeError:
         return []
     overrides: list[str] = []
     for key in ISOLATED_RUNTIME_USER_CONFIG_ROOTS:
@@ -474,7 +474,7 @@ def _review_branch(review_root: Path) -> str:
             check=False,
             timeout=2,
         )
-    except (OSError, subprocess.TimeoutExpired):
+    except OSError, subprocess.TimeoutExpired:
         return ""
     return proc.stdout.strip() if proc.returncode == 0 else ""
 

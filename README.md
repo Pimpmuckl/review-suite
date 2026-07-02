@@ -26,7 +26,7 @@ codex plugin marketplace upgrade review-suite
 ## Requirements
 
 - Codex CLI available as `codex`
-- Python 3.11+
+- Python 3.14.6+
 - `uv`
 - `git`
 - GitHub CLI `gh` only for `review-github`
