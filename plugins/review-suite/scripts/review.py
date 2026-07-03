@@ -1753,6 +1753,20 @@ def _deslop_is_done_or_skipped(state: dict[str, Any]) -> bool:
     )
 
 
+def _green_cycle_needs_current_head_signoff(
+    state: dict[str, Any], *, head: str
+) -> bool:
+    if state.get("stage") not in {STAGE_REVIEW_GREEN, STAGE_LOCAL_GREEN_HANDOFF}:
+        return False
+    github_status = _github_review_status(state)
+    if (
+        _mode_label(state) == "emergency" and github_status == "unknown"
+    ) or github_status in {GITHUB_RESULT_CLEAN, GITHUB_RESULT_WAIVED}:
+        return False
+    summary = review_ladder_summary(state, current_head=head)
+    return summary.get("review_ladder") == "invalidated"
+
+
 def _continuation_head_match_kind(
     state: dict[str, Any], *, review_root: Path, head: str
 ) -> str | None:
@@ -1780,6 +1794,8 @@ def _continuation_head_match_kind(
         STAGE_FOLLOWUP_PENDING,
         STAGE_GATE_RERUN_NEEDED,
     }:
+        return "changed"
+    if _green_cycle_needs_current_head_signoff(state, head=head):
         return "changed"
     return None
 
@@ -1811,7 +1827,9 @@ def _compatible_continuation_cycle(
         if not isinstance(state, dict):
             continue
         state_stage = str(state.get("stage") or "")
-        if state_stage not in CONTINUATION_REDIRECT_STAGES:
+        if state_stage not in CONTINUATION_REDIRECT_STAGES and not (
+            _green_cycle_needs_current_head_signoff(state, head=head)
+        ):
             continue
         if isinstance(state.get("superseded_by"), dict):
             continue
@@ -1884,12 +1902,21 @@ def _compatible_continuation_cycle(
             "multiple active review cycles match this repo/base/branch/merge-base; "
             f"rerun with --id for one of: {', '.join(public_ids)}"
         )
-    return _with_current_identity(
+    selected_base_drift = selected_candidates[0][3]
+    resumed = _with_current_identity(
         selected_candidates[0][2],
         head=head,
         merge_base_head=merge_base_head,
-        base_drift=selected_candidates[0][3],
+        base_drift=selected_base_drift,
     )
+    if str(resumed.get("stage") or "") in {
+        STAGE_REVIEW_GREEN,
+        STAGE_LOCAL_GREEN_HANDOFF,
+    }:
+        if bool(dict(selected_base_drift or {}).get("patch_equivalent")):
+            return _with_equivalent_base_drift_review_head(resumed, selected_base_drift)
+        return mark_latest_profile_step_rerun_needed(resumed, head=head)
+    return resumed
 
 
 def _create_or_resume_cycle(

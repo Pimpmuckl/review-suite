@@ -3945,6 +3945,152 @@ def test_pending_github_review_after_amend_reuses_same_id_for_signoff(
     )
 
 
+def test_mode_rerun_after_pending_github_head_change_reuses_same_id_for_signoff(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _stub_deslop(monkeypatch)
+    review_calls = _stub_review(monkeypatch, "signoff-round-1", "signoff-round-2")
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _use_single_step_normal_profile(monkeypatch, state_dir)
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/github-head-change-mode-rerun")
+    _commit_file(repo, "app.txt", "feature\n", "feature")
+
+    _, opened = _run_review(
+        monkeypatch,
+        [
+            "--mode",
+            "normal",
+            "--cd",
+            str(repo),
+            "--base",
+            "main",
+            "--state-dir",
+            str(state_dir),
+        ],
+    )
+    public_id = str(opened["review"])
+    _run_review(
+        monkeypatch,
+        ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)],
+    )
+    changed_head = _commit_file(
+        repo,
+        "app.txt",
+        "feature\nfix from github review\n",
+        "fix github review finding",
+    )
+
+    exit_code, resumed = _run_review(
+        monkeypatch,
+        [
+            "--mode",
+            "normal",
+            "--cd",
+            str(repo),
+            "--base",
+            "main",
+            "--state-dir",
+            str(state_dir),
+        ],
+    )
+
+    assert exit_code == 0
+    assert resumed["review"] == public_id
+    assert "--decision clean" in str(resumed["Action"]["cmd"])
+    assert len(review_calls) == 2
+    assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 1
+    state = _cycle_payload(state_dir, public_id)
+    assert state["identity"]["head"] == changed_head
+    assert state["review_heads"]["last_fix_head"] == changed_head
+    assert state["github_review"]["status"] == "unknown"
+
+
+def test_mode_rerun_after_patch_equivalent_green_base_drift_keeps_handoff(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    review_calls = _stub_review(monkeypatch, "signoff-round-1")
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _use_single_step_normal_profile(monkeypatch, state_dir)
+    _init_repo(repo)
+    base_at_review = _commit_file(repo, "README.md", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/green-base-drift")
+    original_head = _commit_file(repo, "src/app.txt", "feature\n", "feature")
+
+    _, opened = _run_review(
+        monkeypatch,
+        [
+            "--mode",
+            "normal",
+            "--cd",
+            str(repo),
+            "--base",
+            "main",
+            "--state-dir",
+            str(state_dir),
+        ],
+    )
+    public_id = str(opened["review"])
+    _run_review(
+        monkeypatch,
+        ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)],
+    )
+
+    _git(repo, "checkout", "main")
+    current_base = _commit_file(repo, "docs/notes.md", "main notes\n", "main moves")
+    _git(repo, "checkout", "feature/green-base-drift")
+    _git(repo, "rebase", "main")
+    rebased_head = _git(repo, "rev-parse", "HEAD")
+
+    exit_code, resumed = _run_review(
+        monkeypatch,
+        [
+            "--mode",
+            "normal",
+            "--cd",
+            str(repo),
+            "--base",
+            "main",
+            "--state-dir",
+            str(state_dir),
+        ],
+    )
+
+    assert exit_code == 0
+    assert resumed["review"] == public_id
+    assert resumed["next_action"] == "github_review"
+    assert "--github-review" in str(resumed["Action"]["cmd"])
+    assert len(review_calls) == 1
+    assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 1
+    state = _cycle_payload(state_dir, public_id)
+    assert state["stage"] == "review-green"
+    assert state["identity"]["head"] == rebased_head
+    assert state["identity"]["merge_base"] == current_base
+    assert state["review_heads"]["last_reviewed_head"] == rebased_head
+    assert state["rounds"][0]["reviewed_head"] == rebased_head
+    assert state["decisions"][0]["reviewed_head"] == rebased_head
+    assert (
+        state["review_progress"]["completed_steps"][0]["reviewed_head"] == rebased_head
+    )
+    assert state["base_drift"] == {
+        "status": "ignored_no_path_overlap",
+        "recorded_merge_base": base_at_review,
+        "current_merge_base": current_base,
+        "reviewed_head": original_head,
+        "current_head": rebased_head,
+        "base_changed_path_count": 1,
+        "base_changed_paths": ["docs/notes.md"],
+        "overlap_paths": [],
+        "patch_equivalent": True,
+        "equivalent_reviewed_head": rebased_head,
+    }
+
+
 def test_github_result_after_amend_requires_same_id_signoff(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
