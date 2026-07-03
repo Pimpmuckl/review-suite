@@ -1922,7 +1922,7 @@ def _create_or_resume_cycle(
         skip_deslop=skip_deslop,
     )
     if continuation is not None:
-        return continuation
+        return _apply_runtime_options(continuation, args)
     state = create_cycle(
         cwd=review_root,
         base=base,

@@ -2234,6 +2234,44 @@ def test_wsl_flag_persists_to_orchestrated_steps(
     assert review_calls[0]["allow_unsafe_windows_wsl_fallback"] is True
 
 
+def test_wsl_flag_applies_when_reusing_compatible_cycle(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _stub_deslop(monkeypatch)
+    _stub_review(monkeypatch, "phase_review-round-1")
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _use_compact_normal_profile(monkeypatch, state_dir)
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/wsl-review")
+    _commit_file(repo, "app.txt", "feature\n", "feature")
+
+    args = [
+        "--mode",
+        "normal",
+        "--cd",
+        str(repo),
+        "--base",
+        "main",
+        "--state-dir",
+        str(state_dir),
+    ]
+    exit_code, payload = _run_review(monkeypatch, args)
+    public_id = str(payload["review"])
+
+    assert exit_code == 0
+    assert "runtime" not in _cycle_payload(state_dir, public_id)
+
+    exit_code, reused = _run_review(monkeypatch, [*args, "--wsl"])
+
+    assert exit_code == 0
+    assert reused["review"] == public_id
+    assert _cycle_payload(state_dir, public_id)["runtime"] == {
+        "allow_unsafe_windows_wsl_fallback": True
+    }
+
+
 def test_state_dir_flag_is_rejected(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
