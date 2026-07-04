@@ -40,6 +40,7 @@ from .lens_runtime import (
 from .paths import (
     cwd_path_from_normalized,
     normalize_cwd,
+    resolve_cd_path,
     resolve_repo_root,
     utc_now,
     utc_now_iso,
@@ -126,6 +127,7 @@ __all__ = [
     "prepare_codex_review_launch",
     "record_review_anchor",
     "record_wrapper_session",
+    "resolve_cd_path",
     "resolve_ref",
     "resolve_repo_root",
     "resolve_reviewed_head",

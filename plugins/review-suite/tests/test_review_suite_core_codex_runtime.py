@@ -151,6 +151,35 @@ def test_codex_exec_command_includes_service_tier_when_configured(
     assert command.index('approval_policy="never"') < command.index("--color")
 
 
+def test_codex_exec_command_can_skip_git_repo_check(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime.shutil.which", lambda name: "codex"
+    )
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime.validate_codex_runtime", lambda **kwargs: None
+    )
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime.isolated_runtime_user_config_overrides",
+        lambda: [],
+    )
+
+    command = codex_exec_command(
+        tool_name="review-plan",
+        model="gpt-5.5",
+        reasoning_effort="medium",
+        prompt="Review this.",
+        output_path=tmp_path / "out.txt",
+        review_root=tmp_path,
+        allow_unsafe_windows_wsl_fallback=False,
+        skip_git_repo_check=True,
+    )
+
+    assert "--skip-git-repo-check" in command
+    assert command.index("--skip-git-repo-check") < command.index("-o")
+
+
 def test_codex_exec_command_repasses_provider_overrides_before_review_model(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

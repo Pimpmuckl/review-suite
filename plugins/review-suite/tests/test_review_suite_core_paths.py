@@ -13,6 +13,7 @@ from review_suite_core.paths import (
     _git_top_level,
     cwd_path_from_normalized,
     normalize_cwd,
+    resolve_cd_path,
     resolve_repo_root,
 )
 
@@ -101,6 +102,21 @@ def test_resolve_repo_root_autotranslates_mnt_drive_to_windows_path(
     )
 
     resolved = resolve_repo_root("/mnt/c/Code/sample-repo")
+
+    assert str(resolved).replace("\\", "/") == "C:/Code/sample-repo"
+
+
+def test_resolve_cd_path_autotranslates_mnt_drive_without_git_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr("review_suite_core.paths._list_wsl_distributions", lambda: [])
+    monkeypatch.setattr(
+        "review_suite_core.paths._path_exists",
+        lambda path_text: path_text == "C:/Code/sample-repo",
+    )
+
+    resolved = resolve_cd_path("/mnt/c/Code/sample-repo")
 
     assert str(resolved).replace("\\", "/") == "C:/Code/sample-repo"
 

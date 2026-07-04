@@ -138,15 +138,19 @@ def _git_top_level(path: Path) -> Path:
     return Path(top_level)
 
 
+def resolve_cd_path(cd: str | Path) -> Path:
+    translated = _translate_windows_posix_path(str(cd))
+    if translated:
+        return Path(translated)
+    path_message = _windows_posix_path_message(str(cd))
+    if path_message:
+        raise ValueError(path_message)
+    return Path(cd).resolve()
+
+
 def resolve_repo_root(cd: str | None) -> Path:
     if cd:
-        translated = _translate_windows_posix_path(cd)
-        if translated:
-            return _git_top_level(Path(translated))
-        path_message = _windows_posix_path_message(cd)
-        if path_message:
-            raise ValueError(path_message)
-        return _git_top_level(Path(cd).resolve())
+        return _git_top_level(resolve_cd_path(cd))
     return _git_top_level(Path.cwd().resolve())
 
 

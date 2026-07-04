@@ -23,6 +23,7 @@ from review_suite_core import (
     emit_result,
     format_command,
     lens_model_config,
+    resolve_cd_path,
     resolve_repo_root,
     run_codex,
     use_unsafe_windows_wsl_fallback,
@@ -38,6 +39,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--input-file")
     parser.add_argument("--input-text")
     parser.add_argument("--cd")
+    parser.add_argument("--skip-git-repo-check", action="store_true")
     parser.add_argument("--wsl", action="store_true")
     return parser
 
@@ -49,10 +51,24 @@ def _help_command() -> str:
 
 
 def resolve_review_root(args: argparse.Namespace) -> Path:
+    skip_repo_check = bool(args.skip_git_repo_check)
     if args.cd:
+        if skip_repo_check:
+            return resolve_cd_path(args.cd)
         return resolve_repo_root(args.cd)
     if args.input_file:
-        return Path(args.input_file).resolve().parent
+        parent = Path(args.input_file).resolve().parent
+        if skip_repo_check:
+            return parent
+        try:
+            return resolve_repo_root(parent)
+        except ValueError:
+            try:
+                return resolve_repo_root(None)
+            except ValueError:
+                return parent
+    if skip_repo_check:
+        return Path.cwd().resolve(strict=False)
     return resolve_repo_root(None)
 
 
@@ -140,6 +156,7 @@ def main() -> int:
             progress_interval_seconds=DEFAULT_PROGRESS_INTERVAL_SECONDS,
             timeout_seconds=DEFAULT_TIMEOUT_SECONDS,
             allow_unsafe_windows_wsl_fallback=bool(args.wsl),
+            skip_git_repo_check=bool(args.skip_git_repo_check),
         )
         return emit_result(
             tool_name="review-plan",

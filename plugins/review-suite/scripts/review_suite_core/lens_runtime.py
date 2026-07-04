@@ -238,6 +238,7 @@ def codex_exec_command(
     output_path: Path | None = None,
     review_root: Path,
     allow_unsafe_windows_wsl_fallback: bool,
+    skip_git_repo_check: bool = False,
 ) -> list[str]:
     command = _codex_command_prefix(
         tool_name=tool_name,
@@ -250,6 +251,8 @@ def codex_exec_command(
         service_tier=service_tier,
     )
     command.extend(["--color", "never"])
+    if skip_git_repo_check:
+        command.append("--skip-git-repo-check")
     if output_path is not None:
         command.extend(["-o", str(output_path)])
     if prompt.strip():
@@ -600,6 +603,7 @@ def run_codex(
     progress_interval_seconds: int,
     timeout_seconds: int,
     allow_unsafe_windows_wsl_fallback: bool,
+    skip_git_repo_check: bool = False,
 ) -> dict[str, object]:
     with tempfile.NamedTemporaryFile(
         prefix=f"{tool_name}-message-", suffix=".txt", delete=False
@@ -614,6 +618,7 @@ def run_codex(
         output_path=output_path,
         review_root=review_root,
         allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
+        skip_git_repo_check=skip_git_repo_check,
     )
     return _run_captured_codex_command(
         tool_name=tool_name,

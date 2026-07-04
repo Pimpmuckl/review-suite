@@ -4,6 +4,7 @@ import argparse
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -671,6 +672,7 @@ def test_legacy_tier_wrappers_own_installed_cache_bootstrap() -> None:
 
 def test_agent_wrapper_help_keeps_useful_targeting_controls_visible() -> None:
     assert "--input-file" in review_plan.build_parser().format_help()
+    assert "--skip-git-repo-check" in review_plan.build_parser().format_help()
     assert "--focus" in review_deslop.build_parser().format_help()
     assert "--note-file" in review_followup.build_parser().format_help()
     assert "--pr-number" in _subparser_help(review_github.build_parser(), "run")
@@ -686,6 +688,153 @@ def test_local_review_wrappers_expose_short_wsl_flag() -> None:
     ):
         assert "--wsl" in help_text
         assert "--allow-unsafe-windows-codex-wsl-fallback" not in help_text
+
+
+def test_review_plan_input_file_prefers_current_repo_when_file_is_not_in_repo(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    plan = tmp_path / "plan.md"
+    repo = tmp_path / "repo"
+    plan.write_text("Plan", encoding="utf-8")
+
+    def fake_resolve_repo_root(value: object) -> Path:
+        if value == plan.parent:
+            raise ValueError("not a repo")
+        if value is None:
+            return repo
+        raise AssertionError(value)
+
+    monkeypatch.setattr(review_plan, "resolve_repo_root", fake_resolve_repo_root)
+    args = review_plan.build_parser().parse_args(["--input-file", str(plan)])
+
+    assert review_plan.resolve_review_root(args) == repo
+
+
+def test_review_plan_cd_keeps_raw_path_for_repo_resolver(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    repo = tmp_path / "repo"
+    captured: dict[str, object] = {}
+
+    def fake_resolve_repo_root(value: object) -> Path:
+        captured["value"] = value
+        return repo
+
+    monkeypatch.setattr(review_plan, "resolve_repo_root", fake_resolve_repo_root)
+    args = review_plan.build_parser().parse_args(
+        ["--cd", "/mnt/c/Code/sample-repo", "--input-text", "Plan"]
+    )
+
+    assert review_plan.resolve_review_root(args) == repo
+    assert captured["value"] == "/mnt/c/Code/sample-repo"
+
+
+def test_review_plan_forwards_skip_git_repo_check(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    plan = tmp_path / "plan.md"
+    plan.write_text("Plan", encoding="utf-8")
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(review_plan, "resolve_repo_root", lambda value: tmp_path)
+    monkeypatch.setattr(
+        review_plan, "use_unsafe_windows_wsl_fallback", lambda *args: False
+    )
+    monkeypatch.setattr(
+        review_plan,
+        "lens_model_config",
+        lambda name: SimpleNamespace(
+            model="gpt-5.5", reasoning_effort="medium", service_tier=None
+        ),
+    )
+
+    def fake_run_codex(**kwargs: object) -> dict[str, object]:
+        captured.update(kwargs)
+        return {
+            "returncode": 0,
+            "session_id": None,
+            "elapsed_seconds": 0.0,
+            "final_message": "No findings.",
+        }
+
+    monkeypatch.setattr(review_plan, "run_codex", fake_run_codex)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "review_plan.py",
+            "--skip-git-repo-check",
+            "--input-file",
+            str(plan),
+        ],
+    )
+
+    assert review_plan.main() == 0
+    assert captured["skip_git_repo_check"] is True
+    assert "status: ok" in capsys.readouterr().out
+
+
+def test_review_plan_skip_git_repo_check_uses_requested_directory_directly(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    requested = tmp_path / "not-a-repo"
+    args = review_plan.build_parser().parse_args(
+        ["--skip-git-repo-check", "--cd", str(requested), "--input-text", "Plan"]
+    )
+
+    def fail_resolve_repo_root(value: object) -> Path:
+        raise AssertionError(value)
+
+    monkeypatch.setattr(review_plan, "resolve_repo_root", fail_resolve_repo_root)
+
+    assert review_plan.resolve_review_root(args) == requested.resolve(strict=False)
+
+
+def test_review_plan_skip_git_repo_check_uses_cd_path_normalization(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    repo = tmp_path / "repo"
+    captured: dict[str, object] = {}
+    args = review_plan.build_parser().parse_args(
+        [
+            "--skip-git-repo-check",
+            "--cd",
+            "/mnt/c/Code/sample-repo",
+            "--input-text",
+            "Plan",
+        ]
+    )
+
+    def fake_resolve_cd_path(value: object) -> Path:
+        captured["value"] = value
+        return repo
+
+    def fail_resolve_repo_root(value: object) -> Path:
+        raise AssertionError(value)
+
+    monkeypatch.setattr(review_plan, "resolve_cd_path", fake_resolve_cd_path)
+    monkeypatch.setattr(review_plan, "resolve_repo_root", fail_resolve_repo_root)
+
+    assert review_plan.resolve_review_root(args) == repo
+    assert captured["value"] == "/mnt/c/Code/sample-repo"
+
+
+def test_review_plan_skip_git_repo_check_uses_current_directory_without_cd(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    args = review_plan.build_parser().parse_args(
+        ["--skip-git-repo-check", "--input-text", "Plan"]
+    )
+
+    def fail_resolve_repo_root(value: object) -> Path:
+        raise AssertionError(value)
+
+    monkeypatch.setattr(review_plan, "resolve_repo_root", fail_resolve_repo_root)
+
+    assert review_plan.resolve_review_root(args) == tmp_path.resolve(strict=False)
 
 
 def test_guard_branch_signoff_lane_rejects_followup_drift_for_current_branch_gate(
