@@ -13,6 +13,7 @@ SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts"
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+import review_suite_local
 from review_suite_local import (
     _apply_capacity_cooldowns,
     _classify_review_result,
@@ -30,6 +31,7 @@ from review_suite_local import (
     _transport_stalled,
     LOW_QUALITY_LOSS_REASON_BASES,
     aggregate_records,
+    compact_benchmark_record,
     compact_benchmark_run,
     compact_round_files,
     cleanup_stale_ungraded_rounds,
@@ -37,6 +39,7 @@ from review_suite_local import (
     classify_review_capture,
     collect_round_results,
     ensure_clean_git_worktree,
+    enrich_record_repo_names,
     find_blocking_rounds_for_caller,
     format_cooldown_until_for_display,
     guard_no_stage_step_down,
@@ -44,6 +47,7 @@ from review_suite_local import (
     normalize_service_tier,
     output_isatty,
     public_round_result,
+    repo_name_from_round_payload,
     reviewer_completion_status,
     select_pair,
     terminal_review_command,
@@ -416,6 +420,117 @@ def _record(
             },
         ],
     }
+
+
+def _git_repo_with_origin(path: Path, origin: str) -> None:
+    path.mkdir(parents=True)
+    subprocess.run(["git", "init"], cwd=path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "remote", "add", "origin", origin],
+        cwd=path,
+        check=True,
+        capture_output=True,
+    )
+
+
+def test_repo_name_from_round_payload_prefers_git_remote_for_opaque_worktree(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "esbzptu4"
+    _git_repo_with_origin(repo, "https://github.com/Pimpmuckl/review-suite.git")
+
+    assert repo_name_from_round_payload({"review_cwd": str(repo)}) == "review-suite"
+
+
+def test_compact_benchmark_record_preserves_repo_name() -> None:
+    record = _record(
+        recorded_at="2026-04-12T13:00:00Z",
+        round_id="phase_review-esbzptu4-123456-20260412T130000Z-abcdef01",
+        task_class="phase_review",
+        alpha="gpt-5.4-medium",
+        beta="gpt-5.5-medium",
+        winner="gpt-5.5-medium",
+    )
+    record["repo_name"] = "codex-account-switcher"
+
+    assert compact_benchmark_record(record)["repo_name"] == "codex-account-switcher"
+
+
+def test_enrich_record_repo_names_uses_round_payload_remote_for_old_rows(
+    tmp_path: Path,
+) -> None:
+    state_dir = tmp_path / "state"
+    rounds_dir = state_dir / "rounds"
+    rounds_dir.mkdir(parents=True)
+    repo = tmp_path / "spp_worktrees" / "esbzptu4"
+    _git_repo_with_origin(repo, "git@github.com:Pimpmuckl/codex-account-switcher.git")
+    round_id = "phase_review-esbzptu4-123456-20260412T130000Z-abcdef01"
+    (rounds_dir / f"{round_id}.json").write_text(
+        json.dumps({"review_cwd": str(repo)}),
+        encoding="utf-8",
+    )
+    records = [
+        _record(
+            recorded_at="2026-04-12T13:00:00Z",
+            round_id=round_id,
+            task_class="phase_review",
+            alpha="gpt-5.4-medium",
+            beta="gpt-5.5-medium",
+            winner="gpt-5.5-medium",
+        )
+    ]
+
+    enriched, changed = enrich_record_repo_names(state_dir, records)
+
+    assert changed is True
+    assert "repo_name" not in records[0]
+    assert enriched[0]["repo_name"] == "codex-account-switcher"
+
+
+def test_enrich_record_repo_names_caches_review_cwd_resolution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state_dir = tmp_path / "state"
+    rounds_dir = state_dir / "rounds"
+    rounds_dir.mkdir(parents=True)
+    review_cwd = str(tmp_path / "spp_worktrees" / "esbzptu4")
+    calls = 0
+
+    def fake_repo_name(review_cwd_value: str) -> str:
+        nonlocal calls
+        calls += 1
+        assert review_cwd_value == review_cwd
+        return "review-suite"
+
+    monkeypatch.setattr(
+        review_suite_local, "repo_name_from_review_cwd_value", fake_repo_name
+    )
+    records = []
+    for idx in range(2):
+        round_id = f"phase_review-esbzptu4-12345{idx}-20260412T130000Z-abcdef0{idx}"
+        (rounds_dir / f"{round_id}.json").write_text(
+            json.dumps({"review_cwd": review_cwd}),
+            encoding="utf-8",
+        )
+        records.append(
+            _record(
+                recorded_at=f"2026-04-12T13:0{idx}:00Z",
+                round_id=round_id,
+                task_class="phase_review",
+                alpha="gpt-5.4-medium",
+                beta="gpt-5.5-medium",
+                winner="gpt-5.5-medium",
+            )
+        )
+
+    enriched, changed = enrich_record_repo_names(state_dir, records)
+
+    assert changed is True
+    assert calls == 1
+    assert [record["repo_name"] for record in enriched] == [
+        "review-suite",
+        "review-suite",
+    ]
 
 
 def test_classify_review_result_prefers_valid_output_over_stale_interruption_marker() -> (

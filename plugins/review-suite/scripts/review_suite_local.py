@@ -1795,30 +1795,122 @@ def public_task_name(task_class: str) -> str:
     return str(task_class)
 
 
-def repo_name_from_round_payload(payload: dict[str, Any]) -> str:
-    review_cwd = str(
-        payload.get("review_cwd") or payload.get("review_cwd_normalized") or ""
-    ).strip()
-    if not review_cwd:
-        return "-"
-    trimmed = review_cwd.rstrip("\\/")
+def _repo_name_from_remote_url(remote_url: str) -> str | None:
+    trimmed = str(remote_url or "").strip().rstrip("\\/")
+    if not trimmed:
+        return None
+    name = re.split(r"[:\\/]+", trimmed)[-1]
+    if name.endswith(".git"):
+        name = name[:-4]
+    return name or None
+
+
+def _is_wsl_unc_path(path_text: str) -> bool:
+    normalized = str(path_text or "").strip().replace("\\", "/").lower()
+    return normalized.startswith("//wsl.localhost/") or normalized.startswith("//wsl$/")
+
+
+def repo_name_from_review_cwd_value(review_cwd: str) -> str:
+    trimmed = str(review_cwd or "").strip().rstrip("\\/")
     if not trimmed:
         return "-"
+    if not _is_wsl_unc_path(trimmed):
+        try:
+            path = Path(trimmed)
+            if path.exists():
+                proc = subprocess.run(
+                    ["git", "-C", str(path), "config", "--get", "remote.origin.url"],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    check=False,
+                    timeout=5,
+                )
+                if proc.returncode == 0:
+                    name = _repo_name_from_remote_url(proc.stdout)
+                    if name:
+                        return name
+        except OSError:
+            pass
+        except subprocess.SubprocessError:
+            pass
     return re.split(r"[\\/]+", trimmed)[-1] or "-"
 
 
-def round_repo_name(state_dir: Path, round_id: str, cache: dict[str, str]) -> str:
+def repo_name_from_round_payload(
+    payload: dict[str, Any], cwd_cache: dict[str, str] | None = None
+) -> str:
+    explicit = str(payload.get("repo_name") or "").strip()
+    if explicit:
+        return explicit
+    review_cwd = str(
+        payload.get("review_cwd") or payload.get("review_cwd_normalized") or ""
+    ).strip()
+    cache_key = review_cwd.rstrip("\\/")
+    if cwd_cache is not None and cache_key:
+        cached = cwd_cache.get(cache_key)
+        if cached is not None:
+            return cached
+    name = repo_name_from_review_cwd_value(review_cwd)
+    if cwd_cache is not None and cache_key:
+        cwd_cache[cache_key] = name
+    return name
+
+
+def round_repo_name(
+    state_dir: Path,
+    round_id: str,
+    cache: dict[str, str],
+    cwd_cache: dict[str, str] | None = None,
+) -> str:
     cached = cache.get(round_id)
     if cached is not None:
         return cached
     name = "-"
     try:
         payload = read_json(round_path(state_dir, round_id))
-        name = repo_name_from_round_payload(payload)
+        name = repo_name_from_round_payload(payload, cwd_cache)
     except Exception:
         pass
     cache[round_id] = name
     return name
+
+
+def record_repo_name(
+    state_dir: Path,
+    record: dict[str, Any],
+    cache: dict[str, str],
+    cwd_cache: dict[str, str] | None = None,
+) -> str:
+    explicit = str(record.get("repo_name") or "").strip()
+    if explicit:
+        return explicit
+    return round_repo_name(
+        state_dir, str(record.get("round_id") or ""), cache, cwd_cache
+    )
+
+
+def enrich_record_repo_names(
+    state_dir: Path, records: list[dict[str, Any]]
+) -> tuple[list[dict[str, Any]], bool]:
+    cache: dict[str, str] = {}
+    cwd_cache: dict[str, str] = {}
+    changed = False
+    enriched: list[dict[str, Any]] = []
+    for record in records:
+        if str(record.get("repo_name") or "").strip():
+            enriched.append(record)
+            continue
+        repo_name = record_repo_name(state_dir, record, cache, cwd_cache)
+        if repo_name == "-":
+            enriched.append(record)
+            continue
+        next_record = deepcopy(record)
+        next_record["repo_name"] = repo_name
+        enriched.append(next_record)
+        changed = True
+    return enriched, changed
 
 
 def recent_match_history(
@@ -1828,6 +1920,7 @@ def recent_match_history(
         task_class: {} for task_class in TASK_CLASSES
     }
     repo_cache: dict[str, str] = {}
+    cwd_cache: dict[str, str] = {}
     history: list[dict[str, Any]] = []
     for record in read_jsonl(state_dir / RUN_LOG_FILENAME):
         task_class = str(record.get("task_class") or "")
@@ -1860,9 +1953,7 @@ def recent_match_history(
             {
                 "recorded_at": str(record.get("recorded_at") or ""),
                 "review": review_label(task_class),
-                "repo": round_repo_name(
-                    state_dir, str(record.get("round_id") or ""), repo_cache
-                ),
+                "repo": record_repo_name(state_dir, record, repo_cache, cwd_cache),
                 "model_alpha": alpha_model,
                 "outcome_alpha": "win"
                 if result == "a"
@@ -3873,6 +3964,9 @@ def compact_benchmark_record(record: dict[str, Any]) -> dict[str, Any]:
     grade_schema = record.get("grade_schema") or record.get("score_schema")
     if grade_schema:
         compacted["grade_schema"] = grade_schema
+    repo_name = str(record.get("repo_name") or "").strip()
+    if repo_name:
+        compacted["repo_name"] = repo_name
     return compacted
 
 
@@ -3934,18 +4028,20 @@ def build_record_from_grade(
             f"{basis} requires --winner tie; use alpha or bravo only with non-tie basis values"
         )
     recorded_at = utc_now_iso()
-    return compact_benchmark_record(
-        {
-            "recorded_at": recorded_at,
-            "round_id": round_payload["round_id"],
-            "task_class": round_payload["task_class"],
-            "task_id": task_id,
-            "selection_mode": round_payload["selection_mode"],
-            "pairwise_outcome": {"winner": winner_variant_id, "basis": basis},
-            "grade_schema": GRADE_SCHEMA,
-            "runs": [alpha, bravo],
-        }
-    )
+    record = {
+        "recorded_at": recorded_at,
+        "round_id": round_payload["round_id"],
+        "task_class": round_payload["task_class"],
+        "task_id": task_id,
+        "selection_mode": round_payload["selection_mode"],
+        "pairwise_outcome": {"winner": winner_variant_id, "basis": basis},
+        "grade_schema": GRADE_SCHEMA,
+        "runs": [alpha, bravo],
+    }
+    repo_name = repo_name_from_round_payload(round_payload)
+    if repo_name != "-":
+        record["repo_name"] = repo_name
+    return compact_benchmark_record(record)
 
 
 def expected_score(rating_a: float, rating_b: float) -> float:

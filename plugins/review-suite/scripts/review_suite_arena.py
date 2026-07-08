@@ -49,6 +49,7 @@ from review_suite_local import (
     default_rubric_path,
     default_state_dir,
     ensure_clean_git_worktree,
+    enrich_record_repo_names,
     find_blocking_rounds_for_caller,
     find_pending_rounds_for_caller,
     guard_no_stage_step_down,
@@ -1796,30 +1797,40 @@ def _record_grade_result(
 
 
 def _refresh_state_and_reports(*, state_dir: Path, roster: dict[str, object]) -> None:
-    with state_lock(state_dir, "reports"):
-        _refresh_state_and_reports_locked(state_dir=state_dir, roster=roster)
+    with state_lock(state_dir, "runs"), state_lock(state_dir, "reports"):
+        _refresh_state_and_reports_locked(
+            state_dir=state_dir,
+            roster=roster,
+            records=_read_enriched_run_records(state_dir),
+        )
+
+
+def _read_enriched_run_records(state_dir: Path) -> list[dict[str, object]]:
+    records, changed = enrich_record_repo_names(
+        state_dir, read_jsonl(state_dir / RUN_LOG_FILENAME)
+    )
+    if changed:
+        write_jsonl(state_dir / RUN_LOG_FILENAME, records)
+    return records
 
 
 def _refresh_state_and_reports_locked(
     *,
     state_dir: Path,
     roster: dict[str, object],
-    records: list[dict[str, object]] | None = None,
+    records: list[dict[str, object]],
 ) -> None:
     operational_state = load_operational_state(state_dir / OPERATIONAL_STATE_FILENAME)
-    current_records = (
-        records if records is not None else read_jsonl(state_dir / RUN_LOG_FILENAME)
-    )
     summary = aggregate_records(
         roster=roster,
-        records=current_records,
+        records=records,
         operational_state=operational_state,
     )
     next_state = promote(roster, summary, operational_state)
     write_json(state_dir / OPERATIONAL_STATE_FILENAME, next_state)
     refreshed_summary = aggregate_records(
         roster=roster,
-        records=current_records,
+        records=records,
         operational_state=next_state,
     )
     write_reports(state_dir, refreshed_summary)
@@ -2626,8 +2637,8 @@ def cmd_report(args: argparse.Namespace) -> int:
         return cmd_show_round(args)
     roster = load_roster(Path(args.roster))
     state_dir = Path(args.state_dir)
-    with state_lock(state_dir, "reports"):
-        records = read_jsonl(state_dir / RUN_LOG_FILENAME)
+    with state_lock(state_dir, "runs"), state_lock(state_dir, "reports"):
+        records = _read_enriched_run_records(state_dir)
         summary = aggregate_records(
             roster=roster,
             records=records,
