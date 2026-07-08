@@ -78,17 +78,20 @@ GRADE_BASIS_VALUES = (
     "false_positive_loss",
     "hallucinated_finding_loss",
     "fringe_finding_loss",
+    "scope_bloat_loss",
     "tie_clean",
     "tie_both_useful",
 )
 TERMINAL_REVIEW_COMMANDS = {"clean", "findings"}
 TERMINAL_REVIEW_RESULT_PREFIX = "Review result:"
-GARBAGE_FINDING_LOSS_BASES = {
+LOW_QUALITY_LOSS_REASON_BASES = (
     "false_positive_loss",
     "hallucinated_finding_loss",
     "fringe_finding_loss",
-}
-LOW_QUALITY_LOSS_BASES = GARBAGE_FINDING_LOSS_BASES | {"better_finding_validity"}
+    "scope_bloat_loss",
+    "better_finding_validity",
+)
+LOW_QUALITY_LOSS_BASES = set(LOW_QUALITY_LOSS_REASON_BASES)
 MISSED_BUG_LOSS_BASES = {
     "valid_findings_vs_none",
     "more_valid_findings",
@@ -4008,6 +4011,9 @@ def aggregate_records(
                 "valid_finding_count": 0,
                 "missed_bug_loss_count": 0,
                 "low_quality_loss_count": 0,
+                "low_quality_loss_reasons": {
+                    basis: 0 for basis in LOW_QUALITY_LOSS_REASON_BASES
+                },
                 "elapsed_values": [],
                 "cost_values": [],
                 "total_token_values": [],
@@ -4061,6 +4067,7 @@ def aggregate_records(
                     bucket["missed_bug_loss_count"] += 1
                 if outcome == "loss" and basis in LOW_QUALITY_LOSS_BASES:
                     bucket["low_quality_loss_count"] += 1
+                    bucket["low_quality_loss_reasons"][basis] += 1
                 elapsed_seconds = run.get("elapsed_seconds")
                 if isinstance(elapsed_seconds, (int, float)):
                     bucket["elapsed_values"].append(float(elapsed_seconds))
@@ -4107,6 +4114,9 @@ def aggregate_records(
                     "low_quality_loss_count": bucket["low_quality_loss_count"],
                     "low_quality_loss_rate": percentage(
                         bucket["low_quality_loss_count"], sample_count
+                    ),
+                    "low_quality_loss_reasons": dict(
+                        bucket["low_quality_loss_reasons"]
                     ),
                     "median_elapsed_seconds": round(
                         statistics.median(bucket["elapsed_values"]), 3
@@ -4186,7 +4196,7 @@ def write_reports(state_dir: Path, summary: dict[str, Any]) -> None:
         f"- Champion gate: `sample_count >= {champion_min_samples}` and `elo >= {format_decimal(champion_min_elo)}`. Champion group membership is `<= {format_decimal(champion_group_window)}` Elo behind the top eligible model."
     )
     lines.append(
-        "- `found %` is valid findings over bug-present opportunities, including both reviewers on `tie_both_useful` and both-found coverage wins. `missed %` is missed-bug losses over bug-present opportunities. `low-quality %` is validity, false-positive, hallucinated, or fringe-finding losses over all samples."
+        "- `found %` is valid findings over bug-present opportunities, including both reviewers on `tie_both_useful` and both-found coverage wins. `missed %` is missed-bug losses over bug-present opportunities. `low-quality %` is validity, false-positive, hallucinated, fringe, or scope-bloat losses over all samples."
     )
     lines.append("")
     lines.append("## match history")
