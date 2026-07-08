@@ -8,6 +8,7 @@
     "false_positive_loss",
     "hallucinated_finding_loss",
     "fringe_finding_loss",
+    "scope_bloat_loss",
     "tie_clean",
     "tie_both_useful"
   ]

@@ -28,6 +28,7 @@ from review_suite_local import (
     _running_status_line,
     _transport_hung_after_output,
     _transport_stalled,
+    LOW_QUALITY_LOSS_REASON_BASES,
     aggregate_records,
     compact_benchmark_run,
     compact_round_files,
@@ -1578,6 +1579,15 @@ def test_aggregate_records_tracks_finding_rates_and_low_quality_losses() -> None
             winner="bravo-model",
             basis="better_finding_validity",
         ),
+        _record(
+            recorded_at="2026-04-12T13:04:00Z",
+            round_id="round-scope-bloat",
+            task_class="phase_review",
+            alpha="alpha-model",
+            beta="bravo-model",
+            winner="bravo-model",
+            basis="scope_bloat_loss",
+        ),
     ]
 
     summary = aggregate_records(
@@ -1592,13 +1602,22 @@ def test_aggregate_records_tracks_finding_rates_and_low_quality_losses() -> None
         row["variant_id"]: row
         for row in summary["task_classes"]["phase_review"]["leaderboard"]
     }
+    zero_low_quality_reasons = dict.fromkeys(LOW_QUALITY_LOSS_REASON_BASES, 0)
     assert rows["alpha-model"]["finding_opportunity_count"] == 3
     assert rows["alpha-model"]["valid_finding_count"] == 2
     assert rows["alpha-model"]["valid_finding_rate"] == pytest.approx(66.667)
     assert rows["alpha-model"]["missed_bug_loss_count"] == 0
     assert rows["alpha-model"]["missed_bug_loss_rate"] == 0.0
-    assert rows["alpha-model"]["low_quality_loss_count"] == 2
-    assert rows["alpha-model"]["low_quality_loss_rate"] == 50.0
+    assert rows["alpha-model"]["low_quality_loss_count"] == 3
+    assert rows["alpha-model"]["low_quality_loss_rate"] == 60.0
+    assert rows["alpha-model"]["low_quality_loss_reasons"] == {
+        **zero_low_quality_reasons,
+        **{
+            "false_positive_loss": 1,
+            "scope_bloat_loss": 1,
+            "better_finding_validity": 1,
+        },
+    }
     assert rows["bravo-model"]["finding_opportunity_count"] == 3
     assert rows["bravo-model"]["valid_finding_count"] == 2
     assert rows["bravo-model"]["valid_finding_rate"] == pytest.approx(66.667)
@@ -1606,6 +1625,7 @@ def test_aggregate_records_tracks_finding_rates_and_low_quality_losses() -> None
     assert rows["bravo-model"]["missed_bug_loss_rate"] == pytest.approx(33.333)
     assert rows["bravo-model"]["low_quality_loss_count"] == 0
     assert rows["bravo-model"]["low_quality_loss_rate"] == 0.0
+    assert rows["bravo-model"]["low_quality_loss_reasons"] == zero_low_quality_reasons
 
 
 def test_aggregate_records_counts_ungraded_exposure_without_grading_metrics() -> None:
