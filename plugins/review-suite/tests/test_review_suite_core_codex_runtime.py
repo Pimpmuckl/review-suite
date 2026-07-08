@@ -180,6 +180,61 @@ def test_codex_exec_command_can_skip_git_repo_check(
     assert command.index("--skip-git-repo-check") < command.index("-o")
 
 
+def test_codex_exec_command_preserves_max_for_gpt_5_6(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime.shutil.which", lambda name: "codex"
+    )
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime.validate_codex_runtime", lambda **kwargs: None
+    )
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime.isolated_runtime_user_config_overrides",
+        lambda: [],
+    )
+
+    command = codex_exec_command(
+        tool_name="review-followup",
+        model="gpt-5.6-sol",
+        reasoning_effort="max",
+        prompt="Review this.",
+        output_path=tmp_path / "out.txt",
+        review_root=tmp_path,
+        allow_unsafe_windows_wsl_fallback=False,
+    )
+
+    assert 'model_reasoning_effort="max"' in command
+
+
+def test_codex_exec_command_clamps_max_for_gpt_5_5(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime.shutil.which", lambda name: "codex"
+    )
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime.validate_codex_runtime", lambda **kwargs: None
+    )
+    monkeypatch.setattr(
+        "review_suite_core.lens_runtime.isolated_runtime_user_config_overrides",
+        lambda: [],
+    )
+
+    command = codex_exec_command(
+        tool_name="review-followup",
+        model="gpt-5.5",
+        reasoning_effort="max",
+        prompt="Review this.",
+        output_path=tmp_path / "out.txt",
+        review_root=tmp_path,
+        allow_unsafe_windows_wsl_fallback=False,
+    )
+
+    assert 'model_reasoning_effort="xhigh"' in command
+    assert 'model_reasoning_effort="max"' not in command
+
+
 def test_codex_exec_command_repasses_provider_overrides_before_review_model(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

@@ -21,6 +21,7 @@ from .config import (
     lens_model_config,
     load_config,
 )
+from .costing import normalize_usage_tokens, price_usage_tokens
 from .lens_runtime import (
     DEFAULT_MODEL,
     DEFAULT_PROGRESS_INTERVAL_SECONDS,
@@ -36,6 +37,13 @@ from .lens_runtime import (
     record_wrapper_session,
     run_codex,
     run_codex_review,
+)
+from .model_labels import (
+    SUPPORTED_REASONING_EFFORTS,
+    SUPPORTED_SERVICE_TIERS,
+    codex_reasoning_effort,
+    is_deep_reasoning_effort,
+    parse_model_label,
 )
 from .paths import (
     cwd_path_from_normalized,
@@ -87,6 +95,8 @@ __all__ = [
     "DEFAULT_REASONING_EFFORT",
     "DEFAULT_TIMEOUT_SECONDS",
     "WRAPPER_SESSION_LOG_FILENAME",
+    "SUPPORTED_REASONING_EFFORTS",
+    "SUPPORTED_SERVICE_TIERS",
     "AxiArgumentParser",
     "CapturedChildProcess",
     "CapturedChildWaitResult",
@@ -94,6 +104,7 @@ __all__ = [
     "GateConfig",
     "LensModelConfig",
     "codex_review_stdin_text",
+    "codex_reasoning_effort",
     "effective_execution_cwd",
     "emit_error",
     "emit_result",
@@ -114,6 +125,7 @@ __all__ = [
     "has_worktree_changes",
     "inspect_workflow_status",
     "is_ancestor",
+    "is_deep_reasoning_effort",
     "meaningful_worktree_status_entries",
     "is_windows_wsl_unc_path",
     "lens_model_config",
@@ -122,8 +134,11 @@ __all__ = [
     "merge_base",
     "merge_base_drift_scope",
     "normalize_cwd",
+    "normalize_usage_tokens",
     "normalize_service_tier",
     "progress_heartbeat_line",
+    "parse_model_label",
+    "price_usage_tokens",
     "prepare_codex_review_launch",
     "record_review_anchor",
     "record_wrapper_session",

@@ -3,6 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from .model_labels import (
+    SUPPORTED_REASONING_EFFORTS,
+    SUPPORTED_SERVICE_TIERS,
+    parse_model_label,
+    supported_reasoning_efforts_text,
+)
+
 SUPPORTED_MODES = ("brief", "normal", "deep", "emergency")
 SUPPORTED_SELECTIONS = ("stable", "auto")
 RESTART_MODE_ORDER = {"brief": 0, "normal": 1, "deep": 2}
@@ -10,8 +17,6 @@ SUPPORTED_SELECTION_REASONS = (
     "explicit_stable",
     "auto_stable_profile",
 )
-SUPPORTED_REASONING_EFFORTS = {"low", "medium", "high", "xhigh"}
-SUPPORTED_SERVICE_TIERS = {"fast", "flex"}
 SUPPORTED_STEP_KINDS = ("review", "gate", "arena")
 SUPPORTED_GATE_TASK_CLASSES = ("phase_gate", "pr_gate")
 SUPPORTED_ARENA_LANES = ("review_t1", "review_t3")
@@ -101,27 +106,7 @@ def _optional_bool(value: Any, *, field: str) -> bool:
 
 
 def _parse_model_label(value: Any, *, field: str) -> tuple[str, str, str | None]:
-    label = _non_empty_text(value, field=field)
-    with_tier = label.rsplit("-", 2)
-    if (
-        len(with_tier) == 3
-        and with_tier[1] in SUPPORTED_REASONING_EFFORTS
-        and with_tier[2] in SUPPORTED_SERVICE_TIERS
-    ):
-        model = with_tier[0].strip()
-        if not model:
-            raise ValueError(f"{field} must include a model name")
-        return model, with_tier[1], with_tier[2]
-    without_tier = label.rsplit("-", 1)
-    if len(without_tier) == 2 and without_tier[1] in SUPPORTED_REASONING_EFFORTS:
-        model = without_tier[0].strip()
-        if not model:
-            raise ValueError(f"{field} must include a model name")
-        return model, without_tier[1], None
-    efforts = ", ".join(sorted(SUPPORTED_REASONING_EFFORTS))
-    raise ValueError(
-        f"{field} must look like model-effort where effort is one of: {efforts}"
-    )
+    return parse_model_label(value, field=field)
 
 
 def _model_from_step(
@@ -146,7 +131,7 @@ def _model_from_step(
     )
     if effort not in SUPPORTED_REASONING_EFFORTS:
         raise ValueError(
-            f"{field}.reasoning_effort must be one of: {', '.join(sorted(SUPPORTED_REASONING_EFFORTS))}"
+            f"{field}.reasoning_effort must be one of: {supported_reasoning_efforts_text()}"
         )
     return model, effort, None
 

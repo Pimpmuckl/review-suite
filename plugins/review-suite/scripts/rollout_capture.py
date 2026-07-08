@@ -6,6 +6,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from review_suite_core import normalize_usage_tokens
+
 DEFAULT_CODEX_HOME = Path.home() / ".codex"
 DEFAULT_SQLITE_STATE_PATH = DEFAULT_CODEX_HOME / "state_5.sqlite"
 REVIEW_SUBAGENT_SOURCE = json.dumps({"subagent": "review"}, separators=(",", ":"))
@@ -37,13 +39,7 @@ def iter_jsonl(path: Path) -> list[dict[str, Any]]:
 
 
 def _token_usage_dict(value: dict[str, Any] | None) -> dict[str, int] | None:
-    if not isinstance(value, dict):
-        return None
-    return {
-        "input_tokens": int(value.get("input_tokens", 0) or 0),
-        "cached_input_tokens": int(value.get("cached_input_tokens", 0) or 0),
-        "output_tokens": int(value.get("output_tokens", 0) or 0),
-    }
+    return normalize_usage_tokens(value)
 
 
 def read_rollout_summary(path: Path) -> dict[str, Any]:
@@ -78,6 +74,7 @@ def read_rollout_summary(path: Path) -> dict[str, Any]:
                 first_last = last_usage or {
                     "input_tokens": 0,
                     "cached_input_tokens": 0,
+                    "cache_write_tokens": 0,
                     "output_tokens": 0,
                 }
             final_total = total_usage
@@ -107,13 +104,25 @@ def read_rollout_summary(path: Path) -> dict[str, Any]:
                 first_last = {
                     "input_tokens": 0,
                     "cached_input_tokens": 0,
+                    "cache_write_tokens": 0,
                     "output_tokens": 0,
                 }
             usage = {
                 metric: max(
-                    0, final_total[metric] - first_total[metric] + first_last[metric]
+                    0,
+                    final_total.get(metric, 0)
+                    - first_total.get(metric, 0)
+                    + first_last.get(metric, 0),
                 )
-                for metric in ("input_tokens", "cached_input_tokens", "output_tokens")
+                for metric in (
+                    "input_tokens",
+                    "cached_input_tokens",
+                    "cache_write_tokens",
+                    "output_tokens",
+                )
+                if final_total.get(metric, 0)
+                or first_total.get(metric, 0)
+                or first_last.get(metric, 0)
             }
     summary = {"usage": usage, "reviewer_output": final_text}
     _ROLLOUT_SUMMARY_CACHE[key] = summary

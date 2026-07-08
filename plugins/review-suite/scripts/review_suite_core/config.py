@@ -6,11 +6,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .model_labels import (
+    SUPPORTED_REASONING_EFFORTS,
+    SUPPORTED_SERVICE_TIERS,
+    parse_model_label,
+    supported_reasoning_efforts_text,
+)
+
 
 DEFAULT_CONFIG_FILENAME = "default_config.json"
 USER_CONFIG_FILENAME = "config.json"
-SUPPORTED_REASONING_EFFORTS = {"low", "medium", "high", "xhigh"}
-SUPPORTED_SERVICE_TIERS = {"fast", "flex"}
 SUPPORTED_ORCHESTRATOR_SELECTIONS = {"auto", "stable"}
 
 
@@ -110,25 +115,8 @@ def _non_empty_text(value: Any, *, field: str) -> str:
 
 
 def _parse_model_label(value: Any, *, field: str) -> str:
-    label = _non_empty_text(value, field=field)
-    with_tier = label.rsplit("-", 2)
-    if (
-        len(with_tier) == 3
-        and with_tier[1] in SUPPORTED_REASONING_EFFORTS
-        and with_tier[2] in SUPPORTED_SERVICE_TIERS
-    ):
-        if not with_tier[0].strip():
-            raise ValueError(f"{field} must include a model name")
-        return label
-    without_tier = label.rsplit("-", 1)
-    if len(without_tier) == 2 and without_tier[1] in SUPPORTED_REASONING_EFFORTS:
-        if not without_tier[0].strip():
-            raise ValueError(f"{field} must include a model name")
-        return label
-    efforts = ", ".join(sorted(SUPPORTED_REASONING_EFFORTS))
-    raise ValueError(
-        f"{field} must look like model-effort where effort is one of: {efforts}"
-    )
+    model, effort, service_tier = parse_model_label(value, field=field)
+    return "-".join(part for part in (model, effort, service_tier) if part)
 
 
 def _orchestrator_defaults(config: dict[str, Any]) -> dict[str, Any]:
@@ -169,7 +157,7 @@ def _validate_lens_config(config: dict[str, Any]) -> None:
     effort = str(default.get("reasoning_effort") or "").strip()
     if effort not in SUPPORTED_REASONING_EFFORTS:
         raise ValueError(
-            f"lens.default.reasoning_effort must be one of: {', '.join(sorted(SUPPORTED_REASONING_EFFORTS))}"
+            f"lens.default.reasoning_effort must be one of: {supported_reasoning_efforts_text()}"
         )
     service_tier = str(default.get("service_tier") or "").strip()
     if service_tier and service_tier not in SUPPORTED_SERVICE_TIERS:
@@ -258,7 +246,7 @@ def lens_model_config(
         raise ValueError(f"lens model is required for {tool_name}")
     if effort not in SUPPORTED_REASONING_EFFORTS:
         raise ValueError(
-            f"lens reasoning_effort for {tool_name} must be one of: {', '.join(sorted(SUPPORTED_REASONING_EFFORTS))}"
+            f"lens reasoning_effort for {tool_name} must be one of: {supported_reasoning_efforts_text()}"
         )
     if service_tier and service_tier not in SUPPORTED_SERVICE_TIERS:
         raise ValueError(
