@@ -13,7 +13,13 @@ from pathlib import Path
 from typing import Any
 
 from review_suite_runtime_bootstrap import launcher_script_path
-from review_suite_core import cwd_path_from_normalized
+from review_suite_core import (
+    SUPPORTED_REASONING_EFFORTS,
+    SUPPORTED_SERVICE_TIERS,
+    cwd_path_from_normalized,
+    normalize_usage_tokens,
+    price_usage_tokens,
+)
 from review_suite_local import (
     _run_is_finalized,
     read_jsonl,
@@ -47,6 +53,24 @@ FOLDER_REPO_OVERRIDES = {
 }
 DEFAULT_CODEX_SQLITE_FILENAME = "state_5.sqlite"
 MODEL_PRICING_PER_MILLION = {
+    "gpt-5.6-sol": {
+        "input": 5.00,
+        "output": 30.00,
+        "cached_input": 0.50,
+        "cache_write": 6.25,
+    },
+    "gpt-5.6-terra": {
+        "input": 2.50,
+        "output": 15.00,
+        "cached_input": 0.25,
+        "cache_write": 3.125,
+    },
+    "gpt-5.6-luna": {
+        "input": 1.00,
+        "output": 6.00,
+        "cached_input": 0.10,
+        "cache_write": 1.25,
+    },
     "gpt-5.5": {"input": 5.00, "output": 30.00, "cached_input": 0.50},
     "gpt-5.4": {"input": 2.50, "output": 15.00, "cached_input": 0.25},
     "gpt-5-mini": {"input": 0.75, "output": 4.50, "cached_input": 0.075},
@@ -63,6 +87,12 @@ MODEL_PRICING_PER_MILLION = {
 }
 MODEL_ALIASES = {
     "codex-mini-latest": "o4-mini",
+    "gpt 5.6 sol": "gpt-5.6-sol",
+    "gpt-5.6 sol": "gpt-5.6-sol",
+    "gpt 5.6 terra": "gpt-5.6-terra",
+    "gpt-5.6 terra": "gpt-5.6-terra",
+    "gpt 5.6 luna": "gpt-5.6-luna",
+    "gpt-5.6 luna": "gpt-5.6-luna",
     "gpt 5.5": "gpt-5.5",
     "gpt 5.4": "gpt-5.4",
     "gpt 5 mini": "gpt-5-mini",
@@ -142,7 +172,8 @@ def _run_model_name(run: dict[str, Any]) -> str:
     if model_name:
         return model_name
     parts = str(run.get("variant_id") or "").strip().split("-")
-    while parts and parts[-1] in {"low", "medium", "high", "xhigh", "fast", "flex"}:
+    suffixes = SUPPORTED_REASONING_EFFORTS | SUPPORTED_SERVICE_TIERS
+    while parts and parts[-1] in suffixes:
         parts.pop()
     return _normalize_model_name("-".join(parts))
 
@@ -183,17 +214,7 @@ def _usage_tokens(usage: dict[str, Any] | None) -> int:
 
 def _price_from_usage(model_name: str, usage: dict[str, Any] | None) -> float | None:
     pricing = MODEL_PRICING_PER_MILLION.get(model_name)
-    if not pricing or not usage:
-        return None
-    input_tokens = int(usage.get("input_tokens") or 0)
-    cached_input_tokens = int(usage.get("cached_input_tokens") or 0)
-    output_tokens = int(usage.get("output_tokens") or 0)
-    uncached_input_tokens = max(input_tokens - cached_input_tokens, 0)
-    return (
-        (uncached_input_tokens * pricing["input"])
-        + (cached_input_tokens * pricing["cached_input"])
-        + (output_tokens * pricing["output"])
-    ) / 1_000_000
+    return price_usage_tokens(pricing or {}, usage)
 
 
 def _price_from_total_tokens(model_name: str, total_tokens: int) -> float | None:
@@ -312,12 +333,12 @@ def _usage_from_rollout_line(line: str) -> dict[str, int] | None:
     usage = info.get("total_token_usage") if isinstance(info, dict) else None
     if not isinstance(usage, dict):
         return None
-    normalized = {
-        "input_tokens": int(usage.get("input_tokens") or 0),
-        "cached_input_tokens": int(usage.get("cached_input_tokens") or 0),
-        "output_tokens": int(usage.get("output_tokens") or 0),
-        "reasoning_output_tokens": int(usage.get("reasoning_output_tokens") or 0),
-    }
+    normalized = normalize_usage_tokens(usage)
+    if normalized is None:
+        return None
+    normalized["reasoning_output_tokens"] = int(
+        usage.get("reasoning_output_tokens") or 0
+    )
     if "total_tokens" in usage:
         normalized["total_tokens"] = int(usage.get("total_tokens") or 0)
     return normalized

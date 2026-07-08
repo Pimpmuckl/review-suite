@@ -884,6 +884,66 @@ def test_compute_cost_and_total_tokens_treat_cached_input_as_subset() -> None:
     )
 
 
+def test_compute_cost_splits_cache_write_tokens() -> None:
+    variant = {
+        "pricing": {
+            "input_per_million_usd": 5.0,
+            "cached_input_per_million_usd": 0.5,
+            "cache_write_input_per_million_usd": 6.25,
+            "output_per_million_usd": 30.0,
+        }
+    }
+    usage = {
+        "input_tokens": 100,
+        "cached_input_tokens": 20,
+        "cache_write_tokens": 30,
+        "output_tokens": 10,
+    }
+
+    assert review_suite_local.compute_cost_usd(variant, usage) == pytest.approx(
+        0.000748
+    )
+
+
+def test_default_roster_keeps_gpt_5_6_disabled_until_backend_launch() -> None:
+    roster_path = Path(__file__).resolve().parents[1] / "references" / "roster.json"
+    roster = review_suite_local.load_roster(roster_path)
+    index = review_suite_local.variant_index(roster)
+
+    assert index["gpt-5.6-sol-max"]["state"] == "disabled"
+    assert index["gpt-5.6-terra-max"]["state"] == "disabled"
+    assert index["gpt-5.6-luna-max"]["state"] == "disabled"
+    eligible_ids = {
+        variant["id"]
+        for task_class in ("phase_review", "pr_review")
+        for variant in review_suite_local.eligible_variants(roster, task_class)
+    }
+    assert not any(variant_id.startswith("gpt-5.6-") for variant_id in eligible_ids)
+    expected_pricing = {
+        "gpt-5.6-sol": {
+            "input_per_million_usd": 5.0,
+            "cached_input_per_million_usd": 0.5,
+            "cache_write_input_per_million_usd": 6.25,
+            "output_per_million_usd": 30.0,
+        },
+        "gpt-5.6-terra": {
+            "input_per_million_usd": 2.5,
+            "cached_input_per_million_usd": 0.25,
+            "cache_write_input_per_million_usd": 3.125,
+            "output_per_million_usd": 15.0,
+        },
+        "gpt-5.6-luna": {
+            "input_per_million_usd": 1.0,
+            "cached_input_per_million_usd": 0.1,
+            "cache_write_input_per_million_usd": 1.25,
+            "output_per_million_usd": 6.0,
+        },
+    }
+    for variant in index.values():
+        if variant["model"] in expected_pricing:
+            assert variant["pricing"] == expected_pricing[variant["model"]]
+
+
 def test_collect_round_results_preserves_foreign_review_cwd_for_capture(
     monkeypatch, tmp_path: Path
 ) -> None:
@@ -996,6 +1056,48 @@ def test_collect_completed_review_capture_uses_started_at_for_title_fallback(
         observed["created_after"]
         == review_suite_local._started_at_epoch_seconds(started_at) - 5
     )
+
+
+def test_collect_completed_review_capture_uses_effective_reasoning_effort(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    stdout_path = tmp_path / "review.stdout.txt"
+    stderr_path = tmp_path / "review.stderr.txt"
+    stdout_path.write_text("No findings.\n", encoding="utf-8")
+    stderr_path.write_text("", encoding="utf-8")
+    observed: dict[str, object] = {}
+
+    monkeypatch.setattr(review_suite_local, "find_thread_by_id", lambda **_: None)
+    monkeypatch.setattr(review_suite_local, "find_thread_by_title", lambda **_: None)
+    monkeypatch.setattr(review_suite_local.time, "sleep", lambda _: None)
+
+    def fake_find_review_child_thread(**kwargs: object) -> None:
+        observed.setdefault("reasoning_effort", kwargs["reasoning_effort"])
+        return None
+
+    monkeypatch.setattr(
+        review_suite_local, "find_review_child_thread", fake_find_review_child_thread
+    )
+    monkeypatch.setattr(review_suite_local, "enrich_thread_record", lambda thread: {})
+
+    review_suite_local.collect_completed_review_capture(
+        slot="review-1",
+        variant_id="gpt-5.5-max",
+        variant={
+            "model": "gpt-5.5",
+            "reasoning_effort": "max",
+            "effective_reasoning_effort": "xhigh",
+        },
+        title="local-review::repo::review-1",
+        command=["codex", "review"],
+        stdout_path=stdout_path,
+        stderr_path=stderr_path,
+        started_at="2026-04-13T10:00:00Z",
+        sqlite_path=tmp_path / "state_5.sqlite",
+        review_cwd=tmp_path,
+    )
+
+    assert observed["reasoning_effort"] == "xhigh"
 
 
 def test_collect_completed_review_capture_prefers_final_message_path(

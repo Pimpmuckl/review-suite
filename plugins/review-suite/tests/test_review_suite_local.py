@@ -1157,6 +1157,42 @@ def test_live_review_thread_does_not_return_parent_launcher_when_child_missing(
     assert thread is None
 
 
+def test_live_review_thread_uses_effective_reasoning_effort(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    stderr_path = tmp_path / "stderr.txt"
+    stderr_path.write_text("", encoding="utf-8")
+    observed: dict[str, object] = {}
+
+    monkeypatch.setattr("review_suite_local.find_thread_by_id", lambda **_: None)
+    monkeypatch.setattr("review_suite_local.find_thread_by_title", lambda **_: None)
+
+    def fake_find_review_child_thread(**kwargs: object) -> None:
+        observed.setdefault("reasoning_effort", kwargs["reasoning_effort"])
+        return None
+
+    monkeypatch.setattr(
+        "review_suite_local.find_review_child_thread", fake_find_review_child_thread
+    )
+
+    thread = _live_review_thread(
+        run={
+            "slot": "bravo",
+            "title": "review-title",
+            "stderr_path": str(stderr_path),
+            "started_at": "2026-04-13T12:00:00Z",
+            "effective_reasoning_effort": "xhigh",
+        },
+        variant={"model": "gpt-5.5", "reasoning_effort": "max"},
+        sqlite_path=tmp_path / "state.sqlite",
+        review_cwd=tmp_path,
+    )
+
+    assert thread is None
+    assert observed["reasoning_effort"] == "xhigh"
+
+
 def test_live_review_thread_accepts_direct_matching_review_thread_without_child(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

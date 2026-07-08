@@ -30,18 +30,21 @@ from rollout_capture import (
 )
 from review_suite_core import (
     EFFECTIVE_BASE_METADATA_KEYS,
+    codex_reasoning_effort,
     current_head,
     effective_base_ref,
     format_command,
     has_committed_diff,
     has_worktree_changes,
     inspect_workflow_status,
+    is_deep_reasoning_effort,
     launch_captured_child_process,
     meaningful_worktree_status_entries,
     merge_base,
     normalize_cwd,
     normalize_service_tier,
     prepare_codex_review_launch,
+    price_usage_tokens,
     use_unsafe_windows_wsl_fallback,
     utc_now,
     utc_now_iso,
@@ -108,7 +111,7 @@ CAPACITY_COOLDOWN_SECONDS = (30 * 60, 2 * 60 * 60, 6 * 60 * 60, 12 * 60 * 60)
 CAPACITY_RETRY_DELAY_SECONDS = 10
 CAPACITY_RETRY_MAX_ATTEMPTS = 1
 MULTI_REVIEW_DISPATCH_STAGGER_SECONDS = 5.0
-DEEP_REVIEW_EFFORTS = {"high", "xhigh"}
+VARIANT_STATES = {"active", "disabled", "retired"}
 REVIEW_STALL_WARNING_SECONDS = 10 * 60
 TRANSPORT_STALL_GRACE_SECONDS = 3 * 60
 TRANSPORT_RECONNECT_PATTERNS = (
@@ -144,7 +147,7 @@ def pending_launch_ready(
 
 def includes_deep_review_effort(items: list[dict[str, Any]]) -> bool:
     return any(
-        str(item.get("reasoning_effort") or "").strip().lower() in DEEP_REVIEW_EFFORTS
+        is_deep_reasoning_effort(str(item.get("reasoning_effort") or ""))
         for item in items
     )
 
@@ -576,7 +579,7 @@ def load_roster(path: Path) -> dict[str, Any]:
             raise ValueError(f"duplicate variant id: {variant_id}")
         ids.add(variant_id)
         state = variant.get("state", "active")
-        if state not in {"active", "retired"}:
+        if state not in VARIANT_STATES:
             raise ValueError(f"variant {variant_id} has invalid state: {state}")
         for task_class in variant.get("task_classes", []):
             if task_class not in TASK_CLASSES:
@@ -954,28 +957,8 @@ def pick_custom_weighted_without_replacement(
 
 
 def compute_cost_usd(variant: dict[str, Any], usage: dict[str, Any]) -> float | None:
-    pricing = variant.get("pricing") or {}
-    if not pricing:
-        return None
-    input_tokens = int(usage.get("input_tokens", 0) or 0)
-    output_tokens = int(usage.get("output_tokens", 0) or 0)
-    cached_input_tokens = int(usage.get("cached_input_tokens", 0) or 0)
-    if input_tokens + output_tokens <= 0:
-        return None
-    input_rate = pricing.get("input_per_million_usd")
-    output_rate = pricing.get("output_per_million_usd")
-    cached_rate = pricing.get("cached_input_per_million_usd")
-    if input_rate is None or output_rate is None:
-        return None
-    total = 0.0
-    if cached_rate is None:
-        total += (input_tokens / 1_000_000.0) * float(input_rate)
-    else:
-        uncached_input_tokens = max(0, input_tokens - cached_input_tokens)
-        total += (uncached_input_tokens / 1_000_000.0) * float(input_rate)
-        total += (cached_input_tokens / 1_000_000.0) * float(cached_rate)
-    total += (output_tokens / 1_000_000.0) * float(output_rate)
-    return round(total, 6)
+    cost = price_usage_tokens(dict(variant.get("pricing") or {}), usage)
+    return round(cost, 6) if cost is not None else None
 
 
 def variant_service_tier(variant: dict[str, Any]) -> str | None:
@@ -1603,7 +1586,10 @@ def _live_review_thread(
     )
     title = str(run.get("title") or "")
     model = str(variant["model"])
-    reasoning_effort = str(variant["reasoning_effort"])
+    reasoning_effort = str(
+        run.get("effective_reasoning_effort")
+        or codex_reasoning_effort(model, str(variant["reasoning_effort"]))
+    )
 
     def is_direct_review_thread(
         candidate: dict[str, Any], *, require_session_match: bool
@@ -3138,6 +3124,11 @@ def collect_completed_review_capture(
     )
     session_id = extract_session_id(stderr_text)
     review_cwd_text = str(review_cwd)
+    model = str(variant["model"])
+    reasoning_effort = str(
+        variant.get("effective_reasoning_effort")
+        or codex_reasoning_effort(model, str(variant["reasoning_effort"]))
+    )
     thread = None
     launcher_thread = None
     started_after = _started_at_epoch_seconds(started_at)
@@ -3156,8 +3147,8 @@ def collect_completed_review_capture(
                     sqlite_path=sqlite_path,
                     cwd=str(candidate.get("cwd") or review_cwd_text),
                     title=str(candidate.get("title") or ""),
-                    model=str(variant["model"]),
-                    reasoning_effort=str(variant["reasoning_effort"]),
+                    model=model,
+                    reasoning_effort=reasoning_effort,
                     created_at=candidate.get("created_at"),
                     updated_at=candidate.get("updated_at"),
                 )
@@ -3171,8 +3162,8 @@ def collect_completed_review_capture(
             thread = find_review_child_thread(
                 sqlite_path=sqlite_path,
                 cwd=review_cwd_text,
-                model=str(variant["model"]),
-                reasoning_effort=str(variant["reasoning_effort"]),
+                model=model,
+                reasoning_effort=reasoning_effort,
                 created_at=started_after,
             )
             if thread:
@@ -3196,8 +3187,8 @@ def collect_completed_review_capture(
                     sqlite_path=sqlite_path,
                     cwd=str(candidate.get("cwd") or review_cwd_text),
                     title=str(candidate.get("title") or ""),
-                    model=str(variant["model"]),
-                    reasoning_effort=str(variant["reasoning_effort"]),
+                    model=model,
+                    reasoning_effort=reasoning_effort,
                     created_at=candidate.get("created_at"),
                     updated_at=candidate.get("updated_at"),
                 )
@@ -3393,6 +3384,7 @@ def _launch_reviewer_process(
         "title": title,
         "command": launch.command,
         "service_tier": service_tier,
+        "effective_reasoning_effort": launch.effective_reasoning_effort,
         "pid": child.process.pid,
         "started_at": utc_now_iso(),
         "stdout_path": str(child.stdout_path),
@@ -3431,10 +3423,13 @@ def _collect_completed_run_from_artifacts(
     transport_stalled: bool = False,
 ) -> dict[str, Any]:
     variant_id = str(item["variant_id"])
+    variant = dict(indexed[variant_id])
+    if item.get("effective_reasoning_effort"):
+        variant["effective_reasoning_effort"] = item["effective_reasoning_effort"]
     return collect_completed_review_capture(
         slot=str(item["slot"]),
         variant_id=variant_id,
-        variant=indexed[variant_id],
+        variant=variant,
         title=str(item["title"]),
         command=list(item.get("command") or []),
         stdout_path=Path(str(item["stdout_path"])),

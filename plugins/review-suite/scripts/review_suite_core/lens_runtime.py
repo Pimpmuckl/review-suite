@@ -19,6 +19,7 @@ from .codex_runtime import (
     validate_codex_runtime,
     wrapper_launch_cwd,
 )
+from .model_labels import codex_reasoning_effort
 from .process_runtime import (
     CapturedChildProcess,
     launch_captured_child_process,
@@ -59,6 +60,7 @@ class CodexReviewLaunch:
     stdin_text: str | None
     final_message_path: Path | None
     cwd: Path
+    effective_reasoning_effort: str
 
 
 def normalize_service_tier(value: str | None) -> str | None:
@@ -202,12 +204,13 @@ def _codex_command_prefix(
     else:
         raise ValueError(f"unsupported Codex subcommand: {subcommand}")
     command.extend(_isolated_runtime_user_config_args())
+    effective_reasoning_effort = codex_reasoning_effort(model, reasoning_effort)
     command.extend(
         [
             "-c",
             f'model="{model}"',
             "-c",
-            f'model_reasoning_effort="{reasoning_effort}"',
+            f'model_reasoning_effort="{effective_reasoning_effort}"',
             "-c",
             'approval_policy="never"',
         ]
@@ -442,6 +445,7 @@ def prepare_codex_review_launch(
         stdin_text=stdin_text,
         final_message_path=final_message_path,
         cwd=cwd,
+        effective_reasoning_effort=codex_reasoning_effort(model, reasoning_effort),
     )
 
 

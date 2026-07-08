@@ -12,6 +12,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from review_suite_core.config import gate_config, lens_model_config, load_config
+from review_suite_core.model_labels import parse_model_label
 
 
 def test_default_public_config_loads(tmp_path: Path) -> None:
@@ -105,6 +106,19 @@ def test_user_config_overrides_defaults(tmp_path: Path) -> None:
     assert (
         config["orchestrator"]["stable_defaults"]["signoff_brief_model"]
         == "gpt-5.4-high"
+    )
+
+
+def test_model_label_parser_accepts_gpt_5_6_max() -> None:
+    assert parse_model_label("gpt-5.6-sol-max", field="model") == (
+        "gpt-5.6-sol",
+        "max",
+        None,
+    )
+    assert parse_model_label("gpt-5.6-terra-max-fast", field="model") == (
+        "gpt-5.6-terra",
+        "max",
+        "fast",
     )
 
 

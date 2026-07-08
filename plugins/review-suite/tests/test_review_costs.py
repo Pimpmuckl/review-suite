@@ -6,6 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 
 SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts"
 if str(SCRIPT_DIR) not in sys.path:
@@ -19,7 +21,9 @@ from review_costs import (
     _cwd_query_candidates,
     _cost_row_from_payload,
     _metadata_for_cwd,
+    _price_from_usage,
     _read_rollout_model_metadata,
+    _usage_from_rollout_line,
     _record_lane,
     _repo_from_worktree_folder,
     _thread_rows,
@@ -70,6 +74,45 @@ def test_record_lane_accepts_followup_spellings() -> None:
         _record_lane({"public_task": "review_followup", "task_class": "phase_review"})
         == "review_followup"
     )
+
+
+def test_price_from_usage_splits_cache_write_tokens() -> None:
+    usage = {
+        "input_tokens": 100,
+        "input_tokens_details": {"cached_tokens": 20, "cache_write_tokens": 30},
+        "output_tokens": 10,
+    }
+
+    assert _price_from_usage("gpt-5.6-sol", usage) == pytest.approx(0.0007475)
+
+
+def test_rollout_usage_line_preserves_cache_write_tokens() -> None:
+    line = json.dumps(
+        {
+            "type": "event_msg",
+            "payload": {
+                "type": "token_count",
+                "info": {
+                    "total_token_usage": {
+                        "input_tokens": 100,
+                        "input_tokens_details": {
+                            "cached_tokens": 20,
+                            "cache_write_tokens": 30,
+                        },
+                        "output_tokens": 10,
+                    }
+                },
+            },
+        }
+    )
+
+    assert _usage_from_rollout_line(line) == {
+        "input_tokens": 100,
+        "cached_input_tokens": 20,
+        "cache_write_tokens": 30,
+        "output_tokens": 10,
+        "reasoning_output_tokens": 0,
+    }
 
 
 def test_metadata_for_missing_wsl_worktree_folds_into_parent_repo() -> None:
