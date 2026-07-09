@@ -52,6 +52,26 @@ def _gate_run(
     }
 
 
+def test_gate_selection_derives_fallback_policy_from_persisted_mode() -> None:
+    configured_signoff = GateSelection(
+        gate_task_class="phase_gate",
+        arena_task_class="phase_review",
+        mode="configured_signoff_double_pass",
+        variants=(),
+        champion_ids=(),
+    )
+    configured_discovery = GateSelection(
+        gate_task_class="phase_gate",
+        arena_task_class="phase_review",
+        mode="configured_discovery_4_pass",
+        variants=(),
+        champion_ids=(),
+    )
+
+    assert configured_signoff.allow_inline_fallback is False
+    assert configured_discovery.allow_inline_fallback is True
+
+
 def test_select_gate_variants_prefers_least_used_distinct_champions(
     tmp_path: Path,
 ) -> None:
@@ -603,7 +623,6 @@ def test_pr_gate_uses_configured_discovery_then_signoff_variant(tmp_path: Path) 
     )
 
     assert subsequent.mode == "configured_signoff_double_pass"
-    assert subsequent.allow_inline_fallback is False
     assert [variant["id"] for variant in subsequent.variants] == [
         "gpt-5.6-sol-xhigh",
         "gpt-5.6-sol-xhigh",

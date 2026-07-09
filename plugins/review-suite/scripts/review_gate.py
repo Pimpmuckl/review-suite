@@ -136,7 +136,10 @@ class GateSelection:
     mode: str
     variants: tuple[dict[str, Any], ...]
     champion_ids: tuple[str, ...]
-    allow_inline_fallback: bool = True
+
+    @property
+    def allow_inline_fallback(self) -> bool:
+        return not self.mode.startswith("configured_signoff_")
 
 
 def _task_champion_ids(task_state: dict[str, Any]) -> tuple[str, ...]:
@@ -906,7 +909,6 @@ def _select_gate_variants(
             mode=_multi_pass_mode(f"configured_{phase}", reviewer_count),
             variants=_repeat_gate_variant(primary, reviewer_count),
             champion_ids=configured_phase_ids,
-            allow_inline_fallback=phase != "signoff",
         )
     if phase == "signoff":
         configured_id = configured_phase_ids[0]
