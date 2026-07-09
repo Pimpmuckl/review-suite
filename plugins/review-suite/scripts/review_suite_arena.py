@@ -107,6 +107,7 @@ from review_costs import (
     update_review_cost_row_cache,
     write_review_cost_report,
 )
+from review_state_prune import prune_review_state
 
 
 PUBLIC_ARENA_TASK_CLASS_ALIASES = {
@@ -312,6 +313,11 @@ def build_parser() -> argparse.ArgumentParser:
     compact_rounds = sub.add_parser("compact-rounds")
     compact_rounds.add_argument("--state-dir", default=str(default_state_dir()))
     compact_rounds.add_argument("--apply", action="store_true")
+
+    prune_state = sub.add_parser("prune-state")
+    prune_state.add_argument("--state-dir", default=str(default_state_dir()))
+    prune_state.add_argument("--older-than-days", type=int, default=14)
+    prune_state.add_argument("--apply", action="store_true")
 
     reroll = sub.add_parser("reroll-slot")
     reroll.add_argument("--round-id", required=True)
@@ -2768,6 +2774,17 @@ def cmd_compact_rounds(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_prune_state(args: argparse.Namespace) -> int:
+    result = prune_review_state(
+        Path(args.state_dir),
+        apply=bool(args.apply),
+        older_than_days=int(args.older_than_days),
+    )
+    result["status"] = "ok"
+    emit_toon(result)
+    return 0
+
+
 def main() -> int:
     parser = build_parser()
     try:
@@ -2804,6 +2821,8 @@ def main() -> int:
             return cmd_compact_runs(args)
         if args.command == "compact-rounds":
             return cmd_compact_rounds(args)
+        if args.command == "prune-state":
+            return cmd_prune_state(args)
     except BlockingRoundError as exc:
         return emit_error(
             str(exc),
