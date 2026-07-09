@@ -16,6 +16,7 @@ else:
 
 
 ORCHESTRATOR_INDEX_SCHEMA_VERSION = 1
+ORCHESTRATOR_CYCLES_LOCK = "orchestrator-cycles"
 
 
 def orchestrator_dir(state_dir: Path) -> Path:
@@ -180,7 +181,8 @@ def save_cycle(state_dir: Path, state: dict[str, Any]) -> dict[str, Any]:
     cycle_key = str(state.get("cycle_key") or "").strip()
     if not cycle_key:
         raise ValueError("cycle_key is required")
-    payload = deepcopy(state)
-    payload["public_id"] = public_id_for_cycle_key(state_dir, cycle_key)
-    _atomic_write_json(cycle_path(state_dir, cycle_key), payload)
-    return payload
+    with orchestrator_store_lock(state_dir=state_dir, name=ORCHESTRATOR_CYCLES_LOCK):
+        payload = deepcopy(state)
+        payload["public_id"] = public_id_for_cycle_key(state_dir, cycle_key)
+        _atomic_write_json(cycle_path(state_dir, cycle_key), payload)
+        return payload

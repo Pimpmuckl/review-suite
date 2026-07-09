@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -22,6 +24,7 @@ from review_suite_arena import (
     _public_local_task_name,
     cmd_close_gate,
     cmd_costs,
+    cmd_prune_state,
     cmd_resume_round,
     cmd_show_last,
     cmd_show_round,
@@ -29,6 +32,7 @@ from review_suite_arena import (
     run_benchmarked_round,
 )
 from review_costs import ReviewCostRow, update_review_cost_row_cache
+from review_state_prune import prune_review_state
 from review_suite_local import public_round_result, write_round
 
 
@@ -704,6 +708,192 @@ def test_cmd_show_last_filters_orchestrator_review_rounds_by_repo(
     assert result == 0
     assert "round_id: orchestrator-latest" in captured.out
     assert "Nested latest" in captured.out
+
+
+def _touch_old(path: Path, *, days: int = 30) -> None:
+    timestamp = (datetime.now(timezone.utc) - timedelta(days=days)).timestamp()
+    os.utime(path, (timestamp, timestamp))
+
+
+def _write_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_prune_state_removes_only_final_unreferenced_detail(tmp_path: Path) -> None:
+    cycle_dir = tmp_path / "orchestrator" / "cycles"
+    old_cycle = cycle_dir / "old-cycle.json"
+    active_cycle = cycle_dir / "active-cycle.json"
+    _write_json(
+        old_cycle,
+        {
+            "stage": "review-green",
+            "pending_action": None,
+            "rounds": [{"round_id": "dismissed-old"}],
+        },
+    )
+    _write_json(
+        active_cycle,
+        {
+            "stage": "running",
+            "pending_action": {"kind": "collect-review-step"},
+            "rounds": [{"round_id": "active-dismissed"}],
+        },
+    )
+    _touch_old(old_cycle)
+    _touch_old(active_cycle)
+    _write_json(
+        tmp_path / "orchestrator" / "index.json",
+        {
+            "schema_version": 1,
+            "ids": {"rvw_old": "old-cycle", "rvw_active": "active-cycle"},
+            "cycle_keys": {"old-cycle": "rvw_old", "active-cycle": "rvw_active"},
+        },
+    )
+
+    orchestrator_rounds = tmp_path / "orchestrator" / "review-rounds" / "rounds"
+    for round_id, status in (
+        ("dismissed-old", "dismissed"),
+        ("active-dismissed", "dismissed"),
+        ("ungraded-old", "completed"),
+        ("running-old", "running"),
+    ):
+        _write_json(
+            orchestrator_rounds / f"{round_id}.json",
+            {
+                "round_id": round_id,
+                "status": status,
+                "dismissed_at": "2026-06-01T00:00:00Z",
+                "review_completed_at": "2026-06-01T00:00:00Z",
+                "runs": [{"slot": "alpha", "stdout": "detail"}],
+            },
+        )
+    _write_json(
+        tmp_path / "rounds" / "graded-old.json",
+        {
+            "round_id": "graded-old",
+            "status": "completed",
+            "graded_at": "2026-06-01T00:00:00Z",
+            "runs": [{"slot": "alpha", "reviewer_output": "done"}],
+        },
+    )
+
+    canonical = {
+        "runs.jsonl": '{"round_id":"graded-old"}\n',
+        "gate_runs.jsonl": '{"round_id":"gate-old"}\n',
+        "wrapper_sessions.jsonl": '{"session_id":"review-wrapper"}\n',
+        "summary.json": '{"stable":true}\n',
+        "review_cost_rows/row.json": '{"repo":"kept"}\n',
+        "workflow/repo/old.json": '{"last_reviewed_head":"abc123"}\n',
+    }
+    for name, content in canonical.items():
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        _touch_old(path)
+
+    result = prune_review_state(
+        tmp_path,
+        apply=True,
+        now=datetime(2026, 7, 9, tzinfo=timezone.utc),
+    )
+    second = prune_review_state(
+        tmp_path,
+        apply=True,
+        now=datetime(2026, 7, 9, tzinfo=timezone.utc),
+    )
+
+    assert result["orchestrator_cycles"]["deleted"] == 1
+    assert result["rounds"]["deleted"] == 2
+    assert not old_cycle.exists()
+    assert active_cycle.exists()
+    assert not (orchestrator_rounds / "dismissed-old.json").exists()
+    assert (orchestrator_rounds / "active-dismissed.json").exists()
+    assert (orchestrator_rounds / "ungraded-old.json").exists()
+    assert (orchestrator_rounds / "running-old.json").exists()
+    assert not (tmp_path / "rounds" / "graded-old.json").exists()
+    index = json.loads((tmp_path / "orchestrator" / "index.json").read_text())
+    assert index["ids"] == {"rvw_active": "active-cycle"}
+    assert all(
+        (tmp_path / name).read_text(encoding="utf-8") == content
+        for name, content in canonical.items()
+    )
+    assert second["saved_b"] == 0
+
+
+def test_prune_state_dry_run_does_not_write(tmp_path: Path) -> None:
+    cycle = tmp_path / "orchestrator" / "cycles" / "old-cycle.json"
+    _write_json(cycle, {"stage": "review-green", "pending_action": None})
+    _touch_old(cycle)
+
+    result = prune_review_state(
+        tmp_path,
+        now=datetime(2026, 7, 9, tzinfo=timezone.utc),
+    )
+
+    assert result["applied"] is False
+    assert result["orchestrator_cycles"]["deleted"] == 1
+    assert cycle.exists()
+    assert not (tmp_path / ".locks").exists()
+
+
+def test_prune_state_skips_locked_round(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cycle = tmp_path / "orchestrator" / "cycles" / "locked-cycle.json"
+    _write_json(
+        cycle,
+        {
+            "stage": "review-green",
+            "pending_action": None,
+            "rounds": [{"round_id": "protected"}],
+        },
+    )
+    _touch_old(cycle)
+    round_dir = tmp_path / "rounds"
+    for round_id in ("protected", "locked", "free"):
+        _write_json(
+            round_dir / f"{round_id}.json",
+            {
+                "round_id": round_id,
+                "status": "dismissed",
+                "dismissed_at": "2026-06-01T00:00:00Z",
+            },
+        )
+    unlink = Path.unlink
+
+    def fail_locked(path: Path, *args, **kwargs) -> None:
+        if path.name in {"locked-cycle.json", "locked.json"}:
+            raise PermissionError("in use")
+        unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_locked)
+
+    result = prune_review_state(
+        tmp_path,
+        apply=True,
+        now=datetime(2026, 7, 9, tzinfo=timezone.utc),
+    )
+
+    assert result["orchestrator_cycles"]["deleted"] == 0
+    assert result["rounds"]["deleted"] == 1
+    assert cycle.exists()
+    assert (round_dir / "protected.json").exists()
+    assert (round_dir / "locked.json").exists()
+    assert not (round_dir / "free.json").exists()
+
+
+def test_cmd_prune_state_reports_dry_run(tmp_path: Path, capsys) -> None:
+    state_dir = tmp_path / "missing-state"
+    result = cmd_prune_state(
+        Namespace(state_dir=str(state_dir), older_than_days=14, apply=False)
+    )
+
+    captured = capsys.readouterr()
+    assert result == 0
+    assert "status: ok" in captured.out
+    assert "applied: false" in captured.out
+    assert not state_dir.exists()
 
 
 def test_print_findings_prints_blocked_body_after_completion_status(capsys) -> None:
