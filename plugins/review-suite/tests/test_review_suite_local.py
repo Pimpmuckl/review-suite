@@ -75,6 +75,33 @@ def test_default_roster_excludes_deprecated_codex_models() -> None:
     assert served_deprecated == []
 
 
+def test_default_roster_separates_sol_signoff_from_arena_eligibility() -> None:
+    roster = review_suite_local.load_roster(
+        SCRIPT_DIR.parent / "references" / "roster.json"
+    )
+    index = review_suite_local.variant_index(roster)
+    signoff_ids = {"gpt-5.6-sol-medium", "gpt-5.6-sol-xhigh"}
+
+    assert {
+        variant["id"]
+        for variant in roster["variants"]
+        if variant["id"].startswith("gpt-5.6-") and variant.get("state") == "active"
+    } == signoff_ids
+    assert all(
+        variant["state"] == "disabled"
+        for variant in roster["variants"]
+        if variant["id"].startswith("gpt-5.6-") and variant["id"] not in signoff_ids
+    )
+    assert all(
+        index[variant_id]["arena_eligible"] is False for variant_id in signoff_ids
+    )
+    assert not signoff_ids.intersection(
+        variant["id"]
+        for task_class in ("phase_review", "pr_review")
+        for variant in review_suite_local.eligible_variants(roster, task_class)
+    )
+
+
 def test_reviewer_wait_line_uses_actual_count() -> None:
     assert _reviewer_wait_line({"runs": [{"slot": "alpha"}]}) == (
         "[review-suite] waiting for 1 reviewer; wrapper is active as long as output streams, do not stop it prematurely"

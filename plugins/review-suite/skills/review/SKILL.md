@@ -17,10 +17,10 @@ Path rules:
 - Follow emitted `Action.cmd`; runtime-backed runs should emit installed-launcher paths for follow-up commands.
 
 Mode:
-- `emergency`: urgent GPT 5.5 medium signoff only; deslop disabled; no more than two local review rounds.
-- `brief`: one GPT 5.4 medium discovery pass, then GPT 5.5 medium signoff.
-- `normal`: GPT 5.4 medium discovery budget, then GPT 5.5 medium signoff.
-- `deep`: normal stack, GPT 5.4 xhigh discovery budget, GPT 5.5 xhigh signoff, then GitHub when required.
+- `emergency`: urgent GPT 5.6 Sol medium signoff only; deslop disabled; no more than two local review rounds.
+- `brief`: one GPT 5.4 medium discovery pass, then GPT 5.6 Sol medium signoff.
+- `normal`: GPT 5.4 medium discovery budget, then GPT 5.6 Sol medium signoff.
+- `deep`: normal stack, GPT 5.4 xhigh discovery budget, GPT 5.6 Sol xhigh signoff, then GitHub when required.
 
 Rules:
 - Run focused validation before dispatch; start slow full-suite/CI after dispatch and track final status.

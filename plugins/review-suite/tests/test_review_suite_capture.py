@@ -905,20 +905,11 @@ def test_compute_cost_splits_cache_write_tokens() -> None:
     )
 
 
-def test_default_roster_keeps_gpt_5_6_disabled_until_backend_launch() -> None:
+def test_default_roster_includes_gpt_5_6_pricing() -> None:
     roster_path = Path(__file__).resolve().parents[1] / "references" / "roster.json"
     roster = review_suite_local.load_roster(roster_path)
     index = review_suite_local.variant_index(roster)
 
-    assert index["gpt-5.6-sol-max"]["state"] == "disabled"
-    assert index["gpt-5.6-terra-max"]["state"] == "disabled"
-    assert index["gpt-5.6-luna-max"]["state"] == "disabled"
-    eligible_ids = {
-        variant["id"]
-        for task_class in ("phase_review", "pr_review")
-        for variant in review_suite_local.eligible_variants(roster, task_class)
-    }
-    assert not any(variant_id.startswith("gpt-5.6-") for variant_id in eligible_ids)
     expected_pricing = {
         "gpt-5.6-sol": {
             "input_per_million_usd": 5.0,

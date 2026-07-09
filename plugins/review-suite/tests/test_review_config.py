@@ -26,6 +26,12 @@ def test_default_public_config_loads(tmp_path: Path) -> None:
         lens_model_config("review-plan", state_dir=state_dir).reasoning_effort
         == "medium"
     )
+    assert lens_model_config("review-deslop", state_dir=state_dir).model == "gpt-5.5"
+    followup = lens_model_config("review-followup", state_dir=state_dir)
+    assert (followup.model, followup.reasoning_effort) == (
+        "gpt-5.6-sol",
+        "medium",
+    )
     assert (
         gate_config("phase_gate", state_dir=state_dir).discovery_variant_id
         == "gpt-5.4-medium"
@@ -33,7 +39,7 @@ def test_default_public_config_loads(tmp_path: Path) -> None:
     assert gate_config("phase_gate", state_dir=state_dir).discovery_reviewer_count == 4
     assert (
         gate_config("phase_gate", state_dir=state_dir).signoff_variant_id
-        == "gpt-5.5-medium"
+        == "gpt-5.6-sol-medium"
     )
     assert gate_config("phase_gate", state_dir=state_dir).signoff_reviewer_count == 2
     assert gate_config("phase_gate", state_dir=state_dir).discovery_loops == 1
@@ -43,7 +49,7 @@ def test_default_public_config_loads(tmp_path: Path) -> None:
     )
     assert (
         gate_config("pr_gate", state_dir=state_dir).signoff_variant_id
-        == "gpt-5.5-xhigh"
+        == "gpt-5.6-sol-xhigh"
     )
     assert config["orchestrator"]["selection"] == "auto"
     assert config["orchestrator"]["stable_defaults"] == {
@@ -54,8 +60,8 @@ def test_default_public_config_loads(tmp_path: Path) -> None:
         "normal_arena_loops": 0,
         "deep_discovery_loops": 2,
         "deep_arena_loops": 0,
-        "signoff_brief_model": "gpt-5.5-medium",
-        "signoff_deep_model": "gpt-5.5-xhigh",
+        "signoff_brief_model": "gpt-5.6-sol-medium",
+        "signoff_deep_model": "gpt-5.6-sol-xhigh",
     }
 
 
@@ -98,7 +104,7 @@ def test_user_config_overrides_defaults(tmp_path: Path) -> None:
     assert phase_gate.discovery_reviewer_count == 3
     assert phase_gate.signoff_variant_id == "gpt-5.4-high"
     assert phase_gate.discovery_loops == 2
-    assert pr_gate.signoff_variant_id == "gpt-5.5-xhigh"
+    assert pr_gate.signoff_variant_id == "gpt-5.6-sol-xhigh"
     assert (
         config["orchestrator"]["stable_defaults"]["discovery_brief_model"]
         == "gpt-5.4-medium"
