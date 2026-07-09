@@ -22,12 +22,11 @@ from review_suite_core.orchestrator_profiles import (
 
 def _step_summary(
     step: OrchestratorProfileStep,
-) -> tuple[str, str, int | None, str | None, str | None, bool]:
+) -> tuple[str, str, int | None, str | None, bool]:
     return (
         step.kind,
         step.name,
         step.count,
-        step.model,
         step.reasoning_effort,
         step.rerun_on_findings,
     )
@@ -43,8 +42,8 @@ def test_default_stable_profiles_cover_all_modes(tmp_path: Path) -> None:
     assert config["orchestrator"]["calibration"]["auto_promotion_enabled"] is False
     assert profiles["stable"]["brief"].deslop_enabled is True
     assert [_step_summary(step) for step in profiles["stable"]["brief"].steps] == [
-        ("review", "broad-discovery", 4, "gpt-5.4", "medium", False),
-        ("review", "precision-signoff", 2, "gpt-5.6-sol", "medium", True),
+        ("review", "broad-discovery", 4, "medium", False),
+        ("review", "precision-signoff", 2, "medium", True),
     ]
     assert [step.name for step in profiles["stable"]["normal"].steps] == [
         "broad-discovery-1",
@@ -76,7 +75,7 @@ def test_default_stable_profiles_cover_all_modes(tmp_path: Path) -> None:
     assert profiles["stable"]["deep"].steps[-1].rerun_on_findings is True
     assert profiles["stable"]["emergency"].deslop_enabled is False
     assert [_step_summary(step) for step in profiles["stable"]["emergency"].steps] == [
-        ("review", "urgent-signoff", 2, "gpt-5.6-sol", "medium", False)
+        ("review", "urgent-signoff", 2, "medium", False)
     ]
     assert profiles["stable"]["emergency"].steps[0].max_review_rounds == 2
     assert set(profiles) == {"stable"}
