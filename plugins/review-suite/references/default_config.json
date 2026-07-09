@@ -11,7 +11,10 @@
     },
     "review-plan": {},
     "review-deslop": {},
-    "review-followup": {}
+    "review-followup": {
+      "model": "gpt-5.6-sol",
+      "reasoning_effort": "medium"
+    }
   },
   "arena": {
     "enabled": false
@@ -29,8 +32,8 @@
       "normal_arena_loops": 0,
       "deep_discovery_loops": 2,
       "deep_arena_loops": 0,
-      "signoff_brief_model": "gpt-5.5-medium",
-      "signoff_deep_model": "gpt-5.5-xhigh"
+      "signoff_brief_model": "gpt-5.6-sol-medium",
+      "signoff_deep_model": "gpt-5.6-sol-xhigh"
     },
     "profiles": {
       "stable": {

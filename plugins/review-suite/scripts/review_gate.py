@@ -60,6 +60,7 @@ from review_suite_local import (
     reviewer_output_heading,
     state_lock,
     total_usage_tokens,
+    variant_is_arena_eligible,
     variant_service_tier,
     write_json,
 )
@@ -135,6 +136,7 @@ class GateSelection:
     mode: str
     variants: tuple[dict[str, Any], ...]
     champion_ids: tuple[str, ...]
+    allow_inline_fallback: bool = True
 
 
 def _task_champion_ids(task_state: dict[str, Any]) -> tuple[str, ...]:
@@ -624,9 +626,7 @@ def _gate_fallback_variants(
         fallback = indexed.get(fallback_variant_id)
         if fallback is None:
             continue
-        if str(fallback.get("state", "active")) != "active":
-            continue
-        if arena_task_class not in list(fallback.get("task_classes") or []):
+        if not variant_is_arena_eligible(fallback, arena_task_class):
             continue
         if fallback_variant_id in cooling:
             continue
@@ -635,8 +635,7 @@ def _gate_fallback_variants(
         fallbacks = [
             variant
             for variant in list(roster.get("variants") or [])
-            if str(variant.get("state", "active")) == "active"
-            and arena_task_class in list(variant.get("task_classes") or [])
+            if variant_is_arena_eligible(variant, arena_task_class)
             and str(variant.get("id") or "") not in probation_ids
         ]
     return [
@@ -795,10 +794,35 @@ def _gate_configured_phase_variants(
             continue
         if arena_task_class not in list(variant.get("task_classes") or []):
             continue
+        if phase == "discovery" and not variant_is_arena_eligible(
+            variant, arena_task_class
+        ):
+            continue
         if variant_id in cooling:
             continue
         variants.append(variant)
     return primary_ids, variants
+
+
+def _configured_signoff_error(
+    variant_id: str,
+    variant: dict[str, Any] | None,
+    arena_task_class: str,
+    cooling: dict[str, dict[str, Any]],
+) -> ValueError:
+    if variant is None:
+        reason = "unavailable"
+    elif str(variant.get("state", "active")) != "active":
+        reason = "inactive"
+    elif arena_task_class not in list(variant.get("task_classes") or []):
+        reason = f"ineligible for {arena_task_class}"
+    elif variant_id in cooling:
+        reason = "cooling"
+    else:
+        reason = "unavailable"
+    return ValueError(
+        f"configured signoff variant {variant_id} is {reason}; signoff fallback is disabled"
+    )
 
 
 def _select_gate_variants(
@@ -855,6 +879,10 @@ def _select_gate_variants(
             raise ValueError(
                 f"champion override is not eligible for {arena_task_class}: {champion_override_id}"
             )
+        if not variant_is_arena_eligible(override, arena_task_class):
+            raise ValueError(
+                f"champion override is not arena eligible: {champion_override_id}"
+            )
         return GateSelection(
             gate_task_class=gate_task_class,
             arena_task_class=arena_task_class,
@@ -878,6 +906,12 @@ def _select_gate_variants(
             mode=_multi_pass_mode(f"configured_{phase}", reviewer_count),
             variants=_repeat_gate_variant(primary, reviewer_count),
             champion_ids=configured_phase_ids,
+            allow_inline_fallback=phase != "signoff",
+        )
+    if phase == "signoff":
+        configured_id = configured_phase_ids[0]
+        raise _configured_signoff_error(
+            configured_id, indexed.get(configured_id), arena_task_class, cooling
         )
 
     def backup_selection(
@@ -908,6 +942,7 @@ def _select_gate_variants(
         for variant_id in champion_ids
         if variant_id in indexed
         and str(indexed[variant_id].get("state", "active")) == "active"
+        and indexed[variant_id].get("arena_eligible", True) is True
     ]
     active_champion_ids = tuple(str(variant["id"]) for variant in champions)
     if not champion_ids or not champions:
@@ -1614,6 +1649,7 @@ def run_gate_round(
                 continue
             if (
                 block_reason in RETRYABLE_GATE_BLOCK_REASONS
+                and selection.allow_inline_fallback
                 and int(run.get("fallback_attempts", 0) or 0)
                 < INLINE_GATE_FALLBACK_MAX_ATTEMPTS_PER_SLOT
             ):

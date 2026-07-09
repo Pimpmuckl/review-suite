@@ -43,7 +43,7 @@ Review commands do not support a dirty-worktree override. Do not append `--allow
 After a review id exists, the normal advance command is bare `review.py --id <id>`. Review Suite records structured reviewer `clean` / `findings` verdicts automatically when available, runs the next safe step, and leaves explicit `--decision clean|findings` as a manual override for ambiguous or intentional human judgment cases.
 Inspect an existing id without advancing it with `review.py --id <id> --show-status`.
 
-Modes are built from one phased stack. Discovery uses GPT 5.4 for high-recall bug finding; signoff uses GPT 5.5 for relevance, convergence, and current-head green checks.
+Modes are built from one phased stack. Discovery uses GPT 5.4 for high-recall bug finding; signoff uses GPT 5.6 Sol for relevance, convergence, and current-head green checks.
 Deslop passes are folded into any review that isn't using `emergency` as target.
 
 Arena loops are backend-injected by `review.py` only when user config opts in with `arena.enabled` plus a nonzero `normal_arena_loops` or `deep_arena_loops` budget.
@@ -53,7 +53,7 @@ When enabled, arena loops spend discovery budget first. Each discovery phase sti
 |---- Emergency Phase ----
 |
 |--- Urgent Signoff - Single fast batch, max two rounds after findings
-     |- GPT 5.5 Medium x2
+     |- GPT 5.6 Sol Medium x2
 ```
 
 Emergency turns green immediately on a clean urgent signoff. If findings are fixed, it allows one verification rerun; findings after that exhaust the local review budget instead of launching more reviewers.
@@ -67,7 +67,7 @@ Emergency turns green immediately on a clean urgent signoff. If findings are fix
 |    |    |- Normal: GPT 5.4 Medium x4 for remaining passes, min once
 |    |
 |    |--- Medium Signoff - Until: Green
-|    |    |- GPT 5.5 Medium x2
+|    |    |- GPT 5.6 Sol Medium x2
 |
 |
 |--- Deep Phase ----
@@ -81,7 +81,7 @@ Emergency turns green immediately on a clean urgent signoff. If findings are fix
 |    |    |- GPT 5.4 XHigh x2 for remaining passes, min once
 |    |
 |    |--- Deep Signoff - Until: Green
-|    |    |- GPT 5.5 XHigh x2
+|    |    |- GPT 5.6 Sol XHigh x2
 |
 |
 |--- Github Phase ----

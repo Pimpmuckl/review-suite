@@ -263,7 +263,12 @@ def test_select_gate_variants_uses_pr_gate_discovery_variant_before_champions(
     )
     roster = {
         "variants": [
-            {"id": "gpt-5.5-xhigh", "state": "active", "task_classes": ["pr_review"]},
+            {
+                "id": "gpt-5.6-sol-xhigh",
+                "state": "active",
+                "arena_eligible": False,
+                "task_classes": ["pr_review"],
+            },
             {"id": "gpt-5.4-xhigh", "state": "active", "task_classes": ["pr_review"]},
         ]
     }
@@ -552,7 +557,12 @@ def test_pr_gate_uses_configured_discovery_then_signoff_variant(tmp_path: Path) 
     )
     roster = {
         "variants": [
-            {"id": "gpt-5.5-xhigh", "state": "active", "task_classes": ["pr_review"]},
+            {
+                "id": "gpt-5.6-sol-xhigh",
+                "state": "active",
+                "arena_eligible": False,
+                "task_classes": ["pr_review"],
+            },
             {"id": "gpt-5.4-xhigh", "state": "active", "task_classes": ["pr_review"]},
         ]
     }
@@ -593,9 +603,10 @@ def test_pr_gate_uses_configured_discovery_then_signoff_variant(tmp_path: Path) 
     )
 
     assert subsequent.mode == "configured_signoff_double_pass"
+    assert subsequent.allow_inline_fallback is False
     assert [variant["id"] for variant in subsequent.variants] == [
-        "gpt-5.5-xhigh",
-        "gpt-5.5-xhigh",
+        "gpt-5.6-sol-xhigh",
+        "gpt-5.6-sol-xhigh",
     ]
 
 
@@ -698,77 +709,71 @@ def test_select_gate_variants_rejects_ineligible_champion_override(
         )
 
 
-def test_select_gate_variants_uses_backup_when_persisted_champions_are_retired(
+def test_configured_signoff_rejects_unavailable_variants_without_fallback(
     tmp_path: Path,
 ) -> None:
-    state_dir = tmp_path / "state"
     repo = tmp_path / "repo"
     repo.mkdir()
-    task_id = "feature/retired-champion"
-    _write_json(
-        state_dir / "operational_state.json",
-        {
-            "generated_at": "2026-06-11T00:00:00Z",
-            "task_classes": {
-                "phase_review": {
-                    "champion_variant_ids": ["gpt-5.3-codex-medium"],
-                    "cooldowns": {},
-                    "probation_variant_ids": [],
-                    "stable_variant_ids": [],
-                    "mode": "champion",
-                },
-                "pr_review": {
-                    "champion_variant_ids": [],
-                    "cooldowns": {},
-                    "probation_variant_ids": [],
-                    "stable_variant_ids": [],
-                    "mode": "scramble",
-                },
-            },
-        },
+    signoff_id = "gpt-5.6-sol-medium"
+    cases = (
+        ("unavailable", None, {}),
+        (
+            "inactive",
+            {"id": signoff_id, "state": "disabled", "task_classes": ["phase_review"]},
+            {},
+        ),
+        (
+            "ineligible",
+            {"id": signoff_id, "state": "active", "task_classes": ["pr_review"]},
+            {},
+        ),
+        (
+            "cooling",
+            {"id": signoff_id, "state": "active", "task_classes": ["phase_review"]},
+            {signoff_id: {"until": "2099-01-01T00:00:00Z", "failure_count": 1}},
+        ),
     )
-    (state_dir / "gate_runs.jsonl").write_text(
-        json.dumps(
-            {
-                "task_class": "phase_gate",
-                "task_id": task_id,
-                "review_cwd_normalized": str(repo.resolve()),
-                "signoff_status": "pending",
-                "runs": [{"review_status": "completed", "grade_blocked": False}],
-            }
+    for reason, signoff, cooling in cases:
+        state_dir = tmp_path / reason
+        _write_json(
+            state_dir / "operational_state.json",
+            {"task_classes": {"phase_review": {"cooldowns": cooling}}},
         )
-        + "\n",
-        encoding="utf-8",
-    )
-    roster = {
-        "variants": [
-            {
-                "id": "gpt-5.3-codex-medium",
-                "state": "retired",
-                "task_classes": ["phase_review"],
-            },
-            {
-                "id": "gpt-5.4-medium",
-                "state": "active",
-                "task_classes": ["phase_review"],
-            },
-        ]
-    }
+        (state_dir / "gate_runs.jsonl").write_text(
+            json.dumps(
+                {
+                    "task_class": "phase_gate",
+                    "task_id": "signoff",
+                    "review_cwd_normalized": str(repo.resolve()),
+                    "signoff_status": "pending",
+                    "runs": [{"review_status": "completed", "grade_blocked": False}],
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        roster = {
+            "variants": [
+                *([signoff] if signoff else []),
+                {
+                    "id": "gpt-5.5-medium",
+                    "state": "active",
+                    "task_classes": ["phase_review"],
+                },
+            ]
+        }
 
-    selection = _select_gate_variants(
-        roster=roster,
-        state_dir=state_dir,
-        gate_task_class="phase_gate",
-        review_cwd=repo,
-        task_id=task_id,
-    )
-
-    assert selection.mode == "provisional_backup_double_pass"
-    assert [variant["id"] for variant in selection.variants] == [
-        "gpt-5.4-medium",
-        "gpt-5.4-medium",
-    ]
-    assert selection.champion_ids == ()
+        with pytest.raises(
+            ValueError,
+            match=rf"configured signoff variant {signoff_id} is {reason}.*fallback is disabled",
+        ):
+            _select_gate_variants(
+                roster=roster,
+                state_dir=state_dir,
+                gate_task_class="phase_gate",
+                review_cwd=repo,
+                task_id="signoff",
+            )
 
 
 def test_select_gate_variants_falls_through_provisional_backup_order_when_primary_is_cooling(
@@ -859,6 +864,12 @@ def test_select_gate_variants_excludes_probation_from_supplied_roster_fallback(
     )
     roster = {
         "variants": [
+            {
+                "id": "gpt-5.6-sol-medium",
+                "state": "active",
+                "arena_eligible": False,
+                "task_classes": ["phase_review"],
+            },
             {"id": "fallback", "state": "active", "task_classes": ["phase_review"]},
             {"id": "probation", "state": "active", "task_classes": ["phase_review"]},
         ]
@@ -1186,11 +1197,11 @@ def test_aggregate_gate_records_reports_gate_primary_for_gate_champions(
         state_dir=state_dir, operational_state=operational_state
     )
 
-    assert summary["task_classes"]["phase_gate"]["champions"] == ["gpt-5.5-medium"]
+    assert summary["task_classes"]["phase_gate"]["champions"] == ["gpt-5.6-sol-medium"]
     assert summary["task_classes"]["phase_gate"]["leaderboard"] == [
         {
-            "variant_id": "gpt-5.5-medium",
-            "variant_label": "gpt-5.5-medium",
+            "variant_id": "gpt-5.6-sol-medium",
+            "variant_label": "gpt-5.6-sol-medium",
             "runs": 0,
             "blocker_pct": None,
             "median_elapsed_seconds": None,

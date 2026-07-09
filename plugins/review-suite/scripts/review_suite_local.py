@@ -732,12 +732,21 @@ def variant_index(roster: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {variant["id"]: variant for variant in roster["variants"]}
 
 
+def variant_is_arena_eligible(
+    variant: dict[str, Any], task_class: str | None = None
+) -> bool:
+    return (
+        variant.get("state", "active") == "active"
+        and variant.get("arena_eligible", True) is True
+        and (task_class is None or task_class in variant.get("task_classes", []))
+    )
+
+
 def eligible_variants(roster: dict[str, Any], task_class: str) -> list[dict[str, Any]]:
     return [
         variant
         for variant in roster["variants"]
-        if variant.get("state", "active") == "active"
-        and task_class in variant.get("task_classes", [])
+        if variant_is_arena_eligible(variant, task_class)
     ]
 
 
