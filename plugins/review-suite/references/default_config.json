@@ -17,7 +17,59 @@
     }
   },
   "arena": {
-    "enabled": false
+    "enabled": false,
+    "pools": {
+      "discovery_phase": {
+        "rating_pool_id": "discovery-phase-gpt-5.6-v1",
+        "variant_groups": [
+          ["gpt-5.4-medium", "gpt-5.5-medium", "gpt-5.6-sol-medium", "gpt-5.6-terra-medium"]
+        ]
+      },
+      "discovery_deep": {
+        "rating_pool_id": "discovery-deep-gpt-5.6-v1",
+        "variant_groups": [
+          ["gpt-5.4-xhigh", "gpt-5.5-xhigh", "gpt-5.6-sol-xhigh", "gpt-5.6-terra-xhigh"]
+        ]
+      },
+      "arena_phase": {
+        "rating_pool_id": "arena-phase-gpt-5.6-v1",
+        "reporting": true,
+        "variant_groups": [
+          ["gpt-5.4-low", "gpt-5.4-medium", "gpt-5.5-medium", "gpt-5.6-terra-high"],
+          ["gpt-5.4-medium", "gpt-5.5-low", "gpt-5.6-luna-medium", "gpt-5.6-terra-xhigh"],
+          ["gpt-5.5-low", "gpt-5.5-medium", "gpt-5.6-luna-high", "gpt-5.6-sol-low"],
+          ["gpt-5.5-medium", "gpt-5.6-luna-medium", "gpt-5.6-luna-xhigh", "gpt-5.6-sol-medium"],
+          ["gpt-5.6-luna-medium", "gpt-5.6-luna-high", "gpt-5.6-luna-max", "gpt-5.4-low"],
+          ["gpt-5.6-luna-high", "gpt-5.6-luna-xhigh", "gpt-5.6-terra-medium", "gpt-5.4-medium"],
+          ["gpt-5.6-luna-xhigh", "gpt-5.6-luna-max", "gpt-5.6-terra-high", "gpt-5.5-low"],
+          ["gpt-5.6-luna-max", "gpt-5.6-terra-medium", "gpt-5.6-terra-xhigh", "gpt-5.5-medium"],
+          ["gpt-5.6-terra-medium", "gpt-5.6-terra-high", "gpt-5.6-sol-low", "gpt-5.6-luna-medium"],
+          ["gpt-5.6-terra-high", "gpt-5.6-terra-xhigh", "gpt-5.6-sol-medium", "gpt-5.6-luna-high"],
+          ["gpt-5.6-terra-xhigh", "gpt-5.6-sol-low", "gpt-5.4-low", "gpt-5.6-luna-xhigh"],
+          ["gpt-5.6-sol-low", "gpt-5.6-sol-medium", "gpt-5.4-medium", "gpt-5.6-luna-max"],
+          ["gpt-5.6-sol-medium", "gpt-5.4-low", "gpt-5.5-low", "gpt-5.6-terra-medium"]
+        ]
+      },
+      "arena_deep": {
+        "rating_pool_id": "arena-deep-gpt-5.6-v1",
+        "reporting": true,
+        "variant_groups": [
+          ["gpt-5.4-medium", "gpt-5.4-high", "gpt-5.5-medium", "gpt-5.6-terra-max"],
+          ["gpt-5.4-high", "gpt-5.4-xhigh", "gpt-5.5-high", "gpt-5.6-sol-medium"],
+          ["gpt-5.4-xhigh", "gpt-5.5-medium", "gpt-5.5-xhigh", "gpt-5.6-sol-high"],
+          ["gpt-5.5-medium", "gpt-5.5-high", "gpt-5.6-terra-medium", "gpt-5.6-sol-xhigh"],
+          ["gpt-5.5-high", "gpt-5.5-xhigh", "gpt-5.6-terra-high", "gpt-5.4-medium"],
+          ["gpt-5.5-xhigh", "gpt-5.6-terra-medium", "gpt-5.6-terra-xhigh", "gpt-5.4-high"],
+          ["gpt-5.6-terra-medium", "gpt-5.6-terra-high", "gpt-5.6-terra-max", "gpt-5.4-xhigh"],
+          ["gpt-5.6-terra-high", "gpt-5.6-terra-xhigh", "gpt-5.6-sol-medium", "gpt-5.5-medium"],
+          ["gpt-5.6-terra-xhigh", "gpt-5.6-terra-max", "gpt-5.6-sol-high", "gpt-5.5-high"],
+          ["gpt-5.6-terra-max", "gpt-5.6-sol-medium", "gpt-5.6-sol-xhigh", "gpt-5.5-xhigh"],
+          ["gpt-5.6-sol-medium", "gpt-5.6-sol-high", "gpt-5.4-medium", "gpt-5.6-terra-medium"],
+          ["gpt-5.6-sol-high", "gpt-5.6-sol-xhigh", "gpt-5.4-high", "gpt-5.6-terra-high"],
+          ["gpt-5.6-sol-xhigh", "gpt-5.4-medium", "gpt-5.4-xhigh", "gpt-5.6-terra-xhigh"]
+        ]
+      }
+    }
   },
   "orchestrator": {
     "selection": "auto",
@@ -29,9 +81,9 @@
       "discovery_deep_model": "gpt-5.4-xhigh",
       "discovery_loops": 1,
       "normal_discovery_loops": 3,
-      "normal_arena_loops": 0,
+      "normal_arena_loops": 13,
       "deep_discovery_loops": 2,
-      "deep_arena_loops": 0,
+      "deep_arena_loops": 13,
       "signoff_brief_model": "gpt-5.6-sol-medium",
       "signoff_deep_model": "gpt-5.6-sol-xhigh"
     },
@@ -40,26 +92,26 @@
         "brief": {
           "deslop_enabled": true,
           "steps": [
-            {"name": "broad-discovery", "count": 4, "model_ref": "discovery_brief_model"},
+            {"kind": "arena", "name": "phase-discovery-brawl", "lane": "review_t1", "task_class": "phase_review", "pool": "discovery_phase"},
             {"name": "precision-signoff", "count": 2, "model_ref": "signoff_brief_model", "rerun_on_findings": true}
           ]
         },
         "normal": {
           "deslop_enabled": true,
           "steps": [
-            {"kind": "arena", "name": "arena-phase-review", "lane": "review_t1", "task_class": "phase_review", "loop_ref": "normal_arena_loops", "enabled_ref": "arena.enabled"},
-            {"name": "broad-discovery", "count": 4, "model_ref": "discovery_brief_model", "loop_ref": "normal_discovery_loops", "subtract_loop_ref": "normal_arena_loops", "subtract_if": "arena.enabled", "min_loops": 1},
+            {"kind": "arena", "name": "phase-discovery-brawl", "lane": "review_t1", "task_class": "phase_review", "pool": "discovery_phase", "loop_ref": "normal_discovery_loops", "subtract_loop_ref": "normal_arena_loops", "subtract_if": "arena.enabled", "min_loops": 1},
+            {"kind": "arena", "name": "arena-phase-review", "lane": "review_t1", "task_class": "phase_review", "pool": "arena_phase", "loop_ref": "normal_arena_loops", "enabled_ref": "arena.enabled"},
             {"name": "precision-signoff", "count": 2, "model_ref": "signoff_brief_model", "rerun_on_findings": true}
           ]
         },
         "deep": {
           "deslop_enabled": true,
           "steps": [
-            {"kind": "arena", "name": "arena-phase-review", "lane": "review_t1", "task_class": "phase_review", "loop_ref": "normal_arena_loops", "enabled_ref": "arena.enabled"},
-            {"name": "broad-discovery", "count": 4, "model_ref": "discovery_brief_model", "loop_ref": "normal_discovery_loops", "subtract_loop_ref": "normal_arena_loops", "subtract_if": "arena.enabled", "min_loops": 1},
+            {"kind": "arena", "name": "phase-discovery-brawl", "lane": "review_t1", "task_class": "phase_review", "pool": "discovery_phase", "loop_ref": "normal_discovery_loops", "subtract_loop_ref": "normal_arena_loops", "subtract_if": "arena.enabled", "min_loops": 1},
+            {"kind": "arena", "name": "arena-phase-review", "lane": "review_t1", "task_class": "phase_review", "pool": "arena_phase", "loop_ref": "normal_arena_loops", "enabled_ref": "arena.enabled"},
             {"name": "precision-signoff", "count": 2, "model_ref": "signoff_brief_model", "rerun_on_findings": true},
-            {"kind": "arena", "name": "arena-pr-review", "lane": "review_t3", "task_class": "pr_review", "loop_ref": "deep_arena_loops", "enabled_ref": "arena.enabled"},
-            {"name": "deep-discovery", "count": 2, "model_ref": "discovery_deep_model", "loop_ref": "deep_discovery_loops", "subtract_loop_ref": "deep_arena_loops", "subtract_if": "arena.enabled", "min_loops": 1},
+            {"kind": "arena", "name": "deep-discovery-brawl", "lane": "review_t3", "task_class": "pr_review", "pool": "discovery_deep", "loop_ref": "deep_discovery_loops", "subtract_loop_ref": "deep_arena_loops", "subtract_if": "arena.enabled", "min_loops": 1},
+            {"kind": "arena", "name": "arena-pr-review", "lane": "review_t3", "task_class": "pr_review", "pool": "arena_deep", "loop_ref": "deep_arena_loops", "enabled_ref": "arena.enabled"},
             {"name": "deep-signoff", "count": 2, "model_ref": "signoff_deep_model", "rerun_on_findings": true}
           ]
         },

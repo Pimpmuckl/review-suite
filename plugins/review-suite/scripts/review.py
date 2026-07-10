@@ -94,6 +94,8 @@ from review_suite_core.orchestrator_store import (
     save_cycle,
 )
 from review_suite_local import (
+    PUBLIC_REVIEWER_LABELS,
+    grade_rank_placeholders,
     latest_rerolled_round_payload,
     load_round,
     print_reviewer_output_section,
@@ -108,7 +110,7 @@ FOLLOWUP_LANE = "review-followup"
 GATE_LANES = {"review_t2", "review_t4"}
 CLI_VALIDATION_STATUSES = ("passed", "failed", "pending", "waived", "classified")
 VALIDATION_READY_STATUSES = {"passed", "waived", "classified"}
-ARENA_REROLL_SLOTS = {"alpha", "bravo"}
+ARENA_REROLL_SLOTS = set(PUBLIC_REVIEWER_LABELS)
 DECISION_COMMANDS = {DECISION_CLEAN, DECISION_FINDINGS}
 NO_DECISION_PENDING_MESSAGE = "no decision is pending for this review cycle"
 BASE_DRIFT_PATH_SAMPLE_LIMIT = 20
@@ -266,28 +268,23 @@ def _arena_grade_command(
         or branch
         or str(state.get("public_id") or "").strip()
     )
+    rating_pool_id = str(pending_payload.get("rating_pool_id") or "").strip()
     grade_state_dir = Path(str(pending_payload.get("_round_state_dir") or state_dir))
-    return format_command(
-        [
-            sys.executable,
-            str(_launcher_script_path("review_suite_arena.py")),
-            "grade",
-            "--round-id",
-            round_id,
-            "--task-id",
-            task_id,
-            "--rating-pool-id",
-            "RATING_POOL_ID",
-            "--rank",
-            "FIRST[,TIED]",
-            "--rank",
-            "NEXT",
-            "--basis",
-            "BASIS",
-            "--state-dir",
-            str(grade_state_dir),
-        ]
-    )
+    command = [
+        sys.executable,
+        str(_launcher_script_path("review_suite_arena.py")),
+        "grade",
+        "--round-id",
+        round_id,
+        "--task-id",
+        task_id,
+        "--rating-pool-id",
+        rating_pool_id or "RATING_POOL_ID",
+    ]
+    for rank_group in grade_rank_placeholders(pending_payload):
+        command.extend(["--rank", rank_group])
+    command.extend(["--basis", "BASIS", "--state-dir", str(grade_state_dir)])
+    return format_command(command)
 
 
 def _arena_reroll_argv(
@@ -1616,6 +1613,10 @@ def _apply_profile_resolution(state: dict[str, Any], resolution: Any) -> dict[st
         if step.kind == "arena":
             payload["lane"] = step.lane
             payload["task_class"] = step.task_class
+            payload["rating_pool_id"] = step.rating_pool_id
+            if step.reporting_pool:
+                payload["reporting_pool"] = True
+            payload["variant_groups"] = [list(group) for group in step.variant_groups]
             return payload
         payload.update(
             {

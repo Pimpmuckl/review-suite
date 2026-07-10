@@ -57,9 +57,9 @@ def test_default_public_config_loads(tmp_path: Path) -> None:
         "discovery_deep_model": "gpt-5.4-xhigh",
         "discovery_loops": 1,
         "normal_discovery_loops": 3,
-        "normal_arena_loops": 0,
+        "normal_arena_loops": 13,
         "deep_discovery_loops": 2,
-        "deep_arena_loops": 0,
+        "deep_arena_loops": 13,
         "signoff_brief_model": "gpt-5.6-sol-medium",
         "signoff_deep_model": "gpt-5.6-sol-xhigh",
     }

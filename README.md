@@ -43,11 +43,11 @@ Review commands do not support a dirty-worktree override. Do not append `--allow
 After a review id exists, the normal advance command is bare `review.py --id <id>`. Review Suite records structured reviewer `clean` / `findings` verdicts automatically when available, runs the next safe step, and leaves explicit `--decision clean|findings` as a manual override for ambiguous or intentional human judgment cases.
 Inspect an existing id without advancing it with `review.py --id <id> --show-status`.
 
-Modes are built from one phased stack. Discovery uses GPT 5.4 for high-recall bug finding; signoff uses GPT 5.6 Sol for relevance, convergence, and current-head green checks.
+Modes are built from one phased stack. Phase discovery compares GPT 5.4, GPT 5.5, GPT 5.6 Sol, and GPT 5.6 Terra at medium effort; deep discovery compares the same models at xhigh. Signoff stays on GPT 5.6 Sol.
 Deslop passes are folded into any review that isn't using `emergency` as target.
 
 Arena loops are backend-injected by `review.py` only when user config opts in with `arena.enabled` plus a nonzero `normal_arena_loops` or `deep_arena_loops` budget.
-When enabled, arena loops spend discovery budget first. Each discovery phase still keeps at least one fixed GPT 5.4 pass as the safety net. Agents should keep following `review.py` actions; the only arena-specific agent action is grading an arena round when prompted.
+When enabled, arena loops spend discovery budget first. Each discovery phase keeps at least one four-model discovery brawl. The configured 13-event arena cycle runs four models per event, gives every candidate four appearances, and covers every candidate pair once.
 Arena grades require an explicit rating pool and one `--rank` per best-to-worst placement group; comma-separated variants in one group tie.
 
 ```text
@@ -63,9 +63,9 @@ Emergency turns green immediately on a clean urgent signoff. If findings are fix
 |--- Brief / Normal Phase ----
 |    |
 |    |--- Medium Discovery - Until: normal_discovery_loops
-|    |    |- Brief:  GPT 5.4 Medium x4, fixed fast pass
+|    |    |- Brief:  GPT 5.4 / 5.5 / 5.6 Sol / 5.6 Terra Medium
+|    |    |- Normal: four-model Medium brawl for remaining passes, min once
 |    |    |- Normal: optional backend-injected phase arena rounds
-|    |    |- Normal: GPT 5.4 Medium x4 for remaining passes, min once
 |    |
 |    |--- Medium Signoff - Until: Green
 |    |    |- GPT 5.6 Sol Medium x2
@@ -78,8 +78,8 @@ Emergency turns green immediately on a clean urgent signoff. If findings are fix
 |    |    |- Medium Signoff
 |    |
 |    |--- Deep Discovery - Until: deep_discovery_loops
+|    |    |- four-model XHigh brawl for remaining passes, min once
 |    |    |- optional backend-injected PR arena rounds
-|    |    |- GPT 5.4 XHigh x2 for remaining passes, min once
 |    |
 |    |--- Deep Signoff - Until: Green
 |    |    |- GPT 5.6 Sol XHigh x2

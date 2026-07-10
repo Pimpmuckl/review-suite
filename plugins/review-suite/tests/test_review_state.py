@@ -626,13 +626,15 @@ def test_review_state_status_surfaces_grade_before_structured_verdict(
                 "arena_round": True,
                 "status": "completed",
                 "task_id_hint": "feature/arena",
+                "rating_pool_id": "discovery-phase-gpt-5.6-v1",
                 "runs": [
                     {
-                        "slot": "alpha",
+                        "slot": slot,
                         "review_status": "completed",
                         "reviewer_output": "No findings.\n\nReview result: clean",
                         "grade_blocked": False,
                     }
+                    for slot in ("alpha", "bravo", "charlie", "delta")
                 ],
             }
         ),
@@ -668,6 +670,8 @@ def test_review_state_status_surfaces_grade_before_structured_verdict(
     assert "review_suite_arena.py grade" in str(action["cmd"])
     assert "--round-id arena-round-1" in str(action["cmd"])
     assert "--task-id feature/arena" in str(action["cmd"])
+    assert "--rating-pool-id discovery-phase-gpt-5.6-v1" in str(action["cmd"])
+    assert str(action["cmd"]).count("--rank") == 4
     assert str(round_state_dir) in str(action["cmd"])
     assert "--id rvw_progress" in str(action["next"])
     assert "--decision" not in str(action["cmd"])

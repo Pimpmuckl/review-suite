@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import sys
+from collections import Counter
 from copy import deepcopy
+from itertools import combinations
 from pathlib import Path
 
 import pytest
@@ -42,32 +44,37 @@ def test_default_stable_profiles_cover_all_modes(tmp_path: Path) -> None:
     assert config["orchestrator"]["calibration"]["auto_promotion_enabled"] is False
     assert profiles["stable"]["brief"].deslop_enabled is True
     assert [_step_summary(step) for step in profiles["stable"]["brief"].steps] == [
-        ("review", "broad-discovery", 4, "medium", False),
+        ("arena", "phase-discovery-brawl", None, None, False),
         ("review", "precision-signoff", 2, "medium", True),
     ]
     assert [step.name for step in profiles["stable"]["normal"].steps] == [
-        "broad-discovery-1",
-        "broad-discovery-2",
-        "broad-discovery-3",
+        "phase-discovery-brawl-1",
+        "phase-discovery-brawl-2",
+        "phase-discovery-brawl-3",
         "precision-signoff",
     ]
-    assert [step.count for step in profiles["stable"]["normal"].steps] == [4, 4, 4, 2]
+    assert [step.count for step in profiles["stable"]["normal"].steps] == [
+        None,
+        None,
+        None,
+        2,
+    ]
     assert [step.name for step in profiles["stable"]["deep"].steps] == [
-        "broad-discovery-1",
-        "broad-discovery-2",
-        "broad-discovery-3",
+        "phase-discovery-brawl-1",
+        "phase-discovery-brawl-2",
+        "phase-discovery-brawl-3",
         "precision-signoff",
-        "deep-discovery-1",
-        "deep-discovery-2",
+        "deep-discovery-brawl-1",
+        "deep-discovery-brawl-2",
         "deep-signoff",
     ]
     assert [step.reasoning_effort for step in profiles["stable"]["deep"].steps] == [
+        None,
+        None,
+        None,
         "medium",
-        "medium",
-        "medium",
-        "medium",
-        "xhigh",
-        "xhigh",
+        None,
+        None,
         "xhigh",
     ]
     assert profiles["stable"]["normal"].steps[-1].rerun_on_findings is True
@@ -116,7 +123,7 @@ def test_profile_step_rejects_conflicting_findings_policies(tmp_path: Path) -> N
         load_orchestrator_profiles(config)
 
 
-def test_stable_model_defaults_drive_profile_steps(tmp_path: Path) -> None:
+def test_stable_signoff_model_defaults_drive_profile_steps(tmp_path: Path) -> None:
     config = deepcopy(load_config(tmp_path / "state"))
     config["orchestrator"]["stable_defaults"].update(
         {
@@ -131,19 +138,11 @@ def test_stable_model_defaults_drive_profile_steps(tmp_path: Path) -> None:
 
     normal = profiles["stable"]["normal"].steps
     deep = profiles["stable"]["deep"].steps
-    assert [(step.model, step.reasoning_effort) for step in normal] == [
-        ("gpt-5.5", "medium"),
-        ("gpt-5.5", "medium"),
-        ("gpt-5.5", "medium"),
-        ("gpt-5.4", "high"),
+    assert [(step.model, step.reasoning_effort) for step in normal if step.model] == [
+        ("gpt-5.4", "high")
     ]
-    assert [(step.model, step.reasoning_effort) for step in deep] == [
-        ("gpt-5.5", "medium"),
-        ("gpt-5.5", "medium"),
-        ("gpt-5.5", "medium"),
+    assert [(step.model, step.reasoning_effort) for step in deep if step.model] == [
         ("gpt-5.4", "high"),
-        ("gpt-5.5", "xhigh"),
-        ("gpt-5.5", "xhigh"),
         ("gpt-5.4", "xhigh"),
     ]
 
@@ -156,12 +155,12 @@ def test_stable_discovery_loop_budgets_repeat_discovery_blocks(tmp_path: Path) -
     profiles = load_orchestrator_profiles(config)
 
     assert [step.name for step in profiles["stable"]["deep"].steps] == [
-        "broad-discovery-1",
-        "broad-discovery-2",
+        "phase-discovery-brawl-1",
+        "phase-discovery-brawl-2",
         "precision-signoff",
-        "deep-discovery-1",
-        "deep-discovery-2",
-        "deep-discovery-3",
+        "deep-discovery-brawl-1",
+        "deep-discovery-brawl-2",
+        "deep-discovery-brawl-3",
         "deep-signoff",
     ]
     assert [step.rerun_on_findings for step in profiles["stable"]["deep"].steps] == [
@@ -175,7 +174,7 @@ def test_stable_discovery_loop_budgets_repeat_discovery_blocks(tmp_path: Path) -
     ]
 
 
-def test_arena_disabled_omits_arena_steps_even_with_loop_budgets(
+def test_arena_disabled_omits_cohort_steps_but_keeps_discovery_brawls(
     tmp_path: Path,
 ) -> None:
     config = deepcopy(load_config(tmp_path / "state"))
@@ -185,18 +184,21 @@ def test_arena_disabled_omits_arena_steps_even_with_loop_budgets(
     profiles = load_orchestrator_profiles(config)
 
     assert [step.kind for step in profiles["stable"]["normal"].steps] == [
-        "review",
-        "review",
-        "review",
+        "arena",
+        "arena",
+        "arena",
         "review",
     ]
     assert [step.name for step in profiles["stable"]["normal"].steps] == [
-        "broad-discovery-1",
-        "broad-discovery-2",
-        "broad-discovery-3",
+        "phase-discovery-brawl-1",
+        "phase-discovery-brawl-2",
+        "phase-discovery-brawl-3",
         "precision-signoff",
     ]
-    assert all(step.kind != "arena" for step in profiles["stable"]["deep"].steps)
+    assert all(
+        "arena-phase" not in step.name for step in profiles["stable"]["deep"].steps
+    )
+    assert all("arena-pr" not in step.name for step in profiles["stable"]["deep"].steps)
 
 
 def test_disabled_first_step_in_loop_block_does_not_drop_enabled_steps(
@@ -246,24 +248,105 @@ def test_arena_enabled_inserts_arena_steps_and_keeps_minimum_discovery(
 
     normal = profiles["stable"]["normal"].steps
     assert [(step.kind, step.name, step.lane, step.task_class) for step in normal] == [
+        ("arena", "phase-discovery-brawl", "review_t1", "phase_review"),
         ("arena", "arena-phase-review-1", "review_t1", "phase_review"),
         ("arena", "arena-phase-review-2", "review_t1", "phase_review"),
-        ("review", "broad-discovery", None, None),
         ("review", "precision-signoff", None, None),
+    ]
+    assert [step.reporting_pool for step in normal if step.kind == "arena"] == [
+        False,
+        True,
+        True,
     ]
 
     deep = profiles["stable"]["deep"].steps
     assert [(step.kind, step.name, step.lane, step.task_class) for step in deep] == [
+        ("arena", "phase-discovery-brawl", "review_t1", "phase_review"),
         ("arena", "arena-phase-review-1", "review_t1", "phase_review"),
         ("arena", "arena-phase-review-2", "review_t1", "phase_review"),
-        ("review", "broad-discovery", None, None),
         ("review", "precision-signoff", None, None),
+        ("arena", "deep-discovery-brawl", "review_t3", "pr_review"),
         ("arena", "arena-pr-review-1", "review_t3", "pr_review"),
         ("arena", "arena-pr-review-2", "review_t3", "pr_review"),
         ("arena", "arena-pr-review-3", "review_t3", "pr_review"),
-        ("review", "deep-discovery", None, None),
         ("review", "deep-signoff", None, None),
     ]
+
+
+def test_default_arena_pools_are_exact_fresh_balanced_cohorts(tmp_path: Path) -> None:
+    config = load_config(tmp_path / "state")
+    pools = config["arena"]["pools"]
+    assert {pool["rating_pool_id"] for pool in pools.values()} == {
+        "discovery-phase-gpt-5.6-v1",
+        "discovery-deep-gpt-5.6-v1",
+        "arena-phase-gpt-5.6-v1",
+        "arena-deep-gpt-5.6-v1",
+    }
+    assert {name for name, pool in pools.items() if pool.get("reporting")} == {
+        "arena_phase",
+        "arena_deep",
+    }
+    assert pools["discovery_phase"]["variant_groups"] == [
+        [
+            "gpt-5.4-medium",
+            "gpt-5.5-medium",
+            "gpt-5.6-sol-medium",
+            "gpt-5.6-terra-medium",
+        ]
+    ]
+    assert pools["discovery_deep"]["variant_groups"] == [
+        [
+            "gpt-5.4-xhigh",
+            "gpt-5.5-xhigh",
+            "gpt-5.6-sol-xhigh",
+            "gpt-5.6-terra-xhigh",
+        ]
+    ]
+    expected = {
+        "arena_phase": {
+            "gpt-5.4-low",
+            "gpt-5.4-medium",
+            "gpt-5.5-low",
+            "gpt-5.5-medium",
+            "gpt-5.6-luna-medium",
+            "gpt-5.6-luna-high",
+            "gpt-5.6-luna-xhigh",
+            "gpt-5.6-luna-max",
+            "gpt-5.6-terra-medium",
+            "gpt-5.6-terra-high",
+            "gpt-5.6-terra-xhigh",
+            "gpt-5.6-sol-low",
+            "gpt-5.6-sol-medium",
+        },
+        "arena_deep": {
+            "gpt-5.4-medium",
+            "gpt-5.4-high",
+            "gpt-5.4-xhigh",
+            "gpt-5.5-medium",
+            "gpt-5.5-high",
+            "gpt-5.5-xhigh",
+            "gpt-5.6-terra-medium",
+            "gpt-5.6-terra-high",
+            "gpt-5.6-terra-xhigh",
+            "gpt-5.6-terra-max",
+            "gpt-5.6-sol-medium",
+            "gpt-5.6-sol-high",
+            "gpt-5.6-sol-xhigh",
+        },
+    }
+    for pool_name, candidates in expected.items():
+        groups = pools[pool_name]["variant_groups"]
+        assert len(groups) == 13
+        assert {variant for group in groups for variant in group} == candidates
+        assert Counter(variant for group in groups for variant in group) == Counter(
+            {variant: 4 for variant in candidates}
+        )
+        pairs = Counter(
+            pair for group in groups for pair in combinations(sorted(group), 2)
+        )
+        assert len(pairs) == 78
+        assert set(pairs.values()) == {1}
+        assert sum(map(len, groups)) == 52
 
 
 def test_arena_steps_reject_mismatched_lane_and_task_class(tmp_path: Path) -> None:
