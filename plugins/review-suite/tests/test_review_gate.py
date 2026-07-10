@@ -1548,7 +1548,7 @@ def test_run_gate_round_retries_operational_block_once(
     monkeypatch.setattr("review_gate._print_live_gate_completed_run", lambda run: None)
     cost_refreshes: list[dict[str, object]] = []
     monkeypatch.setattr(
-        "review_gate.refresh_review_cost_report_best_effort",
+        "review_gate.launch_review_cost_report_refresh_best_effort",
         lambda **kwargs: cost_refreshes.append(kwargs) or None,
     )
 
@@ -1731,7 +1731,8 @@ def test_run_gate_round_replaces_exhausted_gate_reviewer_with_inline_fallback(
     )
     monkeypatch.setattr("review_gate._print_live_gate_completed_run", lambda run: None)
     monkeypatch.setattr(
-        "review_gate.refresh_review_cost_report_best_effort", lambda **kwargs: None
+        "review_gate.launch_review_cost_report_refresh_best_effort",
+        lambda **kwargs: None,
     )
 
     payload, exit_code = run_gate_round(
@@ -1918,7 +1919,8 @@ def test_run_gate_round_inline_fallback_skips_cooling_backup(
     )
     monkeypatch.setattr("review_gate._print_live_gate_completed_run", lambda run: None)
     monkeypatch.setattr(
-        "review_gate.refresh_review_cost_report_best_effort", lambda **kwargs: None
+        "review_gate.launch_review_cost_report_refresh_best_effort",
+        lambda **kwargs: None,
     )
 
     payload, exit_code = run_gate_round(

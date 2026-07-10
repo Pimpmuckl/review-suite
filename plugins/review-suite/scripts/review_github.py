@@ -31,7 +31,7 @@ from review_suite_core import (
     resolve_ref,
     resolve_repo_root,
 )
-from review_costs import refresh_review_cost_report_best_effort
+from review_costs import launch_review_cost_report_refresh_best_effort
 from review_suite_local import default_state_dir
 
 DEFAULT_BOT_LOGIN = "chatgpt-codex-connector[bot]"
@@ -1055,7 +1055,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         "acknowledged_without_body",
         "existing_completed_cycle",
     }:
-        refresh_review_cost_report_best_effort(
+        launch_review_cost_report_refresh_best_effort(
             state_dir=Path(args.state_dir), review_cwd=review_root
         )
     emit_toon(public_cycle_payload(payload))

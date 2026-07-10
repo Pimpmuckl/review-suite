@@ -22,6 +22,7 @@ from review_suite_arena import (
     _normalize_arena_task_class,
     _print_findings,
     _public_local_task_name,
+    _record_grade_result,
     cmd_close_gate,
     cmd_costs,
     cmd_prune_state,
@@ -1026,6 +1027,63 @@ def test_has_direct_grade_inputs_requires_complete_tuple() -> None:
     )
 
 
+def test_record_grade_queues_reports_after_persisting_round(
+    monkeypatch, tmp_path: Path
+) -> None:
+    events: list[tuple[str, object]] = []
+    round_payload = {
+        "round_id": "round-1",
+        "task_class": "phase_review",
+        "review_cwd": str(tmp_path),
+    }
+    monkeypatch.setattr(
+        "review_suite_arena.load_round", lambda state_dir, round_id: round_payload
+    )
+    monkeypatch.setattr(
+        "review_suite_arena.build_record_from_grade",
+        lambda **kwargs: {"recorded_at": "2026-07-10T17:00:00Z"},
+    )
+    monkeypatch.setattr(
+        "review_suite_arena.append_record_if_new", lambda state_dir, record: True
+    )
+    monkeypatch.setattr(
+        "review_suite_arena.write_round",
+        lambda state_dir, payload: events.append(("write", dict(payload))),
+    )
+    monkeypatch.setattr(
+        "review_suite_arena.launch_arena_report_refresh_best_effort",
+        lambda **kwargs: events.append(("leaderboard", kwargs)) or True,
+    )
+    monkeypatch.setattr(
+        "review_suite_arena.launch_review_cost_report_refresh_best_effort",
+        lambda **kwargs: events.append(("costs", kwargs)) or True,
+    )
+
+    result = _record_grade_result(
+        roster={},
+        roster_path=tmp_path / "roster.json",
+        rubric={},
+        state_dir=tmp_path / "state",
+        round_id="round-1",
+        task_id="task-1",
+        rating_pool_id="pool-1",
+        rank_groups=["alpha", "bravo"],
+        basis=BASIS,
+        note=None,
+        caller_id="caller-1",
+        caller_id_source="explicit",
+    )
+
+    assert result == {
+        "status": "ok",
+        "recorded": True,
+        "duplicate": False,
+        "round_id": "round-1",
+    }
+    assert [event[0] for event in events] == ["write", "leaderboard", "costs"]
+    assert events[0][1]["grade_recorded"] is True
+
+
 def test_run_benchmarked_round_rejects_partial_grade_inputs(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="direct grading requires"):
         run_benchmarked_round(
@@ -1241,7 +1299,7 @@ def test_run_benchmarked_round_noninteractive_uses_toon_actions_without_stderr_n
         "review_suite_arena._current_branch_name", lambda review_cwd: "branch-1"
     )
     monkeypatch.setattr(
-        "review_suite_arena.refresh_review_cost_report_best_effort",
+        "review_suite_arena.launch_review_cost_report_refresh_best_effort",
         lambda **kwargs: None,
     )
     monkeypatch.setattr(
@@ -1290,7 +1348,6 @@ def test_run_benchmarked_round_noninteractive_uses_toon_actions_without_stderr_n
     assert "--task-id" in emitted[-1]["Action"]["cmd"]
     assert "--state-dir" in emitted[-1]["Action"]["cmd"]
     assert "--basis BASIS" in emitted[-1]["Action"]["cmd"]
-    assert "--refresh-report" not in emitted[-1]["Action"]["cmd"]
     assert set(emitted[-1]["Action"]) == {"cmd"}
 
 
@@ -2397,7 +2454,7 @@ def test_resume_orchestrator_review_step_collects_existing_running_round(
         "review_suite_arena.collect_round_results", fake_collect_round_results
     )
     monkeypatch.setattr(
-        "review_suite_arena.refresh_review_cost_report_best_effort",
+        "review_suite_arena.launch_review_cost_report_refresh_best_effort",
         lambda **kwargs: None,
     )
     monkeypatch.setattr("review_suite_arena._print_findings", lambda result: False)

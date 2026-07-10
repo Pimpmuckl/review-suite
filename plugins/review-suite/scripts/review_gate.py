@@ -64,7 +64,7 @@ from review_suite_local import (
     variant_service_tier,
     write_json,
 )
-from review_costs import refresh_review_cost_report_best_effort
+from review_costs import launch_review_cost_report_refresh_best_effort
 
 
 GATE_RUN_LOG_FILENAME = "gate_runs.jsonl"
@@ -1390,7 +1390,7 @@ def run_gate_round(
                 ):
                     append_jsonl(_gate_runs_path(state_dir), final_record)
                 refresh_gate_reports(state_dir=state_dir)
-            refresh_review_cost_report_best_effort(
+            launch_review_cost_report_refresh_best_effort(
                 state_dir=state_dir, review_cwd=review_cwd
             )
             with state_lock(state_dir, "gate-partial"):
@@ -1783,7 +1783,9 @@ def run_gate_round(
             refresh_gate_reports(state_dir=state_dir)
         else:
             refresh_gate_reports(state_dir=state_dir)
-    refresh_review_cost_report_best_effort(state_dir=state_dir, review_cwd=review_cwd)
+    launch_review_cost_report_refresh_best_effort(
+        state_dir=state_dir, review_cwd=review_cwd
+    )
     with state_lock(state_dir, "gate-partial"):
         partial_path.unlink(missing_ok=True)
     print_reviewer_output_section(completed)

@@ -29,6 +29,7 @@ from review_costs import (
     _thread_rows,
     collect_review_cost_rows,
     format_compact_number,
+    launch_arena_report_refresh_best_effort,
     launch_review_cost_report_refresh_best_effort,
     read_review_cost_row_cache,
     refresh_review_cost_report_best_effort,
@@ -820,7 +821,7 @@ def test_current_pr_number_can_skip_gh_for_background_refresh(
     assert _current_pr_number(tmp_path) == ""
 
 
-def test_wrapper_cost_refresh_launcher_detaches_costs_command(
+def test_background_refresh_launchers_detach_arena_commands(
     monkeypatch, tmp_path: Path
 ) -> None:
     calls: list[tuple[list[str], dict[str, object]]] = []
@@ -837,17 +838,37 @@ def test_wrapper_cost_refresh_launcher_detaches_costs_command(
         )
         is True
     )
+    assert (
+        launch_arena_report_refresh_best_effort(
+            state_dir=tmp_path, roster_path=tmp_path / "roster.json"
+        )
+        is True
+    )
 
-    command, kwargs = calls[0]
-    assert command[:3] == [
+    cost_command, cost_kwargs = calls[0]
+    assert cost_command[:3] == [
         sys.executable,
         str(SCRIPT_DIR / "review_suite_arena.py"),
         "costs",
     ]
-    assert command[3:] == ["--state-dir", str(tmp_path), "--cd", str(tmp_path)]
-    assert kwargs["stdin"] is subprocess.DEVNULL
-    assert kwargs["stdout"] is subprocess.DEVNULL
-    assert kwargs["stderr"] is subprocess.DEVNULL
+    assert cost_command[3:] == [
+        "--state-dir",
+        str(tmp_path),
+        "--cd",
+        str(tmp_path),
+    ]
+    assert cost_kwargs["stdin"] is subprocess.DEVNULL
+    assert cost_kwargs["stdout"] is subprocess.DEVNULL
+    assert cost_kwargs["stderr"] is subprocess.DEVNULL
+    assert calls[1][0] == [
+        sys.executable,
+        str(SCRIPT_DIR / "review_suite_arena.py"),
+        "refresh",
+        "--state-dir",
+        str(tmp_path),
+        "--roster",
+        str(tmp_path / "roster.json"),
+    ]
 
 
 def test_collect_review_cost_rows_includes_implementation_only_worktree(

@@ -101,9 +101,9 @@ from review_gate import (
 from review_costs import (
     DEFAULT_COST_REPORT_FILENAME,
     collect_review_cost_rows,
+    launch_arena_report_refresh_best_effort,
     launch_review_cost_report_refresh_best_effort,
     read_review_cost_row_cache,
-    refresh_review_cost_report_best_effort,
     update_review_cost_row_cache,
     write_review_cost_report,
 )
@@ -292,8 +292,6 @@ def build_parser() -> argparse.ArgumentParser:
     grade.add_argument("--rubric", default=str(default_rubric_path()))
     grade.add_argument("--state-dir", default=str(default_state_dir()))
     grade.add_argument("--caller-id")
-    grade.add_argument("--refresh-report", action="store_true")
-
     dismiss = sub.add_parser("dismiss-round")
     dismiss.add_argument("--round-id", required=True)
     dismiss.add_argument("--state-dir", default=str(default_state_dir()))
@@ -1471,6 +1469,7 @@ def run_benchmarked_round(
             rubric = load_rubric(rubric_path)
             result = _record_grade_result(
                 roster=roster,
+                roster_path=roster_path,
                 rubric=rubric,
                 state_dir=state_dir,
                 round_id=str(pending_round["round_id"]),
@@ -1481,7 +1480,6 @@ def run_benchmarked_round(
                 note=note,
                 caller_id=caller_id,
                 caller_id_source=caller_id_source,
-                refresh_report=True,
             )
             result = dict(result)
             result["task"] = public_task
@@ -1556,7 +1554,9 @@ def run_benchmarked_round(
     completed["roster_path"] = str(roster_path)
     completed["rubric_path"] = str(rubric_path)
     write_round(state_dir, completed)
-    refresh_review_cost_report_best_effort(state_dir=state_dir, review_cwd=review_cwd)
+    launch_review_cost_report_refresh_best_effort(
+        state_dir=state_dir, review_cwd=review_cwd
+    )
     if not bool(round_result.get("blocked")):
         _record_standalone_review_anchor_for_round(
             state_dir=state_dir,
@@ -1610,6 +1610,7 @@ def run_benchmarked_round(
 
     grade_result = _record_grade_result(
         roster=roster,
+        roster_path=roster_path,
         rubric=rubric,
         state_dir=state_dir,
         round_id=payload["round_id"],
@@ -1620,7 +1621,6 @@ def run_benchmarked_round(
         note=note,
         caller_id=caller_id,
         caller_id_source=caller_id_source,
-        refresh_report=True,
     )
     emit_toon(
         _completed_round_payload(
@@ -1635,6 +1635,7 @@ def run_benchmarked_round(
 def _record_grade_result(
     *,
     roster: dict[str, object],
+    roster_path: Path,
     rubric: dict[str, object],
     state_dir: Path,
     round_id: str,
@@ -1643,7 +1644,6 @@ def _record_grade_result(
     rank_groups: list[str],
     basis: str,
     note: str | None,
-    refresh_report: bool,
     caller_id: str | None,
     caller_id_source: str | None,
 ) -> dict[str, object]:
@@ -1672,11 +1672,6 @@ def _record_grade_result(
             "duplicate": False,
             "round_id": round_id,
         }
-    if refresh_report:
-        _refresh_state_and_reports(state_dir=state_dir, roster=roster)
-        result["refreshed"] = True
-    else:
-        result["refreshed"] = False
     round_payload["graded_at"] = str(record["recorded_at"])
     round_payload["graded_by_caller_id"] = caller_id
     round_payload["graded_by_caller_id_source"] = caller_id_source
@@ -1684,7 +1679,10 @@ def _record_grade_result(
     round_payload["grade_recorded"] = bool(result["recorded"] or result["duplicate"])
     write_round(state_dir, round_payload)
     round_review_cwd = str(round_payload.get("review_cwd") or "").strip()
-    refresh_review_cost_report_best_effort(
+    launch_arena_report_refresh_best_effort(
+        state_dir=state_dir, roster_path=roster_path
+    )
+    launch_review_cost_report_refresh_best_effort(
         state_dir=state_dir,
         review_cwd=Path(round_review_cwd) if round_review_cwd else None,
     )
@@ -1787,7 +1785,9 @@ def cmd_run_round(args: argparse.Namespace) -> int:
         payload["round_id"]
     )
     write_round(state_dir, completed)
-    refresh_review_cost_report_best_effort(state_dir=state_dir, review_cwd=review_cwd)
+    launch_review_cost_report_refresh_best_effort(
+        state_dir=state_dir, review_cwd=review_cwd
+    )
     result = public_round_result(
         completed,
         output_slots=_visible_completed_output_slots(
@@ -1935,7 +1935,9 @@ def cmd_reroll_slot(args: argparse.Namespace) -> int:
             task_id=str(completed["task_id_hint"]),
         )
     write_round(state_dir, completed)
-    refresh_review_cost_report_best_effort(state_dir=state_dir, review_cwd=review_cwd)
+    launch_review_cost_report_refresh_best_effort(
+        state_dir=state_dir, review_cwd=review_cwd
+    )
     if not _output_isatty():
         emit_toon(
             _completed_round_payload(
@@ -2309,7 +2311,7 @@ def cmd_close_gate(args: argparse.Namespace) -> int:
         note=str(args.note or "").strip() or None,
         workflow_anchor_recorded=workflow_anchor_recorded,
     )
-    refresh_review_cost_report_best_effort(
+    launch_review_cost_report_refresh_best_effort(
         state_dir=state_dir,
         review_cwd=Path(review_cwd_text) if review_cwd_text else None,
     )
@@ -2443,6 +2445,7 @@ def cmd_grade(args: argparse.Namespace) -> int:
     ).strip()
     result = _record_grade_result(
         roster=roster,
+        roster_path=Path(args.roster),
         rubric=rubric,
         state_dir=state_dir,
         round_id=round_id,
@@ -2453,7 +2456,6 @@ def cmd_grade(args: argparse.Namespace) -> int:
         note=args.note,
         caller_id=caller_id,
         caller_id_source=caller_id_source,
-        refresh_report=bool(args.refresh_report),
     )
     result["task"] = _public_local_task_name(str(round_payload["task_class"]))
     if not _output_isatty():
