@@ -1469,16 +1469,130 @@ def test_skip_deslop_does_not_resume_same_head_sidecar_cycle(
     }
 
 
-@pytest.mark.parametrize(
-    ("terminal_command", "expected"),
-    [(None, None), ("clean", "clean"), ("findings", "findings")],
-)
-def test_auto_decision_uses_terminal_command(
-    tmp_path: Path, terminal_command: str | None, expected: str | None
+def test_id_auto_records_structured_clean_and_runs_next_step(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    run = {"slot": "alpha", "status": "completed", "summary": "No findings."}
-    if terminal_command:
-        run["terminal_command"] = terminal_command
+    _stub_deslop(monkeypatch)
+    review_calls = _stub_review_with_terminal(monkeypatch, "clean", "clean")
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _use_compact_normal_profile(monkeypatch, state_dir)
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/auto-clean")
+    _commit_file(repo, "app.txt", "feature\n", "feature")
+
+    _, created = _run_review(
+        monkeypatch,
+        [
+            "--mode",
+            "normal",
+            "--cd",
+            str(repo),
+            "--base",
+            "main",
+            "--state-dir",
+            str(state_dir),
+        ],
+    )
+    public_id = str(created["review"])
+
+    exit_code, first_step = _run_review(
+        monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)]
+    )
+
+    assert exit_code == 0
+    assert "--decision" not in str(first_step["Action"]["cmd"])
+    assert len(review_calls) == 1
+    state = _cycle_payload(state_dir, public_id)
+    assert state["decisions"] == [
+        {
+            "round_id": "phase_review-round-1",
+            "lane": "review_t1",
+            "command": "clean",
+            "reviewed_head": state["rounds"][0]["reviewed_head"],
+        }
+    ]
+    assert state["pending_action"] == {
+        "kind": "run-review-step",
+        "step_index": 1,
+        "step": "precision-signoff",
+    }
+
+    exit_code, final = _run_review(
+        monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)]
+    )
+
+    assert exit_code == 0
+    assert len(review_calls) == 2
+    _assert_github_handoff(
+        final["Action"],
+        public_id=public_id,
+        state_dir=state_dir,
+        blocked_by=["full_suite:unknown", "ci:unknown"],
+    )
+    state = _cycle_payload(state_dir, public_id)
+    assert [item["command"] for item in state["decisions"]] == ["clean", "clean"]
+    assert state["validation"]["review_green"] == "passed"
+
+
+def test_id_auto_records_structured_findings_before_fix_loop(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _stub_deslop(monkeypatch)
+    review_calls = _stub_review_with_terminal(monkeypatch, "findings", "clean")
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _use_compact_normal_profile(monkeypatch, state_dir)
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/auto-findings")
+    _commit_file(repo, "app.txt", "feature\n", "feature")
+
+    _, created = _run_review(
+        monkeypatch,
+        [
+            "--mode",
+            "normal",
+            "--cd",
+            str(repo),
+            "--base",
+            "main",
+            "--state-dir",
+            str(state_dir),
+        ],
+    )
+    public_id = str(created["review"])
+
+    exit_code, findings = _run_review(
+        monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)]
+    )
+
+    assert exit_code == 0
+    assert (
+        findings["Action"]["note"]
+        == "Commit/amend valid fixes, then rerun this command."
+    )
+    state = _cycle_payload(state_dir, public_id)
+    assert state["decisions"][0]["command"] == "findings"
+    assert state["active_findings"]["status"] == "fix-pending"
+    assert len(review_calls) == 1
+
+    _commit_file(repo, "app.txt", "fixed\n", "fix findings")
+    exit_code, clean = _run_review(
+        monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)]
+    )
+
+    assert exit_code == 0
+    assert "--decision" not in str(clean["Action"]["cmd"])
+    assert len(review_calls) == 2
+    state = _cycle_payload(state_dir, public_id)
+    assert [item["command"] for item in state["decisions"]] == ["findings", "clean"]
+    assert state["pending_action"] is None
+    assert state["validation"]["review_green"] == "passed"
+
+
+def test_auto_decision_requires_terminal_command(tmp_path: Path) -> None:
     state = {
         "stage": "decision-pending",
         "pending_action": {
@@ -1492,14 +1606,14 @@ def test_auto_decision_uses_terminal_command(
                 "lane": "review_t1",
                 "status": "decision-pending",
                 "review_status": "completed",
-                "runs": [run],
+                "runs": [
+                    {"slot": "alpha", "status": "completed", "summary": "No findings."}
+                ],
             }
         ],
     }
 
-    assert (
-        review._auto_decision_command(state, state_dir=tmp_path / "state") == expected
-    )
+    assert review._auto_decision_command(state, state_dir=tmp_path / "state") is None
 
 
 def test_auto_decision_rejects_blocked_terminal_round(tmp_path: Path) -> None:
@@ -2694,6 +2808,101 @@ def test_github_review_runs_existing_lane_with_canonical_state_dir_and_force(
         ]
     ]
     assert len(review_calls) == 1
+
+
+def test_github_result_findings_reenters_existing_cycle_for_final_signoff(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _stub_deslop(monkeypatch)
+    review_calls = _stub_review(monkeypatch, "signoff-round-1", "signoff-round-2")
+    followup_calls = _stub_followup(monkeypatch, "github-followup-1")
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _use_single_step_normal_profile(monkeypatch, state_dir)
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/github-findings")
+    _commit_file(repo, "app.txt", "feature\n", "feature")
+
+    _, opened = _run_review(
+        monkeypatch,
+        [
+            "--mode",
+            "normal",
+            "--cd",
+            str(repo),
+            "--base",
+            "main",
+            "--state-dir",
+            str(state_dir),
+        ],
+    )
+    public_id = str(opened["review"])
+    _, green = _run_review(
+        monkeypatch,
+        ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)],
+    )
+    _assert_github_handoff(
+        green["Action"],
+        public_id=public_id,
+        state_dir=state_dir,
+        blocked_by=["full_suite:unknown", "ci:unknown"],
+    )
+
+    exit_code, github_findings = _run_review(
+        monkeypatch,
+        [
+            "--id",
+            public_id,
+            "--github-result",
+            "findings",
+            "--github-note",
+            "GitHub found a stale replay bug.",
+            "--state-dir",
+            str(state_dir),
+        ],
+    )
+
+    assert exit_code == 0
+    assert github_findings["github_review"] == "findings"
+    assert (
+        github_findings["Action"]["note"]
+        == "Commit/amend valid fixes, then rerun this command."
+    )
+    state = _cycle_payload(state_dir, public_id)
+    assert state["active_findings"]["lane"] == "review-github"
+    assert state["active_findings"]["profile_round_id"] == "signoff-round-1"
+    assert state["validation"]["review_green"] == "unknown"
+
+    _commit_file(repo, "app.txt", "feature\nfixed\n", "fix github finding")
+    _, signoff = _run_review(
+        monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)]
+    )
+    assert "--decision clean" in str(signoff["Action"]["cmd"])
+    assert len(followup_calls) == 0
+    assert len(review_calls) == 2
+    assert review_calls[1]["step_name"] == "precision-signoff"
+    assert review_calls[1]["step_position"] == 1
+    assert review_calls[1]["step_total"] == 1
+    state = _cycle_payload(state_dir, public_id)
+    assert state["pending_action"]["round_id"] == "signoff-round-2"
+    assert state["review_progress"]["completed_steps"] == []
+
+    _, final_clean = _run_review(
+        monkeypatch,
+        ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)],
+    )
+    _assert_github_handoff(
+        final_clean["Action"],
+        public_id=public_id,
+        state_dir=state_dir,
+        blocked_by=["full_suite:unknown", "ci:unknown"],
+    )
+    assert (
+        final_clean["Action"]["note"]
+        == "GitHub findings were fixed and locally signed off; request GitHub review again."
+    )
 
 
 def test_github_result_clean_and_waived_are_terminal_for_existing_cycle(
@@ -4218,6 +4427,72 @@ def test_clean_followup_note_does_not_leak_to_later_review_steps(
         "step_index": 1,
         "step": "final-sweep",
     }
+
+
+def test_followup_findings_loops_back_to_fix_pending(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _stub_deslop(monkeypatch)
+    _stub_review(monkeypatch, "phase_review-round-1")
+    followup_calls = _stub_followup(monkeypatch, "followup-round-1")
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/followup-findings")
+    _commit_file(repo, "app.txt", "feature\n", "feature")
+
+    _, created = _run_review(
+        monkeypatch,
+        [
+            "--mode",
+            "deep",
+            "--cd",
+            str(repo),
+            "--base",
+            "main",
+            "--state-dir",
+            str(state_dir),
+        ],
+    )
+    public_id = str(created["review"])
+    _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+    _run_review(
+        monkeypatch,
+        ["--id", public_id, "--decision", "findings", "--state-dir", str(state_dir)],
+    )
+    _commit_file(repo, "app.txt", "fixed once\n", "fix findings")
+
+    _, followup = _run_review(
+        monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)]
+    )
+    assert "stage" not in followup
+    assert len(followup_calls) == 1
+
+    exit_code, findings = _run_review(
+        monkeypatch,
+        ["--id", public_id, "--decision", "findings", "--state-dir", str(state_dir)],
+    )
+
+    assert exit_code == 0
+    assert "stage" not in findings
+    assert (
+        findings["Action"]["note"]
+        == "Commit/amend valid fixes, then rerun this command."
+    )
+    state = _cycle_payload(state_dir, public_id)
+    assert state["active_findings"]["round_id"] == "followup-round-1"
+    assert state["active_findings"]["lane"] == "review-followup"
+    assert state["active_findings"]["previous_round_id"] == "phase_review-round-1"
+    assert state["active_findings"]["status"] == "fix-pending"
+    assert state["validation"]["review_green"] == "unknown"
+
+    exit_code, reprint = _run_review(
+        monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)]
+    )
+    assert exit_code == 0
+    assert "stage" not in reprint
+    assert len(followup_calls) == 1
 
 
 def test_validation_flags_do_not_run_expensive_resume(
