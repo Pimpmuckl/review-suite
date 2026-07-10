@@ -115,23 +115,32 @@ def _default_base_ref(review_cwd: Path) -> str:
                 "git",
                 "symbolic-ref",
                 "--quiet",
-                "--short",
                 f"refs/remotes/{remote}/HEAD",
             ],
         )
-        if default_ref:
-            return default_ref
+        if default_ref and _optional_git_text(
+            review_cwd,
+            ["git", "rev-parse", "--verify", "--quiet", default_ref],
+        ):
+            return default_ref.removeprefix("refs/remotes/")
     for remote in remotes:
         for fallback in ("main", "master"):
             remote_ref = f"{remote}/{fallback}"
             if _optional_git_text(
                 review_cwd,
-                ["git", "rev-parse", "--verify", "--quiet", remote_ref],
+                [
+                    "git",
+                    "rev-parse",
+                    "--verify",
+                    "--quiet",
+                    f"refs/remotes/{remote}/{fallback}",
+                ],
             ):
                 return remote_ref
     for fallback in ("main", "master"):
         if _optional_git_text(
-            review_cwd, ["git", "rev-parse", "--verify", "--quiet", fallback]
+            review_cwd,
+            ["git", "rev-parse", "--verify", "--quiet", f"refs/heads/{fallback}"],
         ):
             return fallback
     raise ValueError(

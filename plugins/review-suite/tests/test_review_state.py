@@ -138,6 +138,7 @@ def test_effective_base_ref_keeps_explicit_local_base(tmp_path: Path) -> None:
     head = _commit_file(repo, "app.txt", "content\n", "initial")
     _git(repo, "remote", "add", "origin", str(tmp_path / "origin.git"))
     _git(repo, "update-ref", "refs/remotes/origin/main", head)
+    _git(repo, "branch", "origin/renamed", head)
     _git(
         repo,
         "symbolic-ref",
@@ -150,7 +151,7 @@ def test_effective_base_ref_keeps_explicit_local_base(tmp_path: Path) -> None:
     assert payload == {"base": "main", "requested_base": "main"}
 
 
-def test_effective_base_ref_uses_remote_main_without_symbolic_head(
+def test_effective_base_ref_ignores_dangling_remote_head(
     tmp_path: Path,
 ) -> None:
     repo = tmp_path / "repo"
@@ -158,6 +159,12 @@ def test_effective_base_ref_uses_remote_main_without_symbolic_head(
     head = _commit_file(repo, "app.txt", "content\n", "initial")
     _git(repo, "remote", "add", "origin", str(tmp_path / "origin.git"))
     _git(repo, "update-ref", "refs/remotes/origin/main", head)
+    _git(
+        repo,
+        "symbolic-ref",
+        "refs/remotes/origin/HEAD",
+        "refs/remotes/origin/renamed",
+    )
 
     payload = effective_base_ref(repo, None)
 
@@ -172,6 +179,17 @@ def test_effective_base_ref_falls_back_to_local_main(tmp_path: Path) -> None:
     payload = effective_base_ref(repo, None)
 
     assert payload == {"base": "main", "requested_base": "main"}
+
+
+def test_effective_base_ref_does_not_treat_tag_as_local_branch(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "content\n", "initial")
+    _git(repo, "branch", "-m", "trunk")
+    _git(repo, "tag", "main")
+
+    with pytest.raises(ValueError, match="pass --base <ref>"):
+        effective_base_ref(repo, None)
 
 
 def test_inspect_workflow_status_without_anchor_recommends_full_review(
