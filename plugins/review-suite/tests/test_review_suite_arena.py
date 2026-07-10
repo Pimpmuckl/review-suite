@@ -121,13 +121,11 @@ def test_blocking_round_error_uses_compact_action_for_completed_round(
     assert str(error) == "pending round blocks review_t1: round-123"
     assert "grade_command" not in str(error)
     assert "dismiss_command" not in str(error)
-    assert set(error.action_payload) == {"cmd", "tie_clean", "dismiss_cmd"}
-    assert "--winner WINNER" in str(error.action_payload["cmd"])
+    assert set(error.action_payload) == {"cmd", "dismiss_cmd"}
+    assert "--rating-pool-id RATING_POOL_ID" in str(error.action_payload["cmd"])
+    assert "--rank" in str(error.action_payload["cmd"])
     assert "--round-id round-123" in str(error.action_payload["cmd"])
     assert f"--state-dir {tmp_path / 'state'}" in str(error.action_payload["cmd"])
-    assert "--winner tie --basis tie_clean" in str(error.action_payload["tie_clean"])
-    assert "--round-id round-123" in str(error.action_payload["tie_clean"])
-    assert f"--state-dir {tmp_path / 'state'}" in str(error.action_payload["tie_clean"])
     assert "dismiss-round" in str(error.action_payload["dismiss_cmd"])
 
 
@@ -948,10 +946,7 @@ def test_completed_round_payload_success_only_emits_grade_command() -> None:
     )
 
     assert payload["Action"]["cmd"] == "grade-cmd"
-    assert payload["Action"]["tie_clean"].endswith(
-        "review_suite_arena.py grade --winner tie --basis tie_clean"
-    )
-    assert set(payload["Action"]) == {"cmd", "tie_clean"}
+    assert set(payload["Action"]) == {"cmd"}
     assert "runs" not in payload
 
 
@@ -966,9 +961,6 @@ def test_completed_round_payload_omits_inspect_when_round_id_is_known() -> None:
     )
 
     assert payload["Action"]["cmd"] == "grade-cmd"
-    assert payload["Action"]["tie_clean"].endswith(
-        "review_suite_arena.py grade --winner tie --basis tie_clean"
-    )
     assert "inspect" not in payload["Action"]
 
 
@@ -988,14 +980,41 @@ def test_completed_round_payload_manual_omits_run_rows_after_output() -> None:
 def test_has_direct_grade_inputs_requires_complete_tuple() -> None:
     assert _has_direct_grade_inputs(
         task_id="task-123",
-        winner="alpha",
+        rating_pool_id="pool-v1",
+        rank_groups=["alpha", "bravo"],
         basis=BASIS,
     )
     assert not _has_direct_grade_inputs(
         task_id="task-123",
-        winner="alpha",
+        rating_pool_id="pool-v1",
+        rank_groups=["alpha", "bravo"],
         basis=None,
     )
+
+
+def test_run_benchmarked_round_rejects_partial_grade_inputs(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="direct grading requires"):
+        run_benchmarked_round(
+            task_class="pr_review",
+            review_cwd=tmp_path,
+            roster_path=tmp_path / "roster.json",
+            rubric_path=tmp_path / "rubric.json",
+            state_dir=tmp_path / "state",
+            sqlite_path=tmp_path / "state.sqlite",
+            seed=None,
+            progress_interval_seconds=30,
+            allow_unsafe_windows_wsl_fallback=False,
+            review_scope={"base": "main"},
+            prompt="",
+            caller_id="caller-1",
+            caller_id_source="explicit",
+            ignore_pending_grades=False,
+            task_id="task-123",
+            rating_pool_id="pool-v1",
+            rank_groups=None,
+            basis=BASIS,
+            note=None,
+        )
 
 
 def test_run_benchmarked_round_direct_grade_uses_latest_pending_round(
@@ -1046,17 +1065,17 @@ def test_run_benchmarked_round_direct_grade_uses_latest_pending_round(
         caller_id_source="explicit",
         ignore_pending_grades=False,
         task_id="task-123",
-        winner="alpha",
+        rating_pool_id="pool-v1",
+        rank_groups=["alpha", "bravo"],
         basis=BASIS,
         note="shared",
-        alpha_note="alpha",
-        bravo_note="bravo",
     )
 
     assert result == 0
     assert captured["round_id"] == "latest-round"
     assert captured["task_id"] == "task-123"
-    assert captured["winner"] == "alpha"
+    assert captured["rating_pool_id"] == "pool-v1"
+    assert captured["rank_groups"] == ["alpha", "bravo"]
     assert captured["basis"] == BASIS
     assert emitted == [
         {"status": "graded", "round_id": "latest-round", "task": "review_t3"}
@@ -1126,11 +1145,10 @@ def test_run_benchmarked_round_emits_round_banner_and_compact_payload(
         caller_id_source="explicit",
         ignore_pending_grades=False,
         task_id=None,
-        winner=None,
+        rating_pool_id=None,
+        rank_groups=None,
         basis=None,
         note=None,
-        alpha_note=None,
-        bravo_note=None,
         public_task_name="review_t1",
     )
 
@@ -1223,26 +1241,23 @@ def test_run_benchmarked_round_noninteractive_uses_toon_actions_without_stderr_n
         caller_id_source="explicit",
         ignore_pending_grades=False,
         task_id=None,
-        winner=None,
+        rating_pool_id=None,
+        rank_groups=None,
         basis=None,
         note=None,
-        alpha_note=None,
-        bravo_note=None,
         public_task_name="review_t1",
     )
 
     assert result == 0
     assert set(emitted[-1]) == {"Action"}
-    assert "--winner WINNER" in emitted[-1]["Action"]["cmd"]
+    assert "--rating-pool-id RATING_POOL_ID" in emitted[-1]["Action"]["cmd"]
+    assert emitted[-1]["Action"]["cmd"].count("--rank") == 2
     assert "--round-id" in emitted[-1]["Action"]["cmd"]
     assert "--task-id" in emitted[-1]["Action"]["cmd"]
     assert "--state-dir" in emitted[-1]["Action"]["cmd"]
     assert "--basis BASIS" in emitted[-1]["Action"]["cmd"]
-    assert "--winner tie --basis tie_clean" in emitted[-1]["Action"]["tie_clean"]
-    assert "--round-id" in emitted[-1]["Action"]["tie_clean"]
-    assert "--state-dir" in emitted[-1]["Action"]["tie_clean"]
     assert "--refresh-report" not in emitted[-1]["Action"]["cmd"]
-    assert set(emitted[-1]["Action"]) == {"cmd", "tie_clean"}
+    assert set(emitted[-1]["Action"]) == {"cmd"}
 
 
 def test_run_benchmarked_round_warns_for_deep_review_without_model_names(
@@ -1315,11 +1330,10 @@ def test_run_benchmarked_round_warns_for_deep_review_without_model_names(
         caller_id_source="explicit",
         ignore_pending_grades=False,
         task_id=None,
-        winner=None,
+        rating_pool_id=None,
+        rank_groups=None,
         basis=None,
         note=None,
-        alpha_note=None,
-        bravo_note=None,
         public_task_name="review_t3",
     )
 
@@ -1374,11 +1388,10 @@ def test_run_benchmarked_round_dirty_base_guard_does_not_persist_sampled_round(
             caller_id_source="explicit",
             ignore_pending_grades=False,
             task_id=None,
-            winner=None,
+            rating_pool_id=None,
+            rank_groups=None,
             basis=None,
             note=None,
-            alpha_note=None,
-            bravo_note=None,
             public_task_name="review_t1",
         )
 
@@ -1429,11 +1442,10 @@ def test_run_benchmarked_round_runtime_guard_does_not_persist_sampled_round(
             caller_id_source="explicit",
             ignore_pending_grades=False,
             task_id=None,
-            winner=None,
+            rating_pool_id=None,
+            rank_groups=None,
             basis=None,
             note=None,
-            alpha_note=None,
-            bravo_note=None,
             public_task_name="review_t1",
         )
 
@@ -1511,11 +1523,10 @@ def test_run_benchmarked_round_interactive_blocked_round_skips_final_toon(
         caller_id_source="explicit",
         ignore_pending_grades=False,
         task_id=None,
-        winner=None,
+        rating_pool_id=None,
+        rank_groups=None,
         basis=None,
         note=None,
-        alpha_note=None,
-        bravo_note=None,
         public_task_name="review_t1",
     )
 
@@ -1553,11 +1564,10 @@ def test_run_benchmarked_round_direct_grade_rejects_ambiguous_caller_pending_rou
             caller_id_source="explicit",
             ignore_pending_grades=False,
             task_id="task-123",
-            winner="alpha",
+            rating_pool_id="pool-v1",
+            rank_groups=["alpha", "bravo"],
             basis=BASIS,
             note=None,
-            alpha_note=None,
-            bravo_note=None,
         )
 
 
@@ -1623,11 +1633,10 @@ def test_run_benchmarked_round_complete_grade_inputs_without_pending_falls_throu
         caller_id_source="explicit",
         ignore_pending_grades=False,
         task_id="task-123",
-        winner="alpha",
+        rating_pool_id="pool-v1",
+        rank_groups=["alpha", "bravo"],
         basis=BASIS,
         note=None,
-        alpha_note=None,
-        bravo_note=None,
     )
 
     assert result == 0
@@ -1703,11 +1712,10 @@ def test_run_benchmarked_round_direct_grade_without_caller_uses_single_repo_pend
         caller_id_source=None,
         ignore_pending_grades=False,
         task_id="task-123",
-        winner="alpha",
+        rating_pool_id="pool-v1",
+        rank_groups=["alpha", "bravo"],
         basis=BASIS,
         note=None,
-        alpha_note=None,
-        bravo_note=None,
     )
 
     assert result == 0
@@ -1787,11 +1795,10 @@ def test_run_benchmarked_round_direct_grade_with_caller_falls_back_to_unique_rep
         caller_id_source="explicit",
         ignore_pending_grades=False,
         task_id="task-123",
-        winner="alpha",
+        rating_pool_id="pool-v1",
+        rank_groups=["alpha", "bravo"],
         basis=BASIS,
         note=None,
-        alpha_note=None,
-        bravo_note=None,
     )
 
     assert result == 0
@@ -1844,11 +1851,10 @@ def test_run_benchmarked_round_direct_grade_without_caller_rejects_ambiguous_rep
             caller_id_source=None,
             ignore_pending_grades=False,
             task_id="task-123",
-            winner="alpha",
+            rating_pool_id="pool-v1",
+            rank_groups=["alpha", "bravo"],
             basis=BASIS,
             note=None,
-            alpha_note=None,
-            bravo_note=None,
         )
 
 

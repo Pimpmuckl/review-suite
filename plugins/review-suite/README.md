@@ -23,6 +23,7 @@ Deslop passes are folded into any review that isn't using `emergency` as target;
 
 Arena loops are backend-injected by `review.py` only when user config opts in with `arena.enabled` plus a nonzero `normal_arena_loops` or `deep_arena_loops` budget.
 When enabled, arena loops spend discovery budget first. Each discovery phase still keeps at least one fixed GPT 5.4 pass as the safety net. Agents should keep following `review.py` actions; the only arena-specific agent action is grading an arena round when prompted.
+Arena grades require an explicit rating pool and one `--rank` per best-to-worst placement group; comma-separated variants in one group tie.
 
 ```text
 |---- Emergency Phase ----

@@ -60,7 +60,6 @@ from review_suite_local import (
     load_round,
     load_rubric,
     normalize_review_cwd_value,
-    normalize_grade_basis,
     iter_round_payloads,
     print_deep_review_wait_note,
     promote,
@@ -134,9 +133,6 @@ def _blocking_round_error(
         message = f"pending round blocks {action}: {round_id}"
         action_payload: dict[str, object] = {
             "cmd": _grade_command(round_id=round_id, state_dir=state_dir),
-            "tie_clean": _tie_clean_grade_command(
-                round_id=round_id, state_dir=state_dir
-            ),
             "dismiss_cmd": _dismiss_round_command(round_id=round_id),
         }
     else:
@@ -206,11 +202,15 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--wsl", action="store_true")
     run.add_argument("--caller-id")
     run.add_argument("--ignore-pending-grades", action="store_true")
-    run.add_argument("--winner", help="alpha, bravo, or tie")
+    run.add_argument("--rating-pool-id", help="rating pool/epoch")
+    run.add_argument(
+        "--rank",
+        action="append",
+        dest="rank_groups",
+        help="repeat best to worst; comma-separate ties",
+    )
     run.add_argument("--basis", help="grade basis")
     run.add_argument("--note")
-    run.add_argument("--alpha-note")
-    run.add_argument("--bravo-note")
 
     sample = sub.add_parser("sample")
     sample.add_argument("--task-class", required=True, choices=task_class_choices)
@@ -271,13 +271,16 @@ def build_parser() -> argparse.ArgumentParser:
     grade = sub.add_parser("grade")
     grade.add_argument("--round-id")
     grade.add_argument("--task-id")
+    grade.add_argument("--rating-pool-id", required=True, help="rating pool/epoch")
     grade.add_argument(
-        "--winner", required=True, help="alpha, bravo, tie, or a concrete variant id"
+        "--rank",
+        action="append",
+        dest="rank_groups",
+        required=True,
+        help="repeat best to worst; comma-separate ties",
     )
     grade.add_argument("--basis", required=True, help="grade basis")
     grade.add_argument("--note")
-    grade.add_argument("--alpha-note")
-    grade.add_argument("--bravo-note")
     grade.add_argument("--roster", default=str(default_roster_path()))
     grade.add_argument("--rubric", default=str(default_rubric_path()))
     grade.add_argument("--state-dir", default=str(default_state_dir()))
@@ -404,57 +407,6 @@ def _validate_benchmarked_review_runtime(
     )
 
 
-def _prompt_line(label: str, default: str | None = None) -> str:
-    suffix = f" [{default}]" if default else ""
-    print(f"{label}{suffix}:", file=sys.stderr, flush=True)
-    try:
-        value = input().strip()
-    except EOFError:
-        raise EOFError(f"no interactive input available for prompt: {label}")
-    if value:
-        return value
-    return default or ""
-
-
-def _prompt_winner(default: str | None = None) -> str:
-    while True:
-        winner = (
-            _prompt_line(
-                "Winner (alpha/bravo/tie; use tie only when materially indistinguishable)",
-                default=default,
-            )
-            .strip()
-            .lower()
-        )
-        if winner in {"alpha", "bravo", "tie"}:
-            return winner
-        print(
-            "[review-suite] winner must be alpha, bravo, or tie",
-            file=sys.stderr,
-            flush=True,
-        )
-
-
-def _prompt_basis(rubric: dict[str, object]) -> str:
-    basis_values = [str(item) for item in list(rubric.get("basis") or [])]
-    default = "valid_findings_vs_none"
-    while True:
-        value = _prompt_line(
-            "Basis",
-            default=default,
-        )
-        try:
-            return normalize_grade_basis(value, rubric)
-        except Exception as exc:
-            print(f"[review-suite] invalid basis: {exc}", file=sys.stderr, flush=True)
-            if basis_values:
-                print(
-                    f"[review-suite] basis values: {', '.join(basis_values)}",
-                    file=sys.stderr,
-                    flush=True,
-                )
-
-
 def _print_findings(result: dict[str, object]) -> bool:
     return print_reviewer_output_section(
         [run for run in list(result.get("runs") or []) if isinstance(run, dict)]
@@ -489,7 +441,8 @@ def _grade_command(
     *,
     round_id: str | None = None,
     task_id: str | None = None,
-    winner: str = "WINNER",
+    rating_pool_id: str = "RATING_POOL_ID",
+    rank_groups: list[str] | None = None,
     basis: str = "BASIS",
     state_dir: Path | None = None,
 ) -> str:
@@ -502,40 +455,19 @@ def _grade_command(
         parts.extend(["--round-id", round_id])
     if task_id:
         parts.extend(["--task-id", task_id])
-    parts.extend(
-        [
-            "--winner",
-            winner,
-            "--basis",
-            basis,
-        ]
-    )
+    parts.extend(["--rating-pool-id", rating_pool_id])
+    for rank_group in rank_groups or ["FIRST[,TIED]", "NEXT"]:
+        parts.extend(["--rank", rank_group])
+    parts.extend(["--basis", basis])
     if state_dir is not None:
         parts.extend(["--state-dir", str(state_dir)])
     return format_command(parts)
-
-
-def _tie_clean_grade_command(
-    *,
-    round_id: str | None = None,
-    task_id: str | None = None,
-    state_dir: Path | None = None,
-) -> str:
-    return _grade_command(
-        round_id=round_id,
-        task_id=task_id,
-        winner="tie",
-        basis="tie_clean",
-        state_dir=state_dir,
-    )
 
 
 def _grade_command_for_payload(
     payload: dict[str, object],
     *,
     state_dir: Path,
-    winner: str = "WINNER",
-    basis: str = "BASIS",
 ) -> str:
     round_id = str(payload.get("round_id") or "").strip() or None
     task_id = (
@@ -545,8 +477,6 @@ def _grade_command_for_payload(
     return _grade_command(
         round_id=round_id,
         task_id=task_id,
-        winner=winner,
-        basis=basis,
         state_dir=state_dir,
     )
 
@@ -668,10 +598,16 @@ def _reroll_rows(
 def _has_direct_grade_inputs(
     *,
     task_id: str | None,
-    winner: str | None,
+    rating_pool_id: str | None,
+    rank_groups: list[str] | None,
     basis: str | None,
 ) -> bool:
-    return all(bool(str(value or "").strip()) for value in (task_id, winner, basis))
+    return bool(
+        str(task_id or "").strip()
+        and str(rating_pool_id or "").strip()
+        and rank_groups
+        and str(basis or "").strip()
+    )
 
 
 def _resolve_pending_round_for_direct_grade(
@@ -718,7 +654,6 @@ def _completed_round_payload(
     reroll_rows: list[dict[str, str]] | None = None,
     status: str = "completed_ungraded",
     grade: dict[str, object] | None = None,
-    grade_tie_clean_command: str | None = None,
     manual: bool | None = None,
 ) -> dict[str, object]:
     actions: list[dict[str, object]] = []
@@ -737,12 +672,7 @@ def _completed_round_payload(
         and grade is None
         and not manual
     ):
-        return {
-            "Action": {
-                "cmd": grade_command,
-                "tie_clean": grade_tie_clean_command or _tie_clean_grade_command(),
-            }
-        }
+        return {"Action": {"cmd": grade_command}}
     if manual and not grade_command and not reroll_rows and grade is None:
         note = (
             "manual review blocked; read Output"
@@ -1495,20 +1425,24 @@ def run_benchmarked_round(
     caller_id_source: str | None,
     ignore_pending_grades: bool,
     task_id: str | None,
-    winner: str | None,
+    rating_pool_id: str | None,
+    rank_groups: list[str] | None,
     basis: str | None,
     note: str | None,
-    alpha_note: str | None,
-    bravo_note: str | None,
     public_task_name: str | None = None,
     allow_stage_step_down: bool = False,
 ) -> int:
     public_task = str(public_task_name or _public_local_task_name(task_class))
     direct_grade_requested = _has_direct_grade_inputs(
         task_id=task_id,
-        winner=winner,
+        rating_pool_id=rating_pool_id,
+        rank_groups=rank_groups,
         basis=basis,
     )
+    if any((rating_pool_id, rank_groups, basis)) and not direct_grade_requested:
+        raise ValueError(
+            "direct grading requires --task-id, --rating-pool-id, --rank, and --basis"
+        )
     if direct_grade_requested:
         pending_round = _resolve_pending_round_for_direct_grade(
             state_dir=state_dir,
@@ -1525,11 +1459,10 @@ def run_benchmarked_round(
                 state_dir=state_dir,
                 round_id=str(pending_round["round_id"]),
                 task_id=str(task_id),
-                winner=str(winner),
+                rating_pool_id=str(rating_pool_id),
+                rank_groups=list(rank_groups or []),
                 basis=str(basis),
                 note=note,
-                alpha_note=alpha_note,
-                bravo_note=bravo_note,
                 caller_id=caller_id,
                 caller_id_source=caller_id_source,
                 refresh_report=True,
@@ -1634,7 +1567,7 @@ def run_benchmarked_round(
             sqlite_path=sqlite_path,
             allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
         )
-    if not all([task_id, winner, basis]):
+    if not direct_grade_requested:
         if not interactive_output:
             grade_command = _grade_command_for_payload(completed, state_dir=state_dir)
             reroll_rows = _reroll_rows(
@@ -1654,67 +1587,10 @@ def run_benchmarked_round(
                 _completed_round_payload(
                     round_result=round_result,
                     grade_command=grade_command,
-                    grade_tie_clean_command=_grade_command_for_payload(
-                        completed,
-                        state_dir=state_dir,
-                        winner="tie",
-                        basis="tie_clean",
-                    ),
                     reroll_rows=reroll_rows,
                 )
             )
-            return 0
-        if round_result.get("blocked"):
-            if not interactive_output:
-                emit_toon(
-                    _completed_round_payload(
-                        round_result=round_result,
-                        reroll_rows=_reroll_rows(
-                            round_result=round_result,
-                            round_id=payload["round_id"],
-                            review_cwd=review_cwd,
-                            base=str(review_scope.get("base") or "") or None,
-                            roster_path=roster_path,
-                            rubric_path=rubric_path,
-                            state_dir=state_dir,
-                            sqlite_path=sqlite_path,
-                            allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
-                        ),
-                    )
-                )
-            return 0
-        try:
-            task_id = task_id or _prompt_line("Task id", default=branch_default)
-            winner = winner or _prompt_winner()
-            basis = basis or _prompt_basis(rubric)
-            alpha_note = (
-                alpha_note
-                if alpha_note is not None
-                else _prompt_line("Alpha note", default="")
-            )
-            bravo_note = (
-                bravo_note
-                if bravo_note is not None
-                else _prompt_line("Bravo note", default="")
-            )
-            note = note if note is not None else _prompt_line("Shared note", default="")
-        except EOFError:
-            if not interactive_output:
-                emit_toon(
-                    _completed_round_payload(
-                        round_result=round_result,
-                        grade_command=_grade_command_for_payload(
-                            completed, state_dir=state_dir
-                        ),
-                        grade_tie_clean_command=_grade_command_for_payload(
-                            completed,
-                            state_dir=state_dir,
-                            winner="tie",
-                            basis="tie_clean",
-                        ),
-                    )
-                )
-            return 0
+        return 0
 
     grade_result = _record_grade_result(
         roster=roster,
@@ -1722,11 +1598,10 @@ def run_benchmarked_round(
         state_dir=state_dir,
         round_id=payload["round_id"],
         task_id=str(task_id),
-        winner=str(winner),
+        rating_pool_id=str(rating_pool_id),
+        rank_groups=list(rank_groups or []),
         basis=str(basis),
         note=note,
-        alpha_note=alpha_note,
-        bravo_note=bravo_note,
         caller_id=caller_id,
         caller_id_source=caller_id_source,
         refresh_report=True,
@@ -1748,11 +1623,10 @@ def _record_grade_result(
     state_dir: Path,
     round_id: str,
     task_id: str,
-    winner: str,
+    rating_pool_id: str,
+    rank_groups: list[str],
     basis: str,
     note: str | None,
-    alpha_note: str | None,
-    bravo_note: str | None,
     refresh_report: bool,
     caller_id: str | None,
     caller_id_source: str | None,
@@ -1763,10 +1637,9 @@ def _record_grade_result(
         roster=roster,
         rubric=rubric,
         task_id=task_id,
-        winner=winner,
+        rating_pool_id=rating_pool_id,
+        rank_groups=rank_groups,
         basis=basis,
-        alpha_note=alpha_note,
-        bravo_note=bravo_note,
         shared_note=note,
     )
     if not append_record_if_new(state_dir, record):
@@ -1862,11 +1735,10 @@ def cmd_run(args: argparse.Namespace) -> int:
         caller_id_source=caller_id_source,
         ignore_pending_grades=bool(args.ignore_pending_grades),
         task_id=args.task_id,
-        winner=args.winner,
+        rating_pool_id=args.rating_pool_id,
+        rank_groups=args.rank_groups,
         basis=args.basis,
         note=args.note,
-        alpha_note=args.alpha_note,
-        bravo_note=args.bravo_note,
         public_task_name=_public_local_task_name(task_class),
     )
 
@@ -1930,12 +1802,6 @@ def cmd_run_round(args: argparse.Namespace) -> int:
                 grade_command=None
                 if result.get("blocked")
                 else _grade_command_for_payload(completed, state_dir=state_dir),
-                grade_tie_clean_command=_grade_command_for_payload(
-                    completed,
-                    state_dir=state_dir,
-                    winner="tie",
-                    basis="tie_clean",
-                ),
             )
         )
     return 0
@@ -2057,12 +1923,6 @@ def cmd_reroll_slot(args: argparse.Namespace) -> int:
                 grade_command=None
                 if result.get("blocked")
                 else _grade_command_for_payload(completed, state_dir=state_dir),
-                grade_tie_clean_command=_grade_command_for_payload(
-                    completed,
-                    state_dir=state_dir,
-                    winner="tie",
-                    basis="tie_clean",
-                ),
             )
         )
     return 0
@@ -2088,12 +1948,6 @@ def cmd_resume_round(args: argparse.Namespace) -> int:
                     _grade_command_for_payload(payload, state_dir=state_dir)
                     if round_needs_caller_grade(payload) and not result.get("blocked")
                     else None
-                ),
-                grade_tie_clean_command=_grade_command_for_payload(
-                    payload,
-                    state_dir=state_dir,
-                    winner="tie",
-                    basis="tie_clean",
                 ),
             )
         )
@@ -2148,12 +2002,6 @@ def cmd_resume_round(args: argparse.Namespace) -> int:
                 grade_command=None
                 if result.get("blocked")
                 else _grade_command_for_payload(completed, state_dir=state_dir),
-                grade_tie_clean_command=_grade_command_for_payload(
-                    completed,
-                    state_dir=state_dir,
-                    winner="tie",
-                    basis="tie_clean",
-                ),
             )
         )
     return 0
@@ -2579,11 +2427,10 @@ def cmd_grade(args: argparse.Namespace) -> int:
         state_dir=state_dir,
         round_id=round_id,
         task_id=task_id,
-        winner=args.winner,
+        rating_pool_id=args.rating_pool_id,
+        rank_groups=args.rank_groups,
         basis=args.basis,
         note=args.note,
-        alpha_note=args.alpha_note,
-        bravo_note=args.bravo_note,
         caller_id=caller_id,
         caller_id_source=caller_id_source,
         refresh_report=bool(args.refresh_report),

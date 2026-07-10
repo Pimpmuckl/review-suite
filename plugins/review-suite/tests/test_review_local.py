@@ -569,10 +569,9 @@ def test_primary_wrappers_hide_operator_state_knobs_from_help() -> None:
         "--sqlite-path",
         "--caller-id",
         "--ignore-pending-grades",
-        "--winner",
+        "--rating-pool-id",
+        "--rank",
         "--basis",
-        "--alpha-note",
-        "--bravo-note",
         "--bot-login",
     )
     help_texts = [

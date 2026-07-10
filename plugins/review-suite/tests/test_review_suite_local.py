@@ -31,6 +31,7 @@ from review_suite_local import (
     _transport_stalled,
     LOW_QUALITY_LOSS_REASON_BASES,
     aggregate_records,
+    build_record_from_grade,
     compact_benchmark_record,
     compact_benchmark_run,
     compact_round_files,
@@ -46,11 +47,13 @@ from review_suite_local import (
     normalize_record_review_cwd_value,
     normalize_service_tier,
     output_isatty,
+    placement_record,
     public_round_result,
     repo_name_from_round_payload,
     reviewer_completion_status,
     select_pair,
     terminal_review_command,
+    update_elo,
     variant_service_tier,
     ungraded_round_exposure_records,
     write_reports,
@@ -421,8 +424,9 @@ def _record(
     task_class: str,
     alpha: str,
     beta: str,
-    winner: str,
+    groups: list[list[str]] | None = None,
     basis: str = "valid_findings_vs_none",
+    rating_pool_id: str | None = None,
 ) -> dict[str, object]:
     return {
         "recorded_at": recorded_at,
@@ -430,8 +434,8 @@ def _record(
         "task_class": task_class,
         "task_id": f"{task_class}-task",
         "selection_mode": "scramble",
-        "pairwise_outcome": {"winner": winner, "basis": basis},
-        "grade_schema": "winner_basis_v1",
+        "rating_pool_id": rating_pool_id or f"{task_class}-v1",
+        "placement_v1": {"groups": groups or [[alpha], [beta]], "basis": basis},
         "runs": [
             {
                 "variant_id": alpha,
@@ -447,6 +451,136 @@ def _record(
             },
         ],
     }
+
+
+def test_build_record_from_grade_uses_explicit_ordered_groups() -> None:
+    round_payload = {
+        "round_id": "round-1",
+        "task_class": "phase_review",
+        "selection_mode": "true_scramble",
+        "status": "completed",
+        "runs": [
+            {
+                "slot": slot,
+                "variant_id": variant_id,
+                "review_status": "completed",
+                "grade_blocked": False,
+                "usage": {},
+            }
+            for slot, variant_id in (
+                ("alpha", "model-a"),
+                ("bravo", "model-b"),
+                ("charlie", "model-c"),
+            )
+        ],
+    }
+    roster = {
+        "variants": [
+            {**_variant(variant_id), "pricing": {}}
+            for variant_id in ("model-a", "model-b", "model-c")
+        ]
+    }
+    record = build_record_from_grade(
+        round_payload=round_payload,
+        roster=roster,
+        rubric={"basis": list(review_suite_local.GRADE_BASIS_VALUES)},
+        task_id="task-1",
+        rating_pool_id="arena-phase-v1",
+        rank_groups=["alpha", "bravo,model-c"],
+        basis="better_bug_coverage",
+        shared_note="checked",
+    )
+
+    assert record["rating_pool_id"] == "arena-phase-v1"
+    assert record["placement_v1"] == {
+        "groups": [["model-a"], ["model-b", "model-c"]],
+        "basis": "better_bug_coverage",
+    }
+    assert "pairwise_outcome" not in record
+    assert "grade_schema" not in record
+    assert all(run["grader_notes"] == "checked" for run in record["runs"])
+
+    for ranks, message in (
+        (["alpha", "bravo"], "missing: model-c"),
+        (["alpha", "bravo", "model-a"], "duplicate placement variant"),
+        (["alpha", "bravo", "unknown"], "unknown rank entry"),
+    ):
+        with pytest.raises(ValueError, match=message):
+            build_record_from_grade(
+                round_payload=round_payload,
+                roster=roster,
+                rubric={"basis": list(review_suite_local.GRADE_BASIS_VALUES)},
+                task_id="task-1",
+                rating_pool_id="arena-phase-v1",
+                rank_groups=ranks,
+                basis="better_bug_coverage",
+                shared_note=None,
+            )
+
+    blocked = json.loads(json.dumps(round_payload))
+    blocked["runs"][2].update(
+        review_status="timeout",
+        grade_blocked=True,
+        grade_block_reason="review_timed_out",
+    )
+    with pytest.raises(ValueError, match="should not be graded"):
+        build_record_from_grade(
+            round_payload=blocked,
+            roster=roster,
+            rubric={"basis": list(review_suite_local.GRADE_BASIS_VALUES)},
+            task_id="task-1",
+            rating_pool_id="arena-phase-v1",
+            rank_groups=["alpha", "bravo", "charlie"],
+            basis="better_bug_coverage",
+            shared_note=None,
+        )
+
+
+def test_update_elo_normalizes_simultaneous_multiplayer_results() -> None:
+    ratings = {"strong": 1600.0, "middle": 1500.0, "weak": 1400.0}
+    upset = update_elo(ratings, [["weak"], ["middle"], ["strong"]], 24.0)
+    expected = update_elo(ratings, [["strong"], ["middle"], ["weak"]], 24.0)
+
+    assert sum(upset.values()) == pytest.approx(sum(ratings.values()))
+    assert abs(upset["strong"] - ratings["strong"]) > abs(
+        expected["weak"] - ratings["weak"]
+    )
+    pair = update_elo({"a": 1600.0, "b": 1400.0}, [["a"], ["b"]], 24.0)
+    pair_expected = review_suite_local.expected_score(1600.0, 1400.0)
+    assert pair == pytest.approx(
+        {
+            "a": 1600.0 + 24.0 * (1.0 - pair_expected),
+            "b": 1400.0 - 24.0 * (1.0 - pair_expected),
+        }
+    )
+    tied = update_elo(
+        {"a": 1500.0, "b": 1500.0, "c": 1500.0}, [["a", "b"], ["c"]], 24.0
+    )
+    assert tied == pytest.approx({"a": 1506.0, "b": 1506.0, "c": 1488.0})
+
+
+@pytest.mark.parametrize(
+    "record,message",
+    [
+        ({"placement_v1": []}, "placement_v1 must be an object"),
+        (
+            {"placement_v1": {"groups": [["a"], ["b"]], "basis": "tie_clean"}},
+            "rating_pool_id is required",
+        ),
+        (
+            {
+                "rating_pool_id": "pool",
+                "placement_v1": {"groups": [["a"], ["a"]], "basis": "tie_clean"},
+            },
+            "duplicate placement variant",
+        ),
+    ],
+)
+def test_placement_record_rejects_invalid_schema(
+    record: dict[str, object], message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        placement_record(record)
 
 
 def _git_repo_with_origin(path: Path, origin: str) -> None:
@@ -476,7 +610,7 @@ def test_compact_benchmark_record_preserves_repo_name() -> None:
         task_class="phase_review",
         alpha="gpt-5.4-medium",
         beta="gpt-5.5-medium",
-        winner="gpt-5.5-medium",
+        groups=[["gpt-5.5-medium"], ["gpt-5.4-medium"]],
     )
     record["repo_name"] = "codex-account-switcher"
 
@@ -503,7 +637,7 @@ def test_enrich_record_repo_names_uses_round_payload_remote_for_old_rows(
             task_class="phase_review",
             alpha="gpt-5.4-medium",
             beta="gpt-5.5-medium",
-            winner="gpt-5.5-medium",
+            groups=[["gpt-5.5-medium"], ["gpt-5.4-medium"]],
         )
     ]
 
@@ -546,7 +680,7 @@ def test_enrich_record_repo_names_caches_review_cwd_resolution(
                 task_class="phase_review",
                 alpha="gpt-5.4-medium",
                 beta="gpt-5.5-medium",
-                winner="gpt-5.5-medium",
+                groups=[["gpt-5.5-medium"], ["gpt-5.4-medium"]],
             )
         )
 
@@ -1691,7 +1825,6 @@ def test_aggregate_records_tracks_finding_rates_and_low_quality_losses() -> None
             task_class="phase_review",
             alpha="alpha-model",
             beta="bravo-model",
-            winner="alpha-model",
             basis="valid_findings_vs_none",
         ),
         _record(
@@ -1700,7 +1833,7 @@ def test_aggregate_records_tracks_finding_rates_and_low_quality_losses() -> None
             task_class="phase_review",
             alpha="alpha-model",
             beta="bravo-model",
-            winner="bravo-model",
+            groups=[["bravo-model"], ["alpha-model"]],
             basis="false_positive_loss",
         ),
         _record(
@@ -1709,7 +1842,7 @@ def test_aggregate_records_tracks_finding_rates_and_low_quality_losses() -> None
             task_class="phase_review",
             alpha="alpha-model",
             beta="bravo-model",
-            winner="tie",
+            groups=[["alpha-model", "bravo-model"]],
             basis="tie_both_useful",
         ),
         _record(
@@ -1718,7 +1851,7 @@ def test_aggregate_records_tracks_finding_rates_and_low_quality_losses() -> None
             task_class="phase_review",
             alpha="alpha-model",
             beta="bravo-model",
-            winner="bravo-model",
+            groups=[["bravo-model"], ["alpha-model"]],
             basis="better_finding_validity",
         ),
         _record(
@@ -1727,7 +1860,7 @@ def test_aggregate_records_tracks_finding_rates_and_low_quality_losses() -> None
             task_class="phase_review",
             alpha="alpha-model",
             beta="bravo-model",
-            winner="bravo-model",
+            groups=[["bravo-model"], ["alpha-model"]],
             basis="scope_bloat_loss",
         ),
     ]
@@ -1770,7 +1903,95 @@ def test_aggregate_records_tracks_finding_rates_and_low_quality_losses() -> None
     assert rows["bravo-model"]["low_quality_loss_reasons"] == zero_low_quality_reasons
 
 
-def test_aggregate_records_counts_ungraded_exposure_without_grading_metrics() -> None:
+def test_aggregate_records_isolates_latest_pool_and_projects_placements() -> None:
+    roster = {
+        "settings": {"elo_k_factor": 24},
+        "variants": [
+            _variant(variant_id, task_classes=["phase_review"])
+            for variant_id in ("alpha-model", "bravo-model", "charlie-model")
+        ],
+    }
+    records = [
+        _record(
+            recorded_at="2026-04-12T12:00:00Z",
+            round_id="old-pool",
+            task_class="phase_review",
+            alpha="alpha-model",
+            beta="bravo-model",
+            rating_pool_id="pool-a",
+        ),
+        {
+            "recorded_at": "2026-04-12T13:00:00Z",
+            "round_id": "new-pool",
+            "task_class": "phase_review",
+            "task_id": "task-1",
+            "selection_mode": "true_scramble",
+            "rating_pool_id": "pool-b",
+            "placement_v1": {
+                "groups": [["alpha-model"], ["bravo-model", "charlie-model"]],
+                "basis": "better_bug_coverage",
+            },
+            "runs": [
+                {
+                    "variant_id": variant_id,
+                    "elapsed_seconds": seconds,
+                    "usage": {"input_tokens": int(seconds)},
+                    "cost_usd": seconds / 100,
+                }
+                for variant_id, seconds in (
+                    ("alpha-model", 10.0),
+                    ("bravo-model", 20.0),
+                    ("charlie-model", 30.0),
+                )
+            ],
+        },
+        {
+            "task_class": "phase_review",
+            "pairwise_outcome": {"winner": "bravo-model"},
+            "runs": [
+                {"variant_id": "alpha-model"},
+                {"variant_id": "bravo-model"},
+            ],
+        },
+    ]
+
+    task = aggregate_records(
+        roster=roster,
+        records=records,
+        operational_state=_operational_state(
+            champion_ids=[], probation_ids=[], cooling={}
+        ),
+    )["task_classes"]["phase_review"]
+
+    assert task["rating_pool_id"] == "pool-b"
+    rows = {row["variant_id"]: row for row in task["leaderboard"]}
+    assert {variant_id: row["elo"] for variant_id, row in rows.items()} == {
+        "alpha-model": 1512.0,
+        "bravo-model": 1494.0,
+        "charlie-model": 1494.0,
+    }
+    assert all(row["sample_count"] == 1 for row in rows.values())
+    recent = task["recent_rounds"]
+    assert len(recent) == 1
+    assert recent[0]["groups"] == [
+        ["alpha-model"],
+        ["bravo-model", "charlie-model"],
+    ]
+    participants = {row["variant_id"]: row for row in recent[0]["participants"]}
+    assert participants["alpha-model"] == {
+        "variant_id": "alpha-model",
+        "rank": 1,
+        "tied": False,
+        "elo_before": 1500.0,
+        "elo_after": 1512.0,
+        "elo_delta": 12.0,
+        "elapsed_seconds": 10.0,
+        "usage": {"input_tokens": 10},
+        "cost_usd": 0.1,
+    }
+
+
+def test_aggregate_records_ignores_ungraded_and_legacy_pair_records() -> None:
     roster = {
         "settings": {"elo_k_factor": 24},
         "variants": [
@@ -1796,15 +2017,15 @@ def test_aggregate_records_counts_ungraded_exposure_without_grading_metrics() ->
         row["variant_id"]: row
         for row in summary["task_classes"]["phase_review"]["leaderboard"]
     }
-    assert rows["alpha-model"]["sample_count"] == 1
+    assert rows["alpha-model"]["sample_count"] == 0
     assert rows["alpha-model"]["elo"] == 1500.0
     assert rows["alpha-model"]["wtl"] == "0/0/0"
     assert rows["alpha-model"]["median_elapsed_seconds"] is None
-    assert rows["bravo-model"]["sample_count"] == 1
+    assert rows["bravo-model"]["sample_count"] == 0
     assert rows["bravo-model"]["elo"] == 1500.0
     assert rows["bravo-model"]["wtl"] == "0/0/0"
     assert rows["bravo-model"]["median_elapsed_seconds"] is None
-    assert summary["task_classes"]["phase_review"]["recent_runs"] == []
+    assert summary["task_classes"]["phase_review"]["recent_rounds"] == []
 
 
 def test_ungraded_round_exposure_records_include_pending_but_skip_graded(
@@ -1952,7 +2173,6 @@ def test_select_pair_explores_least_exposed_under_sampled_variant_first() -> Non
             task_class="pr_review",
             alpha="gpt-5.5-high",
             beta="established",
-            winner="established",
         )
         for idx in range(4)
     ]
@@ -2065,7 +2285,8 @@ def test_select_pair_true_scramble_rolls_both_slots_uniformly() -> None:
             task_class="phase_review",
             alpha="established-a",
             beta="established-b",
-            winner="tie",
+            groups=[["established-a", "established-b"]],
+            basis="tie_clean",
         )
         for idx in range(20)
     ]
@@ -2266,7 +2487,7 @@ def test_write_reports_includes_recent_match_history_and_model_header(
             if task_class == "phase_review"
             else "gpt-5.4-mini-high"
         )
-        winner = alpha if idx % 3 else "tie"
+        tied = idx % 3 == 0
         round_id = f"{task_class}-round-{idx}"
         records.append(
             _record(
@@ -2275,9 +2496,11 @@ def test_write_reports_includes_recent_match_history_and_model_header(
                 task_class=task_class,
                 alpha=alpha,
                 beta=beta,
-                winner=winner,
+                groups=[[alpha, beta]] if tied else [[alpha], [beta]],
+                basis="tie_clean" if tied else "valid_findings_vs_none",
             )
         )
+        records[-1]["repo_name"] = f"repo-{idx}"
         (rounds_dir / f"{round_id}.json").write_text(
             json.dumps({"review_cwd": f"C:/Users/alice/.codex/worktrees/repo-{idx}"}),
             encoding="utf-8",
@@ -2328,23 +2551,20 @@ def test_write_reports_includes_recent_match_history_and_model_header(
         "| model | elo | samples | W/T/L | found/opp | found % | missed % | low-quality % | sec | tok/job | cost/job |"
         in leaderboard
     )
-    assert "## match history" in leaderboard
-    assert (
-        "| review | repo | model alpha | elo alpha | delta alpha | delta beta | elo beta | model beta |"
-        in leaderboard
-    )
+    assert "## round history" in leaderboard
+    assert "| review | repo | rating pool | placements and Elo |" in leaderboard
     assert "## review_t1" in leaderboard
     assert "## review_t3" in leaderboard
-    assert "| review_t1 | repo-10 | gpt-5.4-mini-xhigh (W) |" in leaderboard
+    assert (
+        "| review_t1 | repo-10 | phase_review-v1 | 1. gpt-5.4-mini-xhigh" in leaderboard
+    )
     repo_9_line = next(
         line
         for line in leaderboard.splitlines()
         if line.startswith("| review_t3 | repo-9 |")
     )
-    assert "gpt-5.4-low (T) |" in repo_9_line
-    assert "gpt-5.4-mini-high (T) |" in repo_9_line
-    assert "(W)" not in repo_9_line
-    assert "(L)" not in repo_9_line
+    assert "1. gpt-5.4-low" in repo_9_line
+    assert " = gpt-5.4-mini-high" in repo_9_line
     assert "repo-0" not in leaderboard
 
 
@@ -2359,8 +2579,9 @@ def test_write_reports_match_history_uses_configured_k_factor(tmp_path: Path) ->
         task_class="phase_review",
         alpha="gpt-5.4-mini-xhigh",
         beta="gpt-5.3-codex-medium",
-        winner="gpt-5.4-mini-xhigh",
     )
+    record["repo_name"] = "repo-k"
+    record["rating_pool_id"] = "pool|v1\nnext <!-- & -->"
     (rounds_dir / f"{round_id}.json").write_text(
         json.dumps({"review_cwd": "C:/Users/alice/.codex/worktrees/repo-k"}),
         encoding="utf-8",
@@ -2401,7 +2622,8 @@ def test_write_reports_match_history_uses_configured_k_factor(tmp_path: Path) ->
     write_reports(state_dir, summary)
 
     leaderboard = (state_dir / "leaderboard.md").read_text(encoding="utf-8")
-    assert (
-        "| review_t1 | repo-k | gpt-5.4-mini-xhigh (W) | 1500.0 | +5.0 | -5.0 | 1500.0 | gpt-5.3-codex-medium (L) |"
-        in leaderboard
-    )
+    escaped_pool = "pool\\|v1 next &lt;!-- &amp; --&gt;"
+    assert f"- Rating pool: {escaped_pool}" in leaderboard
+    assert f"| review_t1 | repo-k | {escaped_pool} |" in leaderboard
+    assert "gpt-5.4-mini-xhigh 1500.0 -> 1505.0 (+5.0)" in leaderboard
+    assert "gpt-5.3-codex-medium 1500.0 -> 1495.0 (-5.0)" in leaderboard

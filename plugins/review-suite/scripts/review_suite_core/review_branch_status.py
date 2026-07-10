@@ -539,8 +539,6 @@ def _arena_grade_command(
     state: dict[str, object],
     *,
     state_dir: Path,
-    winner: str = "WINNER",
-    basis: str = "BASIS",
 ) -> str | None:
     pending_payload = _pending_grade_payload(state, state_dir=state_dir)
     if pending_payload is None:
@@ -563,10 +561,14 @@ def _arena_grade_command(
             round_id,
             "--task-id",
             task_id,
-            "--winner",
-            winner,
+            "--rating-pool-id",
+            "RATING_POOL_ID",
+            "--rank",
+            "FIRST[,TIED]",
+            "--rank",
+            "NEXT",
             "--basis",
-            basis,
+            "BASIS",
             "--state-dir",
             str(grade_state_dir),
         ]
@@ -696,12 +698,8 @@ def _orchestrator_action(
     if stage == "decision-pending":
         grade = _arena_grade_command(state, state_dir=state_dir)
         if grade:
-            tie_clean = _arena_grade_command(
-                state, state_dir=state_dir, winner="tie", basis="tie_clean"
-            )
             action = {
                 "cmd": grade,
-                "tie_clean": tie_clean,
                 "note": "Grade the arena round, then rerun this review id to continue.",
                 "next": _review_command(public_id),
             }
