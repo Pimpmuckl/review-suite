@@ -64,8 +64,8 @@ Emergency turns green immediately on a clean urgent signoff. If findings are fix
 |    |
 |    |--- Medium Discovery - Until: normal_discovery_loops
 |    |    |- Brief:  GPT 5.4 / 5.5 / 5.6 Sol / 5.6 Terra Medium
-|    |    |- Normal: optional backend-injected phase arena rounds
 |    |    |- Normal: four-model Medium brawl for remaining passes, min once
+|    |    |- Normal: optional backend-injected phase arena rounds
 |    |
 |    |--- Medium Signoff - Until: Green
 |    |    |- GPT 5.6 Sol Medium x2
@@ -78,8 +78,8 @@ Emergency turns green immediately on a clean urgent signoff. If findings are fix
 |    |    |- Medium Signoff
 |    |
 |    |--- Deep Discovery - Until: deep_discovery_loops
-|    |    |- optional backend-injected PR arena rounds
 |    |    |- four-model XHigh brawl for remaining passes, min once
+|    |    |- optional backend-injected PR arena rounds
 |    |
 |    |--- Deep Signoff - Until: Green
 |    |    |- GPT 5.6 Sol XHigh x2

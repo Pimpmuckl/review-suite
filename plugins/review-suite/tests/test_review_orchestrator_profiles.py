@@ -248,22 +248,22 @@ def test_arena_enabled_inserts_arena_steps_and_keeps_minimum_discovery(
 
     normal = profiles["stable"]["normal"].steps
     assert [(step.kind, step.name, step.lane, step.task_class) for step in normal] == [
+        ("arena", "phase-discovery-brawl", "review_t1", "phase_review"),
         ("arena", "arena-phase-review-1", "review_t1", "phase_review"),
         ("arena", "arena-phase-review-2", "review_t1", "phase_review"),
-        ("arena", "phase-discovery-brawl", "review_t1", "phase_review"),
         ("review", "precision-signoff", None, None),
     ]
 
     deep = profiles["stable"]["deep"].steps
     assert [(step.kind, step.name, step.lane, step.task_class) for step in deep] == [
+        ("arena", "phase-discovery-brawl", "review_t1", "phase_review"),
         ("arena", "arena-phase-review-1", "review_t1", "phase_review"),
         ("arena", "arena-phase-review-2", "review_t1", "phase_review"),
-        ("arena", "phase-discovery-brawl", "review_t1", "phase_review"),
         ("review", "precision-signoff", None, None),
+        ("arena", "deep-discovery-brawl", "review_t3", "pr_review"),
         ("arena", "arena-pr-review-1", "review_t3", "pr_review"),
         ("arena", "arena-pr-review-2", "review_t3", "pr_review"),
         ("arena", "arena-pr-review-3", "review_t3", "pr_review"),
-        ("arena", "deep-discovery-brawl", "review_t3", "pr_review"),
         ("review", "deep-signoff", None, None),
     ]
 
