@@ -551,42 +551,14 @@ def test_collect_round_results_rebinds_launcher_sessions_to_review_children(
         roster=_minimal_roster(),
         rubric=_minimal_rubric(),
         task_id="demo",
-        winner="alpha",
+        rating_pool_id="arena-phase-v1",
+        rank_groups=["alpha", "bravo"],
         basis="valid_findings_vs_none",
-        alpha_note=None,
-        bravo_note=None,
         shared_note="ok",
     )
     record_runs = {run["variant_id"]: run for run in record["runs"]}
     assert record_runs["gpt-5.4-xhigh"]["cost_usd"] == pytest.approx(0.003375)
     assert record_runs["gpt-5.3-codex-medium"]["cost_usd"] == pytest.approx(0.00182)
-
-    with pytest.raises(ValueError, match="tie_clean requires --winner tie"):
-        review_suite_local.build_record_from_grade(
-            round_payload=completed,
-            roster=_minimal_roster(),
-            rubric=_minimal_rubric(),
-            task_id="demo",
-            winner="alpha",
-            basis="tie_clean",
-            alpha_note=None,
-            bravo_note=None,
-            shared_note="ok",
-        )
-    with pytest.raises(
-        ValueError, match="winner tie requires --basis tie_clean or tie_both_useful"
-    ):
-        review_suite_local.build_record_from_grade(
-            round_payload=completed,
-            roster=_minimal_roster(),
-            rubric=_minimal_rubric(),
-            task_id="demo",
-            winner="tie",
-            basis="valid_findings_vs_none",
-            alpha_note=None,
-            bravo_note=None,
-            shared_note="ok",
-        )
 
 
 def test_collect_round_results_falls_back_to_child_lookup_when_session_id_is_missing(

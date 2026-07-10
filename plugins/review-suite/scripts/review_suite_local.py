@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import json
 import math
 import os
@@ -68,8 +69,6 @@ RUBRIC_FILENAME = "rubric_v2.json"
 OPERATIONAL_STATE_FILENAME = "operational_state.json"
 ROUNDS_DIRNAME = "rounds"
 ORCHESTRATOR_ROUND_STATE_DIR = Path("orchestrator") / "review-rounds"
-GRADE_SCHEMA = "winner_basis_v1"
-LEGACY_GRADE_BASIS = "legacy_score_grade"
 GRADE_BASIS_VALUES = (
     "valid_findings_vs_none",
     "more_valid_findings",
@@ -104,7 +103,7 @@ VALID_FINDING_WIN_BASES = {
     "better_bug_coverage",
 }
 BUG_OPPORTUNITY_BASES = VALID_FINDING_WIN_BASES | {"tie_both_useful"}
-BOTH_REVIEWERS_FOUND_BASES = {
+ALL_PARTICIPANTS_FOUND_BASES = {
     "more_valid_findings",
     "better_bug_coverage",
     "tie_both_useful",
@@ -594,6 +593,8 @@ def load_roster(path: Path) -> dict[str, Any]:
 
 def load_rubric(path: Path) -> dict[str, Any]:
     rubric = read_json(path)
+    if rubric.get("version") != "placement_v1":
+        raise ValueError("rubric version must be placement_v1")
     expected = list(GRADE_BASIS_VALUES)
     if rubric.get("basis") != expected:
         raise ValueError(f"rubric basis must be {expected}")
@@ -1003,14 +1004,13 @@ def format_signed_decimal(value: float | None) -> str:
     return f"{float(value):+.1f}"
 
 
-def format_match_model(model: str, outcome: str) -> str:
-    if outcome == "win":
-        return f"{model} (W)"
-    if outcome == "loss":
-        return f"{model} (L)"
-    if outcome == "tie":
-        return f"{model} (T)"
-    return model
+def format_markdown_inline(value: Any) -> str:
+    return (
+        html.escape(re.sub(r"[\r\n]+", " ", str(value)), quote=False)
+        .replace("\\", "\\\\")
+        .replace("|", "\\|")
+        .replace("`", "\\`")
+    )
 
 
 def format_compact_tokens(value: float | None) -> str:
@@ -1920,69 +1920,6 @@ def enrich_record_repo_names(
         enriched.append(next_record)
         changed = True
     return enriched, changed
-
-
-def recent_match_history(
-    state_dir: Path, *, k_factor: float, limit: int = 10
-) -> list[dict[str, Any]]:
-    ratings_by_task: dict[str, dict[str, float]] = {
-        task_class: {} for task_class in TASK_CLASSES
-    }
-    repo_cache: dict[str, str] = {}
-    cwd_cache: dict[str, str] = {}
-    history: list[dict[str, Any]] = []
-    for record in read_jsonl(state_dir / RUN_LOG_FILENAME):
-        task_class = str(record.get("task_class") or "")
-        record_runs = list(record.get("runs") or [])
-        if len(record_runs) != 2:
-            continue
-        alpha_run, beta_run = record_runs[0], record_runs[1]
-        alpha_model = str(alpha_run.get("variant_id") or "")
-        beta_model = str(beta_run.get("variant_id") or "")
-        if not alpha_model or not beta_model:
-            continue
-        winner = str((record.get("pairwise_outcome") or {}).get("winner") or "")
-        if winner == "tie":
-            result = "tie"
-        elif winner == alpha_model:
-            result = "a"
-        elif winner == beta_model:
-            result = "b"
-        else:
-            continue
-        ratings = ratings_by_task.setdefault(task_class, {})
-        alpha_before = float(ratings.get(alpha_model, 1500.0))
-        beta_before = float(ratings.get(beta_model, 1500.0))
-        alpha_after, beta_after = update_elo(
-            alpha_before, beta_before, result, k_factor
-        )
-        ratings[alpha_model] = alpha_after
-        ratings[beta_model] = beta_after
-        history.append(
-            {
-                "recorded_at": str(record.get("recorded_at") or ""),
-                "review": review_label(task_class),
-                "repo": record_repo_name(state_dir, record, repo_cache, cwd_cache),
-                "model_alpha": alpha_model,
-                "outcome_alpha": "win"
-                if result == "a"
-                else "loss"
-                if result == "b"
-                else "tie",
-                "elo_alpha": alpha_before,
-                "delta_alpha": alpha_after - alpha_before,
-                "delta_beta": beta_after - beta_before,
-                "elo_beta": beta_before,
-                "model_beta": beta_model,
-                "outcome_beta": "win"
-                if result == "b"
-                else "loss"
-                if result == "a"
-                else "tie",
-            }
-        )
-    history.sort(key=lambda row: row["recorded_at"], reverse=True)
-    return history[:limit]
 
 
 def public_round_payload(
@@ -3931,7 +3868,8 @@ def record_identity_key(record: dict[str, Any]) -> str:
             "task_class": record.get("task_class"),
             "task_id": record.get("task_id"),
             "selection_mode": record.get("selection_mode"),
-            "pairwise_outcome": record.get("pairwise_outcome", {}),
+            "rating_pool_id": record.get("rating_pool_id"),
+            "placement_v1": record.get("placement_v1"),
             "runs": identity_runs,
         },
         sort_keys=True,
@@ -3961,22 +3899,110 @@ def compact_benchmark_run(run: dict[str, Any]) -> dict[str, Any]:
 
 
 def compact_benchmark_record(record: dict[str, Any]) -> dict[str, Any]:
+    if placement_record(record) is None:
+        return deepcopy(record)
     compacted = {
         "recorded_at": record.get("recorded_at"),
         "round_id": record.get("round_id"),
         "task_class": record.get("task_class"),
         "task_id": record.get("task_id"),
         "selection_mode": record.get("selection_mode"),
-        "pairwise_outcome": deepcopy(record.get("pairwise_outcome", {})),
+        "rating_pool_id": record["rating_pool_id"],
+        "placement_v1": deepcopy(record["placement_v1"]),
         "runs": [compact_benchmark_run(run) for run in record.get("runs", [])],
     }
-    grade_schema = record.get("grade_schema") or record.get("score_schema")
-    if grade_schema:
-        compacted["grade_schema"] = grade_schema
     repo_name = str(record.get("repo_name") or "").strip()
     if repo_name:
         compacted["repo_name"] = repo_name
     return compacted
+
+
+def placement_record(
+    record: dict[str, Any], *, expected_variants: set[str] | None = None
+) -> tuple[str, list[list[str]], str] | None:
+    if "placement_v1" not in record:
+        return None
+    placement = record["placement_v1"]
+    if not isinstance(placement, dict):
+        raise ValueError("placement_v1 must be an object")
+    rating_pool_id = str(record.get("rating_pool_id") or "").strip()
+    if not rating_pool_id:
+        raise ValueError("rating_pool_id is required")
+    basis = str(placement.get("basis") or "").strip()
+    if basis not in GRADE_BASIS_VALUES:
+        raise ValueError(f"invalid placement basis: {basis or '<empty>'}")
+    raw_groups = placement.get("groups")
+    if not isinstance(raw_groups, list) or not raw_groups:
+        raise ValueError("placement_v1.groups must be a non-empty array")
+    groups: list[list[str]] = []
+    seen: set[str] = set()
+    for raw_group in raw_groups:
+        if not isinstance(raw_group, list) or not raw_group:
+            raise ValueError("each placement group must be a non-empty array")
+        group = [str(value).strip() for value in raw_group]
+        if any(not value for value in group):
+            raise ValueError("placement groups cannot contain empty variant ids")
+        duplicate = next((value for value in group if value in seen), None)
+        if duplicate:
+            raise ValueError(f"duplicate placement variant: {duplicate}")
+        if len(group) != len(set(group)):
+            raise ValueError("placement groups cannot contain duplicate variants")
+        groups.append(group)
+        seen.update(group)
+    if len(seen) < 2:
+        raise ValueError("placement requires at least two distinct variants")
+    if len(groups) == 1 and not basis.startswith("tie_"):
+        raise ValueError("one placement group requires a tie basis")
+    if len(groups) > 1 and basis.startswith("tie_"):
+        raise ValueError(f"{basis} requires all variants in one placement group")
+    if expected_variants is not None and seen != expected_variants:
+        missing = sorted(expected_variants - seen)
+        unknown = sorted(seen - expected_variants)
+        details = []
+        if missing:
+            details.append(f"missing: {', '.join(missing)}")
+        if unknown:
+            details.append(f"unknown: {', '.join(unknown)}")
+        raise ValueError(
+            "placement must rank every run exactly once; " + "; ".join(details)
+        )
+    return rating_pool_id, groups, basis
+
+
+def placement_groups_from_ranks(
+    runs: list[dict[str, Any]], rank_groups: list[str], basis: str
+) -> list[list[str]]:
+    aliases: dict[str, str] = {}
+    variants: set[str] = set()
+    for run in runs:
+        slot = str(run.get("slot") or "").strip()
+        variant_id = str(run.get("variant_id") or "").strip()
+        if not slot or not variant_id:
+            raise ValueError("every run must have a slot and variant_id")
+        if variant_id in variants:
+            raise ValueError(f"duplicate run variant: {variant_id}")
+        variants.add(variant_id)
+        for alias in (slot, variant_id):
+            if alias in aliases and aliases[alias] != variant_id:
+                raise ValueError(f"ambiguous rank entry: {alias}")
+            aliases[alias] = variant_id
+    groups: list[list[str]] = []
+    for raw_group in rank_groups:
+        tokens = [value.strip() for value in str(raw_group).split(",")]
+        if any(not token for token in tokens):
+            raise ValueError("rank groups cannot contain empty entries")
+        unknown = next((token for token in tokens if token not in aliases), None)
+        if unknown:
+            raise ValueError(f"unknown rank entry: {unknown}")
+        groups.append([aliases[token] for token in tokens])
+    placement_record(
+        {
+            "rating_pool_id": "validation",
+            "placement_v1": {"groups": groups, "basis": basis},
+        },
+        expected_variants=variants,
+    )
+    return groups
 
 
 def build_record_from_grade(
@@ -3985,10 +4011,9 @@ def build_record_from_grade(
     roster: dict[str, Any],
     rubric: dict[str, Any],
     task_id: str,
-    winner: str,
+    rating_pool_id: str,
+    rank_groups: list[str],
     basis: str,
-    alpha_note: str | None,
-    bravo_note: str | None,
     shared_note: str | None,
 ) -> dict[str, Any]:
     if round_payload.get("status") != "completed":
@@ -4007,35 +4032,16 @@ def build_record_from_grade(
         )
     basis = normalize_grade_basis(basis, rubric)
     indexed = variant_index(roster)
-    runs_by_slot = {run["slot"]: run for run in round_payload["runs"]}
-    alpha = deepcopy(runs_by_slot["alpha"])
-    bravo = deepcopy(runs_by_slot["bravo"])
-    alpha_variant = indexed[alpha["variant_id"]]
-    bravo_variant = indexed[bravo["variant_id"]]
-    alpha["grader_notes"] = alpha_note or shared_note or "alpha"
-    bravo["grader_notes"] = bravo_note or shared_note or "bravo"
-    alpha["cost_usd"] = compute_cost_usd(alpha_variant, alpha.get("usage", {}))
-    bravo["cost_usd"] = compute_cost_usd(bravo_variant, bravo.get("usage", {}))
-    if winner not in {
-        "alpha",
-        "bravo",
-        "tie",
-        alpha["variant_id"],
-        bravo["variant_id"],
-    }:
-        raise ValueError("winner must be alpha, bravo, tie, or a concrete variant id")
-    if winner == "alpha":
-        winner_variant_id = alpha["variant_id"]
-    elif winner == "bravo":
-        winner_variant_id = bravo["variant_id"]
-    else:
-        winner_variant_id = winner
-    if winner_variant_id == "tie" and not basis.startswith("tie_"):
-        raise ValueError("winner tie requires --basis tie_clean or tie_both_useful")
-    if winner_variant_id != "tie" and basis.startswith("tie_"):
-        raise ValueError(
-            f"{basis} requires --winner tie; use alpha or bravo only with non-tie basis values"
-        )
+    runs = [deepcopy(run) for run in round_payload.get("runs", [])]
+    groups = placement_groups_from_ranks(runs, rank_groups, basis)
+    if not str(rating_pool_id or "").strip():
+        raise ValueError("rating_pool_id is required")
+    for run in runs:
+        variant_id = str(run["variant_id"])
+        if variant_id not in indexed:
+            raise ValueError(f"unknown roster variant: {variant_id}")
+        run["grader_notes"] = shared_note or str(run["slot"])
+        run["cost_usd"] = compute_cost_usd(indexed[variant_id], run.get("usage", {}))
     recorded_at = utc_now_iso()
     record = {
         "recorded_at": recorded_at,
@@ -4043,9 +4049,9 @@ def build_record_from_grade(
         "task_class": round_payload["task_class"],
         "task_id": task_id,
         "selection_mode": round_payload["selection_mode"],
-        "pairwise_outcome": {"winner": winner_variant_id, "basis": basis},
-        "grade_schema": GRADE_SCHEMA,
-        "runs": [alpha, bravo],
+        "rating_pool_id": str(rating_pool_id).strip(),
+        "placement_v1": {"groups": groups, "basis": basis},
+        "runs": runs,
     }
     repo_name = repo_name_from_round_payload(round_payload)
     if repo_name != "-":
@@ -4058,31 +4064,31 @@ def expected_score(rating_a: float, rating_b: float) -> float:
 
 
 def update_elo(
-    current_a: float, current_b: float, result: str, k_factor: float
-) -> tuple[float, float]:
-    if result == "a":
-        score_a, score_b = 1.0, 0.0
-    elif result == "b":
-        score_a, score_b = 0.0, 1.0
-    else:
-        score_a = score_b = 0.5
-    expected_a = expected_score(current_a, current_b)
-    expected_b = expected_score(current_b, current_a)
-    return (
-        current_a + k_factor * (score_a - expected_a),
-        current_b + k_factor * (score_b - expected_b),
-    )
-
-
-def record_grade_basis(record: dict[str, Any]) -> str:
-    basis = str((record.get("pairwise_outcome") or {}).get("basis") or "").strip()
-    if basis:
-        return basis
-    if record.get("score_schema") or any(
-        run.get("scores") for run in list(record.get("runs") or [])
-    ):
-        return LEGACY_GRADE_BASIS
-    return LEGACY_GRADE_BASIS
+    ratings: dict[str, float], groups: list[list[str]], k_factor: float
+) -> dict[str, float]:
+    ranks = {
+        variant_id: rank for rank, group in enumerate(groups) for variant_id in group
+    }
+    if len(ratings) < 2 or set(ratings) != set(ranks):
+        raise ValueError("Elo field must match a placement of at least two variants")
+    weight = k_factor / (len(ratings) - 1)
+    return {
+        variant_id: rating
+        + weight
+        * sum(
+            (
+                0.5
+                if ranks[variant_id] == ranks[opponent]
+                else 1.0
+                if ranks[variant_id] < ranks[opponent]
+                else 0.0
+            )
+            - expected_score(rating, ratings[opponent])
+            for opponent in ratings
+            if opponent != variant_id
+        )
+        for variant_id, rating in ratings.items()
+    }
 
 
 def percentage(numerator: int | float, denominator: int | float) -> float | None:
@@ -4125,38 +4131,61 @@ def aggregate_records(
             }
             for variant in active
         }
-        recent_runs: list[dict[str, Any]] = []
+        placed: list[tuple[dict[str, Any], tuple[str, list[list[str]], str]]] = []
         for record in (row for row in records if row.get("task_class") == task_class):
-            record_runs = record.get("runs", [])
-            if len(record_runs) != 2:
+            record_runs = list(record.get("runs") or [])
+            variants = {str(run.get("variant_id") or "") for run in record_runs}
+            if len(variants) != len(record_runs):
+                raise ValueError("placement record runs must have distinct variants")
+            placement = placement_record(record, expected_variants=variants)
+            if placement is not None:
+                placed.append((record, placement))
+        rating_pool_id = placed[-1][1][0] if placed else None
+        recent_rounds: list[dict[str, Any]] = []
+        indexed = variant_index(roster)
+        for record, (pool_id, groups, basis) in placed:
+            if pool_id != rating_pool_id:
                 continue
-            left = record_runs[0]["variant_id"]
-            right = record_runs[1]["variant_id"]
-            winner = record.get("pairwise_outcome", {}).get("winner")
-            basis = record_grade_basis(record)
-            is_graded_record = winner in {left, right, "tie"}
-            if is_graded_record and left in ratings and right in ratings:
-                result = "tie" if winner == "tie" else ("a" if winner == left else "b")
-                ratings[left], ratings[right] = update_elo(
-                    ratings[left], ratings[right], result, k_factor
-                )
+            record_runs = list(record["runs"])
+            ranks = {
+                variant_id: rank
+                for rank, group in enumerate(groups)
+                for variant_id in group
+            }
+            before = {
+                variant_id: ratings.get(variant_id, 1500.0) for variant_id in ranks
+            }
+            after = update_elo(before, groups, k_factor)
+            ratings.update(after)
+            participants: list[dict[str, Any]] = []
             for run in record_runs:
                 variant_id = run["variant_id"]
+                usage = run.get("usage", {})
+                cost_usd = run.get("cost_usd")
+                if cost_usd is None and variant_id in indexed:
+                    cost_usd = compute_cost_usd(indexed[variant_id], usage)
+                rank = ranks[variant_id]
+                participants.append(
+                    {
+                        "variant_id": variant_id,
+                        "rank": rank + 1,
+                        "tied": len(groups[rank]) > 1,
+                        "elo_before": before[variant_id],
+                        "elo_after": after[variant_id],
+                        "elo_delta": after[variant_id] - before[variant_id],
+                        "elapsed_seconds": run.get("elapsed_seconds"),
+                        "usage": deepcopy(usage),
+                        "cost_usd": cost_usd,
+                    }
+                )
                 if variant_id not in metrics:
                     continue
                 bucket = metrics[variant_id]
-                usage = run.get("usage", {})
-                cost_usd = run.get("cost_usd")
-                if cost_usd is None:
-                    variant = variant_index(roster)[variant_id]
-                    cost_usd = compute_cost_usd(variant, usage)
                 bucket["sample_count"] += 1
-                if not is_graded_record:
-                    continue
-                if winner == "tie":
+                if len(groups) == 1 or (rank == 0 and len(groups[0]) > 1):
                     bucket["tie_count"] += 1
                     outcome = "tie"
-                elif winner == variant_id:
+                elif rank == 0:
                     bucket["win_count"] += 1
                     outcome = "win"
                 else:
@@ -4166,7 +4195,7 @@ def aggregate_records(
                     bucket["finding_opportunity_count"] += 1
                 if (
                     outcome == "win" and basis in VALID_FINDING_WIN_BASES
-                ) or basis in BOTH_REVIEWERS_FOUND_BASES:
+                ) or basis in ALL_PARTICIPANTS_FOUND_BASES:
                     bucket["valid_finding_count"] += 1
                 if outcome == "loss" and basis in MISSED_BUG_LOSS_BASES:
                     bucket["missed_bug_loss_count"] += 1
@@ -4181,17 +4210,19 @@ def aggregate_records(
                     bucket["total_token_values"].append(total_tokens)
                 if cost_usd is not None:
                     bucket["cost_values"].append(float(cost_usd))
-                recent_runs.append(
-                    {
-                        "recorded_at": record.get("recorded_at"),
-                        "task_id": record.get("task_id"),
-                        "selection_mode": record.get("selection_mode"),
-                        "variant_id": variant_id,
-                        "winner": winner,
-                        "basis": basis,
-                        "elapsed_seconds": elapsed_seconds,
-                    }
-                )
+            recent_rounds.append(
+                {
+                    "recorded_at": record.get("recorded_at"),
+                    "review": review_label(task_class),
+                    "repo": record.get("repo_name") or "-",
+                    "task_id": record.get("task_id"),
+                    "selection_mode": record.get("selection_mode"),
+                    "rating_pool_id": pool_id,
+                    "groups": deepcopy(groups),
+                    "basis": basis,
+                    "participants": participants,
+                }
+            )
         leaderboard = []
         for variant_id, bucket in metrics.items():
             sample_count = bucket["sample_count"]
@@ -4250,8 +4281,9 @@ def aggregate_records(
         )
         summary["task_classes"][task_class] = {
             "operational": operational_state["task_classes"][task_class],
+            "rating_pool_id": rating_pool_id,
             "leaderboard": leaderboard,
-            "recent_runs": recent_runs[-50:],
+            "recent_rounds": recent_rounds[-50:],
         }
     return summary
 
@@ -4259,7 +4291,6 @@ def aggregate_records(
 def write_reports(state_dir: Path, summary: dict[str, Any]) -> None:
     write_json(state_dir / SUMMARY_FILENAME, summary)
     report_settings = dict(summary.get("report_settings") or {})
-    k_factor = float(report_settings.get("elo_k_factor", 24.0))
     champion_min_samples = int(report_settings.get("promotion_min_samples", 20))
     champion_min_elo = float(report_settings.get("promotion_min_elo", 1550.0))
     champion_group_window = float(
@@ -4272,6 +4303,9 @@ def write_reports(state_dir: Path, summary: dict[str, Any]) -> None:
         champion_ids = list(op.get("champion_variant_ids") or [])
         lines.append(f"## {public_task_name(task_class)}")
         lines.append("")
+        lines.append(
+            f"- Rating pool: {format_markdown_inline(task.get('rating_pool_id') or 'none')}"
+        )
         lines.append(
             f"- Champion: `{', '.join(champion_ids) if champion_ids else 'none'}`"
         )
@@ -4289,7 +4323,7 @@ def write_reports(state_dir: Path, summary: dict[str, Any]) -> None:
         lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
         for row in task["leaderboard"]:
             lines.append(
-                f"| {row['variant_label']} | {format_decimal(row['elo'])} | {row['sample_count']} | {row['wtl']} | "
+                f"| {format_markdown_inline(row['variant_label'])} | {format_decimal(row['elo'])} | {row['sample_count']} | {row['wtl']} | "
                 f"{row['valid_finding_count']}/{row['finding_opportunity_count']} | {format_decimal(row['valid_finding_rate'])} | "
                 f"{format_decimal(row['missed_bug_loss_rate'])} | {format_decimal(row['low_quality_loss_rate'])} | {format_decimal(row['median_elapsed_seconds'])} | "
                 f"{format_compact_tokens(row['median_total_tokens'])} | {format_cost_cents(row['median_cost_usd'])} |"
@@ -4301,20 +4335,38 @@ def write_reports(state_dir: Path, summary: dict[str, Any]) -> None:
         f"- Champion gate: `sample_count >= {champion_min_samples}` and `elo >= {format_decimal(champion_min_elo)}`. Champion group membership is `<= {format_decimal(champion_group_window)}` Elo behind the top eligible model."
     )
     lines.append(
-        "- `found %` is valid findings over bug-present opportunities, including both reviewers on `tie_both_useful` and both-found coverage wins. `missed %` is missed-bug losses over bug-present opportunities. `low-quality %` is validity, false-positive, hallucinated, fringe, or scope-bloat losses over all samples."
+        "- `found %` is valid findings over bug-present opportunities, including all participants on `tie_both_useful` and multi-finding coverage wins. `missed %` is missed-bug losses over bug-present opportunities. `low-quality %` is validity, false-positive, hallucinated, fringe, or scope-bloat losses over all samples."
     )
     lines.append("")
-    lines.append("## match history")
+    lines.append("## round history")
     lines.append("")
-    lines.append(
-        "| review | repo | model alpha | elo alpha | delta alpha | delta beta | elo beta | model beta |"
-    )
-    lines.append("|---|---|---|---:|---:|---:|---:|---|")
-    for row in recent_match_history(state_dir, k_factor=k_factor, limit=10):
+    lines.append("| review | repo | rating pool | placements and Elo |")
+    lines.append("|---|---|---|---|")
+    history = sorted(
+        (
+            row
+            for task in summary["task_classes"].values()
+            for row in task.get("recent_rounds", [])
+        ),
+        key=lambda row: str(row.get("recorded_at") or ""),
+        reverse=True,
+    )[:10]
+    for row in history:
+        participants = {
+            participant["variant_id"]: participant
+            for participant in row["participants"]
+        }
+        placements = []
+        for rank, group in enumerate(row["groups"], start=1):
+            placements.append(
+                f"{rank}. "
+                + " = ".join(
+                    f"{format_markdown_inline(variant_id)} {format_decimal(participants[variant_id]['elo_before'])} -> {format_decimal(participants[variant_id]['elo_after'])} ({format_signed_decimal(participants[variant_id]['elo_delta'])})"
+                    for variant_id in group
+                )
+            )
         lines.append(
-            f"| {row['review']} | {row['repo']} | {format_match_model(row['model_alpha'], row['outcome_alpha'])} | {format_decimal(row['elo_alpha'])} | "
-            f"{format_signed_decimal(row['delta_alpha'])} | {format_signed_decimal(row['delta_beta'])} | "
-            f"{format_decimal(row['elo_beta'])} | {format_match_model(row['model_beta'], row['outcome_beta'])} |"
+            f"| {format_markdown_inline(row['review'])} | {format_markdown_inline(row['repo'])} | {format_markdown_inline(row['rating_pool_id'])} | {'; '.join(placements)} |"
         )
     lines.append("")
     _atomic_write_text(state_dir / "leaderboard.md", "\n".join(lines) + "\n")

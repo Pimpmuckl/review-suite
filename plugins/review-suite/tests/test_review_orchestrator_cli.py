@@ -789,8 +789,9 @@ def test_decision_action_surfaces_arena_grade_command(tmp_path: Path) -> None:
     assert "review_suite_arena.py grade" in str(action["cmd"])
     assert "--round-id arena-round-1" in str(action["cmd"])
     assert "--task-id feature/arena" in str(action["cmd"])
-    assert "review_suite_arena.py grade" in str(action["tie_clean"])
-    assert "--winner tie --basis tie_clean" in str(action["tie_clean"])
+    assert "--rating-pool-id RATING_POOL_ID" in str(action["cmd"])
+    assert str(action["cmd"]).count("--rank") == 2
+    assert "--basis BASIS" in str(action["cmd"])
     assert "--state-dir" in str(action["cmd"])
     assert str(round_state_dir) in str(action["cmd"])
     assert "--id rvw_example" in str(action["next"])

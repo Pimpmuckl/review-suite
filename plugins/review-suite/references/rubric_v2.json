@@ -1,5 +1,5 @@
 {
-  "version": "winner_basis_v1",
+  "version": "placement_v1",
   "basis": [
     "valid_findings_vs_none",
     "more_valid_findings",
