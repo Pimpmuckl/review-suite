@@ -2727,6 +2727,7 @@ def test_write_reports_includes_independent_leaderboards_for_each_rating_pool(
     roster = _roster(
         _variant("alpha-model", task_classes=["phase_review"]),
         _variant("bravo-model", task_classes=["phase_review"]),
+        _variant("unused-model", task_classes=["phase_review"]),
     )
     discovery = _record(
         recorded_at="2026-04-12T12:00:00Z",
@@ -2772,6 +2773,7 @@ def test_write_reports_includes_independent_leaderboards_for_each_rating_pool(
     )[0]
     assert "| bravo-model | 1512.0 | 1 | 1/0/0 |" in arena_section
     assert "| alpha-model | 1512.0 | 1 | 1/0/0 |" in discovery_section
+    assert "| unused-model |" not in leaderboard
 
 
 def test_write_reports_match_history_uses_configured_k_factor(tmp_path: Path) -> None:

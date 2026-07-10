@@ -4498,6 +4498,8 @@ def write_reports(state_dir: Path, summary: dict[str, Any]) -> None:
             )
             lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
             for row in pool["leaderboard"]:
+                if row["sample_count"] == 0:
+                    continue
                 lines.append(
                     f"| {format_markdown_inline(row['variant_label'])} | {format_decimal(row['elo'])} | {row['sample_count']} | {row['wtl']} | "
                     f"{row['valid_finding_count']}/{row['finding_opportunity_count']} | {format_decimal(row['valid_finding_rate'])} | "
