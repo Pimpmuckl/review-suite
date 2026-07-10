@@ -26,6 +26,7 @@ from review_gate import (
     pending_gate_signoff_records,
 )
 from review_suite_local import (
+    grade_rank_placeholders,
     load_round,
     normalize_record_review_cwd_value,
     normalize_review_cwd_value,
@@ -552,27 +553,21 @@ def _arena_grade_command(
             or ""
         ).strip()
     grade_state_dir = Path(str(pending_payload.get("_round_state_dir") or state_dir))
-    return format_command(
-        [
-            sys.executable,
-            _script_path("review_suite_arena.py"),
-            "grade",
-            "--round-id",
-            round_id,
-            "--task-id",
-            task_id,
-            "--rating-pool-id",
-            "RATING_POOL_ID",
-            "--rank",
-            "FIRST[,TIED]",
-            "--rank",
-            "NEXT",
-            "--basis",
-            "BASIS",
-            "--state-dir",
-            str(grade_state_dir),
-        ]
-    )
+    command = [
+        sys.executable,
+        _script_path("review_suite_arena.py"),
+        "grade",
+        "--round-id",
+        round_id,
+        "--task-id",
+        task_id,
+        "--rating-pool-id",
+        str(pending_payload.get("rating_pool_id") or "").strip() or "RATING_POOL_ID",
+    ]
+    for rank_group in grade_rank_placeholders(pending_payload):
+        command.extend(["--rank", rank_group])
+    command.extend(["--basis", "BASIS", "--state-dir", str(grade_state_dir)])
+    return format_command(command)
 
 
 def _round_blocked(round_record: dict[str, object]) -> bool:

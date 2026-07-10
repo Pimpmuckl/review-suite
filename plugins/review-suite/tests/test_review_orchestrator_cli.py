@@ -912,7 +912,7 @@ def test_arena_recovery_action_surfaces_single_reroll(tmp_path: Path) -> None:
     assert "alpha" in backend
 
 
-def test_arena_recovery_action_dismisses_unsupported_blocked_slots(
+def test_arena_recovery_action_rerolls_charlie_slot(
     tmp_path: Path,
 ) -> None:
     repo = tmp_path / "repo"
@@ -947,11 +947,12 @@ def test_arena_recovery_action_dismisses_unsupported_blocked_slots(
     assert "review_suite_arena.py" not in str(action)
     backend = review._arena_recovery_backend_argv(state, state_dir=tmp_path / "state")
     assert backend is not None
-    assert "dismiss-round" in backend
-    assert "reroll-slot" not in backend
+    assert "reroll-slot" in backend
+    assert "charlie" in backend
+    assert "dismiss-round" not in backend
 
 
-def test_arena_recovery_action_dismisses_mixed_supported_and_unsupported_blocked_slots(
+def test_arena_recovery_action_rerolls_one_blocked_slot_at_a_time(
     tmp_path: Path,
 ) -> None:
     repo = tmp_path / "repo"
@@ -989,8 +990,9 @@ def test_arena_recovery_action_dismisses_mixed_supported_and_unsupported_blocked
     assert "review_suite_arena.py" not in str(action)
     backend = review._arena_recovery_backend_argv(state, state_dir=tmp_path / "state")
     assert backend is not None
-    assert "dismiss-round" in backend
-    assert "reroll-slot" not in backend
+    assert "reroll-slot" in backend
+    assert "bravo" in backend
+    assert "dismiss-round" not in backend
 
 
 def test_arena_recovery_action_advances_after_dismissed_blocked_round(

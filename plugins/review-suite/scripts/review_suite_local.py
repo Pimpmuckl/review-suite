@@ -1410,6 +1410,11 @@ def public_reviewer_label(slot: str) -> str:
     return slot
 
 
+def grade_rank_placeholders(payload: dict[str, Any]) -> list[str]:
+    count = max(2, len(list(payload.get("runs") or [])))
+    return [f"RANK_{index}[,TIED]" for index in range(1, count + 1)]
+
+
 def _elapsed_seconds_for_runs(runs: list[dict[str, Any]]) -> int:
     elapsed = 0
     for run in runs:

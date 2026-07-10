@@ -52,6 +52,7 @@ from review_suite_local import (
     enrich_record_repo_names,
     find_blocking_rounds_for_caller,
     find_pending_rounds_for_caller,
+    grade_rank_placeholders,
     guard_no_stage_step_down,
     includes_deep_review_effort,
     load_operational_state,
@@ -136,6 +137,7 @@ def _blocking_round_error(
                 round_id=round_id,
                 rating_pool_id=str(payload.get("rating_pool_id") or "").strip()
                 or "RATING_POOL_ID",
+                rank_groups=grade_rank_placeholders(payload),
                 state_dir=state_dir,
             ),
             "dismiss_cmd": _dismiss_round_command(round_id=round_id),
@@ -484,6 +486,7 @@ def _grade_command_for_payload(
         task_id=task_id,
         rating_pool_id=str(payload.get("rating_pool_id") or "").strip()
         or "RATING_POOL_ID",
+        rank_groups=grade_rank_placeholders(payload),
         state_dir=state_dir,
     )
 
