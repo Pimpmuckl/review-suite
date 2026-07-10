@@ -150,7 +150,7 @@ def _stub_deslop(monkeypatch: pytest.MonkeyPatch, *returncodes: int) -> list[lis
 
 def _review_discovery_config(config: dict[str, object]) -> dict[str, object]:
     profiles = config["orchestrator"]["profiles"]["stable"]
-    for mode in ("normal", "deep"):
+    for mode in ("brief", "normal", "deep"):
         profiles[mode]["steps"] = [
             {
                 "name": "broad-discovery"
