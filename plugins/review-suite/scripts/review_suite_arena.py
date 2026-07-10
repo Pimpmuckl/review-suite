@@ -132,7 +132,12 @@ def _blocking_round_error(
     if round_needs_caller_grade(payload):
         message = f"pending round blocks {action}: {round_id}"
         action_payload: dict[str, object] = {
-            "cmd": _grade_command(round_id=round_id, state_dir=state_dir),
+            "cmd": _grade_command(
+                round_id=round_id,
+                rating_pool_id=str(payload.get("rating_pool_id") or "").strip()
+                or "RATING_POOL_ID",
+                state_dir=state_dir,
+            ),
             "dismiss_cmd": _dismiss_round_command(round_id=round_id),
         }
     else:
@@ -324,7 +329,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     reroll = sub.add_parser("reroll-slot")
     reroll.add_argument("--round-id", required=True)
-    reroll.add_argument("--slot", required=True, choices=["alpha", "bravo"])
+    reroll.add_argument("--slot", required=True, choices=PUBLIC_REVIEWER_LABELS)
     reroll.add_argument("--cd")
     reroll.add_argument("--base")
     reroll.add_argument("--seed", type=int)
@@ -477,6 +482,8 @@ def _grade_command_for_payload(
     return _grade_command(
         round_id=round_id,
         task_id=task_id,
+        rating_pool_id=str(payload.get("rating_pool_id") or "").strip()
+        or "RATING_POOL_ID",
         state_dir=state_dir,
     )
 
@@ -1053,6 +1060,8 @@ def run_orchestrated_arena_round(
     lane: str,
     task_class: str,
     step_name: str,
+    rating_pool_id: str | None = None,
+    variant_groups: list[list[str]] | None = None,
     review_cwd: Path,
     state_dir: Path,
     sqlite_path: Path,
@@ -1095,6 +1104,8 @@ def run_orchestrated_arena_round(
         caller_id=None,
         caller_id_source=None,
         excluded_variant_ids=set(),
+        rating_pool_id=rating_pool_id,
+        variant_groups=variant_groups,
     )
     branch_default = task_id or _current_branch_name(review_cwd) or payload["round_id"]
     payload["task_class"] = task_class
@@ -1854,6 +1865,9 @@ def cmd_reroll_slot(args: argparse.Namespace) -> int:
         "grading_required",
         "roster_path",
         "rubric_path",
+        "rating_pool_id",
+        "schedule_index",
+        "schedule_length",
     ):
         if key in original:
             payload[key] = copy.deepcopy(original[key])

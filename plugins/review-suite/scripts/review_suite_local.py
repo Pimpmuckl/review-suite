@@ -1250,7 +1250,13 @@ def latest_rerolled_round_payload(
 def ungraded_round_exposure_records(state_dir: Path) -> list[dict[str, Any]]:
     cleanup_stale_ungraded_rounds(state_dir)
     records: list[dict[str, Any]] = []
-    for payload in iter_round_payloads(state_dir):
+    payloads = iter_round_payloads(state_dir)
+    replaced_round_ids = {
+        str(payload.get("rerolled_from_round_id") or "") for payload in payloads
+    }
+    for payload in payloads:
+        if str(payload.get("round_id") or "") in replaced_round_ids:
+            continue
         if str(payload.get("status") or "") not in {"sampled", "running", "completed"}:
             continue
         if _round_has_recorded_grade(payload):
@@ -1262,7 +1268,10 @@ def ungraded_round_exposure_records(state_dir: Path) -> list[dict[str, Any]]:
             if str(run.get("variant_id") or "")
         ]
         if task_class and runs:
-            records.append({"task_class": task_class, "runs": runs})
+            record = {"task_class": task_class, "runs": runs}
+            if payload.get("rating_pool_id"):
+                record["rating_pool_id"] = payload["rating_pool_id"]
+            records.append(record)
     return records
 
 
@@ -2058,6 +2067,59 @@ def _probation_variant_ids(
     return probation
 
 
+def _configured_variant_group(
+    *,
+    roster: dict[str, Any],
+    operational_state: dict[str, Any],
+    records: list[dict[str, Any]],
+    task_class: str,
+    rating_pool_id: str,
+    variant_groups: list[list[str]],
+    excluded_variant_ids: set[str],
+) -> tuple[list[dict[str, Any]], int]:
+    if not rating_pool_id or not variant_groups:
+        raise ValueError("configured arena selection requires a rating pool and groups")
+    schedule_index = sum(
+        1
+        for record in records
+        if record.get("task_class") == task_class
+        and record.get("rating_pool_id") == rating_pool_id
+    ) % len(variant_groups)
+    variant_ids = [str(value).strip() for value in variant_groups[schedule_index]]
+    if len(variant_ids) < 2 or any(not value for value in variant_ids):
+        raise ValueError(
+            "configured arena groups must contain at least two variant ids"
+        )
+    if len(variant_ids) != len(set(variant_ids)):
+        raise ValueError("configured arena groups cannot repeat a variant")
+    if len(variant_ids) > len(PUBLIC_REVIEWER_LABELS):
+        raise ValueError(
+            f"configured arena group exceeds {len(PUBLIC_REVIEWER_LABELS)} reviewer slots"
+        )
+    indexed = variant_index(roster)
+    unknown = [variant_id for variant_id in variant_ids if variant_id not in indexed]
+    if unknown:
+        raise ValueError(f"unknown configured arena variants: {', '.join(unknown)}")
+    unavailable = [
+        variant_id
+        for variant_id in variant_ids
+        if not variant_is_arena_eligible(indexed[variant_id], task_class)
+        or variant_id in excluded_variant_ids
+    ]
+    cooling = _active_cooldowns(operational_state, task_class)
+    unavailable.extend(
+        variant_id
+        for variant_id in variant_ids
+        if variant_id in cooling and variant_id not in unavailable
+    )
+    if unavailable:
+        raise ValueError(
+            f"configured arena variants are unavailable for {task_class}: "
+            + ", ".join(unavailable)
+        )
+    return [indexed[variant_id] for variant_id in variant_ids], schedule_index
+
+
 def select_pair(
     *,
     roster: dict[str, Any],
@@ -2069,60 +2131,76 @@ def select_pair(
     caller_id: str | None = None,
     caller_id_source: str | None = None,
     excluded_variant_ids: set[str] | None = None,
+    rating_pool_id: str | None = None,
+    variant_groups: list[list[str]] | None = None,
 ) -> dict[str, Any]:
     settings = roster.get("settings", {})
     excluded_variant_ids = excluded_variant_ids or set()
-    all_variants = [
-        variant
-        for variant in eligible_variants(roster, task_class)
-        if variant["id"] not in excluded_variant_ids
-    ]
-    cooling = _active_cooldowns(operational_state, task_class)
-    variants = [variant for variant in all_variants if variant["id"] not in cooling]
-    if len(variants) < 2:
-        if len(all_variants) >= 2 and cooling:
-            raise ValueError(
-                _cooldown_unavailability_message(
-                    task_class=task_class, cooling=cooling, needed=2
-                )
-            )
-        raise ValueError(f"need at least two active variants for {task_class}")
-    counts = summarize_counts(records, task_class)
-    state = operational_state["task_classes"][task_class]
-    available_ids = {variant["id"] for variant in variants}
-    probation_ids: list[str] = [
-        variant_id
-        for variant_id in list(state.get("probation_variant_ids") or [])
-        if variant_id in available_ids
-    ]
-    selection_mode = configured_pair_selection_mode(roster, task_class)
-    if selection_mode == "legacy":
-        selected, selection_pairing = _select_scramble_pair(
-            variants=variants,
-            reference_variants=all_variants,
-            probation_ids=probation_ids,
-            counts=counts,
-            settings=settings,
-            seed=seed,
-        )
-    elif selection_mode == "true_scramble":
-        selected, selection_pairing = _select_true_scramble_pair(
-            variants=variants, seed=seed
-        )
-    else:
-        leaderboard = aggregate_records(
+    schedule_index: int | None = None
+    if variant_groups is not None:
+        selected, schedule_index = _configured_variant_group(
             roster=roster,
-            records=records,
             operational_state=operational_state,
-        )["task_classes"][task_class]["leaderboard"]
-        selected, selection_pairing = _select_slight_bias_pair(
-            variants=variants,
-            leaderboard=leaderboard,
-            settings=settings,
-            seed=seed,
+            records=records,
+            task_class=task_class,
+            rating_pool_id=str(rating_pool_id or "").strip(),
+            variant_groups=variant_groups,
+            excluded_variant_ids=excluded_variant_ids,
         )
+        selection_mode = "configured"
+        selection_pairing = "configured_schedule"
+    else:
+        all_variants = [
+            variant
+            for variant in eligible_variants(roster, task_class)
+            if variant["id"] not in excluded_variant_ids
+        ]
+        cooling = _active_cooldowns(operational_state, task_class)
+        variants = [variant for variant in all_variants if variant["id"] not in cooling]
+        if len(variants) < 2:
+            if len(all_variants) >= 2 and cooling:
+                raise ValueError(
+                    _cooldown_unavailability_message(
+                        task_class=task_class, cooling=cooling, needed=2
+                    )
+                )
+            raise ValueError(f"need at least two active variants for {task_class}")
+        counts = summarize_counts(records, task_class)
+        state = operational_state["task_classes"][task_class]
+        available_ids = {variant["id"] for variant in variants}
+        probation_ids: list[str] = [
+            variant_id
+            for variant_id in list(state.get("probation_variant_ids") or [])
+            if variant_id in available_ids
+        ]
+        selection_mode = configured_pair_selection_mode(roster, task_class)
+        if selection_mode == "legacy":
+            selected, selection_pairing = _select_scramble_pair(
+                variants=variants,
+                reference_variants=all_variants,
+                probation_ids=probation_ids,
+                counts=counts,
+                settings=settings,
+                seed=seed,
+            )
+        elif selection_mode == "true_scramble":
+            selected, selection_pairing = _select_true_scramble_pair(
+                variants=variants, seed=seed
+            )
+        else:
+            leaderboard = aggregate_records(
+                roster=roster,
+                records=records,
+                operational_state=operational_state,
+            )["task_classes"][task_class]["leaderboard"]
+            selected, selection_pairing = _select_slight_bias_pair(
+                variants=variants,
+                leaderboard=leaderboard,
+                settings=settings,
+                seed=seed,
+            )
 
-    return {
+    payload = {
         "round_id": make_round_id(task_class, review_cwd=review_cwd),
         "task_class": task_class,
         "selection_mode": selection_mode,
@@ -2146,6 +2224,15 @@ def select_pair(
             for idx, variant in enumerate(selected)
         ],
     }
+    if variant_groups is not None:
+        payload.update(
+            {
+                "rating_pool_id": str(rating_pool_id).strip(),
+                "schedule_index": schedule_index,
+                "schedule_length": len(variant_groups),
+            }
+        )
+    return payload
 
 
 def _select_scramble_pair(
@@ -2708,6 +2795,44 @@ def build_reroll_slot_payload(
     indexed_runs = {str(run["slot"]): run for run in round_payload.get("runs", [])}
     if slot not in indexed_runs:
         raise ValueError(f"unknown slot for round {round_payload['round_id']}: {slot}")
+    if round_payload.get("selection_mode") == "configured":
+        replacement_source = indexed_runs[slot]
+        runs = [
+            {
+                "slot": slot,
+                "variant_id": replacement_source["variant_id"],
+                "model": replacement_source["model"],
+                "reasoning_effort": replacement_source["reasoning_effort"],
+                "rerolled_from_round_id": round_payload["round_id"],
+                "rerolled_from_variant_id": replacement_source["variant_id"],
+            }
+            if str(run["slot"]) == slot
+            else _finalized_run_summary(run)
+            for run in round_payload.get("runs", [])
+        ]
+        return {
+            "round_id": make_round_id(
+                str(round_payload["task_class"]),
+                review_cwd=Path(str(round_payload.get("review_cwd")))
+                if round_payload.get("review_cwd")
+                else None,
+            ),
+            "task_class": round_payload["task_class"],
+            "selection_mode": "configured",
+            "selection_pairing": round_payload.get("selection_pairing"),
+            "rating_pool_id": round_payload.get("rating_pool_id"),
+            "schedule_index": round_payload.get("schedule_index"),
+            "schedule_length": round_payload.get("schedule_length"),
+            "sampled_at": utc_now_iso(),
+            "caller_id": round_payload.get("caller_id"),
+            "caller_id_source": round_payload.get("caller_id_source"),
+            "review_cwd_normalized": round_payload.get("review_cwd_normalized"),
+            "excluded_variant_ids": [],
+            "status": "sampled",
+            "runs": runs,
+            "rerolled_from_round_id": round_payload["round_id"],
+            "rerolled_slot": slot,
+        }
     if slot not in {"alpha", "bravo"}:
         raise ValueError("reroll-slot currently supports alpha or bravo only")
     replacement_source = indexed_runs[slot]
@@ -4036,6 +4161,11 @@ def build_record_from_grade(
     groups = placement_groups_from_ranks(runs, rank_groups, basis)
     if not str(rating_pool_id or "").strip():
         raise ValueError("rating_pool_id is required")
+    configured_pool_id = str(round_payload.get("rating_pool_id") or "").strip()
+    if configured_pool_id and str(rating_pool_id).strip() != configured_pool_id:
+        raise ValueError(
+            f"rating_pool_id must match the configured pool: {configured_pool_id}"
+        )
     for run in runs:
         variant_id = str(run["variant_id"])
         if variant_id not in indexed:

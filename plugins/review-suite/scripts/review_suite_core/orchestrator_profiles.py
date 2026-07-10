@@ -38,6 +38,8 @@ class OrchestratorProfileStep:
     gate: str | None = None
     lane: str | None = None
     task_class: str | None = None
+    rating_pool_id: str | None = None
+    variant_groups: tuple[tuple[str, ...], ...] = ()
     rerun_on_findings: bool = False
     max_review_rounds: int | None = None
 
@@ -212,6 +214,42 @@ def _normalize_arena_pair(raw_step: dict[str, Any], *, field: str) -> tuple[str,
     return lane, task_class
 
 
+def _normalize_arena_pool(
+    raw_step: dict[str, Any], *, config: dict[str, Any], field: str
+) -> tuple[str, tuple[tuple[str, ...], ...]]:
+    pool_name = _non_empty_text(raw_step.get("pool"), field=f"{field}.pool")
+    arena = config.get("arena") or {}
+    pools = arena.get("pools") if isinstance(arena, dict) else None
+    pool = pools.get(pool_name) if isinstance(pools, dict) else None
+    if not isinstance(pool, dict):
+        raise ValueError(f"{field}.pool references unknown arena pool: {pool_name}")
+    rating_pool_id = _non_empty_text(
+        pool.get("rating_pool_id"), field=f"arena.pools.{pool_name}.rating_pool_id"
+    )
+    raw_groups = pool.get("variant_groups")
+    if not isinstance(raw_groups, list) or not raw_groups:
+        raise ValueError(
+            f"arena.pools.{pool_name}.variant_groups must be a non-empty array"
+        )
+    groups: list[tuple[str, ...]] = []
+    group_size: int | None = None
+    for index, raw_group in enumerate(raw_groups):
+        group_field = f"arena.pools.{pool_name}.variant_groups[{index}]"
+        if not isinstance(raw_group, list) or len(raw_group) < 2:
+            raise ValueError(f"{group_field} must contain at least two variants")
+        group = tuple(_non_empty_text(value, field=group_field) for value in raw_group)
+        if len(group) != len(set(group)):
+            raise ValueError(f"{group_field} cannot contain duplicate variants")
+        if group_size is None:
+            group_size = len(group)
+        elif len(group) != group_size:
+            raise ValueError(
+                f"arena.pools.{pool_name}.variant_groups must use one group size"
+            )
+        groups.append(group)
+    return rating_pool_id, tuple(groups)
+
+
 def _raw_loop_ref(raw_step: Any) -> str:
     if not isinstance(raw_step, dict):
         return ""
@@ -308,11 +346,16 @@ def _normalize_step(
         )
     if kind == "arena":
         lane, task_class = _normalize_arena_pair(raw_step, field=field)
+        rating_pool_id, variant_groups = _normalize_arena_pool(
+            raw_step, config=config, field=field
+        )
         return OrchestratorProfileStep(
             kind=kind,
             name=name,
             lane=lane,
             task_class=task_class,
+            rating_pool_id=rating_pool_id,
+            variant_groups=variant_groups,
         )
     model, effort, default_service_tier = _model_from_step(
         raw_step, stable_defaults=stable_defaults, field=field

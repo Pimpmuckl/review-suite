@@ -78,31 +78,38 @@ def test_default_roster_excludes_deprecated_codex_models() -> None:
     assert served_deprecated == []
 
 
-def test_default_roster_separates_sol_signoff_from_arena_eligibility() -> None:
+def test_default_roster_activates_approved_gpt_5_6_cohorts() -> None:
     roster = review_suite_local.load_roster(
         SCRIPT_DIR.parent / "references" / "roster.json"
     )
     index = review_suite_local.variant_index(roster)
-    signoff_ids = {"gpt-5.6-sol-medium", "gpt-5.6-sol-xhigh"}
-
     assert {
         variant["id"]
         for variant in roster["variants"]
         if variant["id"].startswith("gpt-5.6-") and variant.get("state") == "active"
-    } == signoff_ids
-    assert all(
-        variant["state"] == "disabled"
-        for variant in roster["variants"]
-        if variant["id"].startswith("gpt-5.6-") and variant["id"] not in signoff_ids
-    )
-    assert all(
-        index[variant_id]["arena_eligible"] is False for variant_id in signoff_ids
-    )
-    assert not signoff_ids.intersection(
-        variant["id"]
-        for task_class in ("phase_review", "pr_review")
-        for variant in review_suite_local.eligible_variants(roster, task_class)
-    )
+    } == {
+        "gpt-5.6-sol-low",
+        "gpt-5.6-sol-medium",
+        "gpt-5.6-sol-high",
+        "gpt-5.6-sol-xhigh",
+        "gpt-5.6-terra-medium",
+        "gpt-5.6-terra-high",
+        "gpt-5.6-terra-xhigh",
+        "gpt-5.6-terra-max",
+        "gpt-5.6-luna-medium",
+        "gpt-5.6-luna-high",
+        "gpt-5.6-luna-xhigh",
+        "gpt-5.6-luna-max",
+    }
+    assert {
+        variant_id
+        for variant_id in (
+            "gpt-5.6-sol-max",
+            "gpt-5.6-terra-low",
+            "gpt-5.6-luna-low",
+        )
+        if index[variant_id]["state"] == "disabled"
+    } == {"gpt-5.6-sol-max", "gpt-5.6-terra-low", "gpt-5.6-luna-low"}
 
 
 def test_reviewer_wait_line_uses_actual_count() -> None:
@@ -499,6 +506,20 @@ def test_build_record_from_grade_uses_explicit_ordered_groups() -> None:
     assert "pairwise_outcome" not in record
     assert "grade_schema" not in record
     assert all(run["grader_notes"] == "checked" for run in record["runs"])
+
+    configured = json.loads(json.dumps(round_payload))
+    configured["rating_pool_id"] = "discovery-phase-gpt-5.6-v1"
+    with pytest.raises(ValueError, match="must match the configured pool"):
+        build_record_from_grade(
+            round_payload=configured,
+            roster=roster,
+            rubric={"basis": list(review_suite_local.GRADE_BASIS_VALUES)},
+            task_id="task-1",
+            rating_pool_id="wrong-pool",
+            rank_groups=["alpha", "bravo,model-c"],
+            basis="better_bug_coverage",
+            shared_note=None,
+        )
 
     for ranks, message in (
         (["alpha", "bravo"], "missing: model-c"),
@@ -2059,12 +2080,24 @@ def test_ungraded_round_exposure_records_include_pending_but_skip_graded(
             "runs": [{"variant_id": "gpt-5.5-medium"}, {"variant_id": "gpt-5.4-high"}],
         },
     )
+    write_round(
+        tmp_path,
+        {
+            "round_id": "rerolled-round",
+            "rerolled_from_round_id": "pending-round",
+            "task_class": "pr_review",
+            "rating_pool_id": "fresh-pool",
+            "status": "running",
+            "runs": [{"variant_id": "gpt-5.5-high"}, {"variant_id": "gpt-5.4-xhigh"}],
+        },
+    )
 
     records = ungraded_round_exposure_records(tmp_path)
 
     assert records == [
         {
             "task_class": "pr_review",
+            "rating_pool_id": "fresh-pool",
             "runs": [{"variant_id": "gpt-5.5-high"}, {"variant_id": "gpt-5.4-xhigh"}],
         }
     ]
@@ -2189,6 +2222,37 @@ def test_select_pair_explores_least_exposed_under_sampled_variant_first() -> Non
     )
 
     assert payload["runs"][0]["variant_id"] in {"gpt-5.5-low", "gpt-5.5-medium"}
+
+
+def test_configured_selection_uses_only_its_fresh_pool_schedule() -> None:
+    roster = _roster(*(_variant(name) for name in "abcde"))
+    variant_groups = [["a", "b", "c", "d"], ["b", "c", "d", "e"]]
+    records = [
+        {"task_class": "phase_review", "rating_pool_id": "legacy", "runs": []},
+        {
+            "task_class": "phase_review",
+            "rating_pool_id": "fresh-pool",
+            "runs": [],
+        },
+    ]
+
+    payload = select_pair(
+        roster=roster,
+        operational_state=_operational_state(
+            champion_ids=[], probation_ids=[], cooling={}
+        ),
+        records=records,
+        task_class="phase_review",
+        review_cwd=None,
+        seed=None,
+        rating_pool_id="fresh-pool",
+        variant_groups=variant_groups,
+    )
+
+    assert payload["selection_mode"] == "configured"
+    assert payload["rating_pool_id"] == "fresh-pool"
+    assert payload["schedule_index"] == 1
+    assert [run["variant_id"] for run in payload["runs"]] == ["b", "c", "d", "e"]
 
 
 def test_select_pair_uses_scramble_even_when_champion_metadata_exists(
@@ -2470,6 +2534,52 @@ def test_build_reroll_slot_payload_pins_top_acting_champion(
     assert payload["runs"][0]["variant_id"] == "acting-high"
     assert payload["selection_anchor_kind"] == "acting_champion"
     assert payload["selection_fallback_reason"] == "champion_pool_unavailable"
+
+
+def test_configured_reroll_preserves_four_model_cohort() -> None:
+    variants = [_variant(name) for name in ("a", "b", "c", "d")]
+    runs = [
+        {
+            "slot": slot,
+            "variant_id": variant["id"],
+            "model": variant["model"],
+            "reasoning_effort": variant["reasoning_effort"],
+            "review_status": "interrupted_capacity"
+            if slot == "charlie"
+            else "completed",
+            "grade_blocked": slot == "charlie",
+            "grade_block_reason": "selected_model_at_capacity"
+            if slot == "charlie"
+            else None,
+            "reviewer_output": "" if slot == "charlie" else "No findings.",
+        }
+        for slot, variant in zip(("alpha", "bravo", "charlie", "delta"), variants)
+    ]
+
+    payload = build_reroll_slot_payload(
+        round_payload={
+            "round_id": "round-1",
+            "status": "completed",
+            "task_class": "phase_review",
+            "selection_mode": "configured",
+            "selection_pairing": "configured_schedule",
+            "rating_pool_id": "fresh-pool",
+            "schedule_index": 3,
+            "schedule_length": 13,
+            "runs": runs,
+        },
+        roster=_roster(*variants),
+        operational_state=_operational_state(
+            champion_ids=[], probation_ids=[], cooling={}
+        ),
+        records=[],
+        slot="charlie",
+        seed=None,
+    )
+
+    assert [run["variant_id"] for run in payload["runs"]] == ["a", "b", "c", "d"]
+    assert payload["runs"][2]["rerolled_from_variant_id"] == "c"
+    assert payload["rating_pool_id"] == "fresh-pool"
 
 
 def test_write_reports_includes_recent_match_history_and_model_header(

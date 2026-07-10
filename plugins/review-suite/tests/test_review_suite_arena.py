@@ -145,6 +145,23 @@ def test_blocking_round_error_uses_compact_action_for_running_round() -> None:
     assert "dismiss-round" in str(error.action_payload["dismiss_cmd"])
 
 
+def test_blocking_round_error_uses_configured_rating_pool(tmp_path: Path) -> None:
+    error = _blocking_round_error(
+        payload={
+            "round_id": "round-123",
+            "status": "completed",
+            "rating_pool_id": "discovery-phase-gpt-5.6-v1",
+            "runs": [{"review_status": "completed", "grade_blocked": False}],
+        },
+        action="review_t1",
+        state_dir=tmp_path,
+    )
+
+    assert "--rating-pool-id discovery-phase-gpt-5.6-v1" in str(
+        error.action_payload["cmd"]
+    )
+
+
 def test_print_findings_uses_recovered_full_body(capsys) -> None:
     _print_findings(
         {

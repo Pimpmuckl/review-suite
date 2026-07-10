@@ -826,6 +826,9 @@ def _run_profile_arena_once(
         lane=lane,
         task_class=str(step["task_class"]),
         step_name=str(step["name"]),
+        rating_pool_id=str(step.get("rating_pool_id") or "") or None,
+        variant_groups=[list(group) for group in step.get("variant_groups") or []]
+        or None,
         review_cwd=cwd,
         state_dir=state_dir,
         sqlite_path=Path.home() / ".codex" / "state_5.sqlite",

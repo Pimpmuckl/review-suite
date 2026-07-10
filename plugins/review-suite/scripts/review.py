@@ -266,6 +266,7 @@ def _arena_grade_command(
         or branch
         or str(state.get("public_id") or "").strip()
     )
+    rating_pool_id = str(pending_payload.get("rating_pool_id") or "").strip()
     grade_state_dir = Path(str(pending_payload.get("_round_state_dir") or state_dir))
     return format_command(
         [
@@ -277,7 +278,7 @@ def _arena_grade_command(
             "--task-id",
             task_id,
             "--rating-pool-id",
-            "RATING_POOL_ID",
+            rating_pool_id or "RATING_POOL_ID",
             "--rank",
             "FIRST[,TIED]",
             "--rank",
@@ -1616,6 +1617,8 @@ def _apply_profile_resolution(state: dict[str, Any], resolution: Any) -> dict[st
         if step.kind == "arena":
             payload["lane"] = step.lane
             payload["task_class"] = step.task_class
+            payload["rating_pool_id"] = step.rating_pool_id
+            payload["variant_groups"] = [list(group) for group in step.variant_groups]
             return payload
         payload.update(
             {

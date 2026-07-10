@@ -148,9 +148,45 @@ def _stub_deslop(monkeypatch: pytest.MonkeyPatch, *returncodes: int) -> list[lis
     return calls
 
 
+def _review_discovery_config(config: dict[str, object]) -> dict[str, object]:
+    profiles = config["orchestrator"]["profiles"]["stable"]
+    for mode in ("normal", "deep"):
+        profiles[mode]["steps"] = [
+            {
+                "name": "broad-discovery"
+                if step.get("pool") == "discovery_phase"
+                else "deep-discovery",
+                "count": 4 if step.get("pool") == "discovery_phase" else 2,
+                "model_ref": "discovery_brief_model"
+                if step.get("pool") == "discovery_phase"
+                else "discovery_deep_model",
+                **{
+                    key: step[key]
+                    for key in (
+                        "loop_ref",
+                        "subtract_loop_ref",
+                        "subtract_if",
+                        "min_loops",
+                    )
+                    if key in step
+                },
+            }
+            if step.get("pool") in {"discovery_phase", "discovery_deep"}
+            else step
+            for step in profiles[mode]["steps"]
+        ]
+    return config
+
+
 def _stub_review(
     monkeypatch: pytest.MonkeyPatch, *round_ids: str
 ) -> list[dict[str, object]]:
+    load_config = review.load_config
+    monkeypatch.setattr(
+        review,
+        "load_config",
+        lambda state_dir: _review_discovery_config(deepcopy(load_config(state_dir))),
+    )
     calls: list[dict[str, object]] = []
     ids = list(round_ids) or ["phase_review-round-1"]
 
@@ -200,6 +236,12 @@ def _stub_review_with_terminal(
     *commands: str,
     round_ids: tuple[str, ...] = ("phase_review-round-1", "phase_review-round-2"),
 ) -> list[dict[str, object]]:
+    load_config = review.load_config
+    monkeypatch.setattr(
+        review,
+        "load_config",
+        lambda state_dir: _review_discovery_config(deepcopy(load_config(state_dir))),
+    )
     calls: list[dict[str, object]] = []
     terminal_commands = list(commands) or ["clean"]
 
@@ -418,7 +460,7 @@ def _stub_gate_with_terminal(
 def _use_compact_normal_profile(
     monkeypatch: pytest.MonkeyPatch, state_dir: Path, *, include_deep: bool = False
 ) -> dict[str, object]:
-    config = deepcopy(review.load_config(state_dir))
+    config = _review_discovery_config(deepcopy(review.load_config(state_dir)))
     defaults = config["orchestrator"]["stable_defaults"]
     defaults["normal_discovery_loops"] = 1
     if include_deep:
@@ -466,6 +508,31 @@ def _write_cycle_payload(
     (state_dir / "orchestrator" / "cycles" / f"{cycle_key}.json").write_text(
         json.dumps(payload), encoding="utf-8"
     )
+
+
+def test_profile_resolution_serializes_configured_arena_pool(tmp_path: Path) -> None:
+    config = review.load_config(tmp_path / "state")
+    resolution = review.resolve_orchestrator_profile(
+        config, mode="brief", selection="stable"
+    )
+
+    state = review._apply_profile_resolution({"selection": {}}, resolution)
+
+    assert state["review_plan"]["steps"][0] == {
+        "kind": "arena",
+        "name": "phase-discovery-brawl",
+        "lane": "review_t1",
+        "task_class": "phase_review",
+        "rating_pool_id": "discovery-phase-gpt-5.6-v1",
+        "variant_groups": [
+            [
+                "gpt-5.4-medium",
+                "gpt-5.5-medium",
+                "gpt-5.6-sol-medium",
+                "gpt-5.6-terra-medium",
+            ]
+        ],
+    }
 
 
 def _gate_signoff_decisions(state_dir: Path) -> list[dict[str, object]]:
@@ -707,6 +774,8 @@ def test_orchestrator_arena_helper_uses_pr_prompt_for_pr_review(
         lane="review_t3",
         task_class="pr_review",
         step_name="arena-pr-review",
+        rating_pool_id="arena-deep-gpt-5.6-v1",
+        variant_groups=[["a", "b", "c", "d"]],
         review_cwd=repo,
         state_dir=state_dir,
         sqlite_path=tmp_path / "state.sqlite",
@@ -736,6 +805,8 @@ def test_orchestrator_arena_helper_uses_pr_prompt_for_pr_review(
     assert dict(captured["round_payload"])["review_cwd"] == str(repo)
     assert dict(captured["round_payload"])["progress_interval_seconds"] == 1
     assert select_calls[0]["task_class"] == "pr_review"
+    assert select_calls[0]["rating_pool_id"] == "arena-deep-gpt-5.6-v1"
+    assert select_calls[0]["variant_groups"] == [["a", "b", "c", "d"]]
     assert result["lane"] == "review_t3"
     assert result["reviewed_head"] == head
     assert result["arena_round"] is True
@@ -777,6 +848,7 @@ def test_decision_action_surfaces_arena_grade_command(tmp_path: Path) -> None:
             "arena_round": True,
             "status": "completed",
             "task_id_hint": "feature/arena",
+            "rating_pool_id": "arena-deep-gpt-5.6-v1",
             "runs": [
                 {"slot": "alpha", "review_status": "completed", "grade_blocked": False}
             ],
@@ -789,7 +861,7 @@ def test_decision_action_surfaces_arena_grade_command(tmp_path: Path) -> None:
     assert "review_suite_arena.py grade" in str(action["cmd"])
     assert "--round-id arena-round-1" in str(action["cmd"])
     assert "--task-id feature/arena" in str(action["cmd"])
-    assert "--rating-pool-id RATING_POOL_ID" in str(action["cmd"])
+    assert "--rating-pool-id arena-deep-gpt-5.6-v1" in str(action["cmd"])
     assert str(action["cmd"]).count("--rank") == 2
     assert "--basis BASIS" in str(action["cmd"])
     assert "--state-dir" in str(action["cmd"])
