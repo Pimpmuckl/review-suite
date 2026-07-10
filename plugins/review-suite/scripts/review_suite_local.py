@@ -4041,6 +4041,8 @@ def compact_benchmark_record(record: dict[str, Any]) -> dict[str, Any]:
         "placement_v1": deepcopy(record["placement_v1"]),
         "runs": [compact_benchmark_run(run) for run in record.get("runs", [])],
     }
+    if record.get("reporting_pool"):
+        compacted["reporting_pool"] = True
     repo_name = str(record.get("repo_name") or "").strip()
     if repo_name:
         compacted["repo_name"] = repo_name
@@ -4188,6 +4190,8 @@ def build_record_from_grade(
         "placement_v1": {"groups": groups, "basis": basis},
         "runs": runs,
     }
+    if round_payload.get("reporting_pool"):
+        record["reporting_pool"] = True
     repo_name = repo_name_from_round_payload(round_payload)
     if repo_name != "-":
         record["repo_name"] = repo_name
@@ -4275,7 +4279,8 @@ def aggregate_records(
             placement = placement_record(record, expected_variants=variants)
             if placement is not None:
                 placed.append((record, placement))
-        rating_pool_id = placed[-1][1][0] if placed else None
+        reporting = [item for item in placed if item[0].get("reporting_pool")]
+        rating_pool_id = (reporting or placed)[-1][1][0] if placed else None
         recent_rounds: list[dict[str, Any]] = []
         indexed = variant_index(roster)
         for record, (pool_id, groups, basis) in placed:

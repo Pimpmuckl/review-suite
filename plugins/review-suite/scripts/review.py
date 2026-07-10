@@ -1614,6 +1614,8 @@ def _apply_profile_resolution(state: dict[str, Any], resolution: Any) -> dict[st
             payload["lane"] = step.lane
             payload["task_class"] = step.task_class
             payload["rating_pool_id"] = step.rating_pool_id
+            if step.reporting_pool:
+                payload["reporting_pool"] = True
             payload["variant_groups"] = [list(group) for group in step.variant_groups]
             return payload
         payload.update(

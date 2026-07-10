@@ -814,7 +814,7 @@ def _print_next_steps(
         return
     print("Grade:", file=sys.stderr, flush=True)
     print(
-        _grade_command(),
+        _grade_command(rank_groups=grade_rank_placeholders(round_result)),
         file=sys.stderr,
         flush=True,
     )
@@ -1064,6 +1064,7 @@ def run_orchestrated_arena_round(
     task_class: str,
     step_name: str,
     rating_pool_id: str | None = None,
+    reporting_pool: bool = False,
     variant_groups: list[list[str]] | None = None,
     review_cwd: Path,
     state_dir: Path,
@@ -1117,6 +1118,7 @@ def run_orchestrated_arena_round(
     payload["rubric_path"] = str(rubric_path)
     payload["public_task"] = lane
     payload["orchestrator_step"] = step_name
+    payload["reporting_pool"] = reporting_pool
     payload["arena_round"] = True
     payload["grading_required"] = True
     payload.setdefault("sampled_at", utc_now_iso())
@@ -1869,6 +1871,7 @@ def cmd_reroll_slot(args: argparse.Namespace) -> int:
         "roster_path",
         "rubric_path",
         "rating_pool_id",
+        "reporting_pool",
         "schedule_index",
         "schedule_length",
     ):

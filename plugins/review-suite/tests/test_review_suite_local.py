@@ -465,6 +465,7 @@ def test_build_record_from_grade_uses_explicit_ordered_groups() -> None:
         "round_id": "round-1",
         "task_class": "phase_review",
         "selection_mode": "true_scramble",
+        "reporting_pool": True,
         "status": "completed",
         "runs": [
             {
@@ -499,6 +500,7 @@ def test_build_record_from_grade_uses_explicit_ordered_groups() -> None:
     )
 
     assert record["rating_pool_id"] == "arena-phase-v1"
+    assert record["reporting_pool"] is True
     assert record["placement_v1"] == {
         "groups": [["model-a"], ["model-b", "model-c"]],
         "basis": "better_bug_coverage",
@@ -2010,6 +2012,47 @@ def test_aggregate_records_isolates_latest_pool_and_projects_placements() -> Non
         "usage": {"input_tokens": 10},
         "cost_usd": 0.1,
     }
+
+    records[0]["reporting_pool"] = True
+    preferred = aggregate_records(
+        roster=roster,
+        records=records,
+        operational_state=_operational_state(
+            champion_ids=[], probation_ids=[], cooling={}
+        ),
+    )["task_classes"]["phase_review"]
+    assert preferred["rating_pool_id"] == "pool-a"
+    assert len(preferred["recent_rounds"]) == 1
+
+
+def test_aggregate_records_does_not_select_ungraded_reporting_pool() -> None:
+    roster = _roster(_variant("alpha-model"), _variant("bravo-model"))
+    records = [
+        _record(
+            recorded_at="2026-04-12T12:00:00Z",
+            round_id="discovery",
+            task_class="phase_review",
+            alpha="alpha-model",
+            beta="bravo-model",
+            rating_pool_id="discovery-pool",
+        ),
+        {
+            "task_class": "phase_review",
+            "rating_pool_id": "arena-pool",
+            "reporting_pool": True,
+            "runs": [{"variant_id": "alpha-model"}, {"variant_id": "bravo-model"}],
+        },
+    ]
+
+    task = aggregate_records(
+        roster=roster,
+        records=records,
+        operational_state=_operational_state(
+            champion_ids=[], probation_ids=[], cooling={}
+        ),
+    )["task_classes"]["phase_review"]
+
+    assert task["rating_pool_id"] == "discovery-pool"
 
 
 def test_aggregate_records_ignores_ungraded_and_legacy_pair_records() -> None:

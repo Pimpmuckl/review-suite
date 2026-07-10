@@ -253,6 +253,11 @@ def test_arena_enabled_inserts_arena_steps_and_keeps_minimum_discovery(
         ("arena", "arena-phase-review-2", "review_t1", "phase_review"),
         ("review", "precision-signoff", None, None),
     ]
+    assert [step.reporting_pool for step in normal if step.kind == "arena"] == [
+        False,
+        True,
+        True,
+    ]
 
     deep = profiles["stable"]["deep"].steps
     assert [(step.kind, step.name, step.lane, step.task_class) for step in deep] == [
@@ -276,6 +281,10 @@ def test_default_arena_pools_are_exact_fresh_balanced_cohorts(tmp_path: Path) ->
         "discovery-deep-gpt-5.6-v1",
         "arena-phase-gpt-5.6-v1",
         "arena-deep-gpt-5.6-v1",
+    }
+    assert {name for name, pool in pools.items() if pool.get("reporting")} == {
+        "arena_phase",
+        "arena_deep",
     }
     assert pools["discovery_phase"]["variant_groups"] == [
         [

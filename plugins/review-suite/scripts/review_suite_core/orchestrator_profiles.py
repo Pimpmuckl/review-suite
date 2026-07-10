@@ -39,6 +39,7 @@ class OrchestratorProfileStep:
     lane: str | None = None
     task_class: str | None = None
     rating_pool_id: str | None = None
+    reporting_pool: bool = False
     variant_groups: tuple[tuple[str, ...], ...] = ()
     rerun_on_findings: bool = False
     max_review_rounds: int | None = None
@@ -216,7 +217,7 @@ def _normalize_arena_pair(raw_step: dict[str, Any], *, field: str) -> tuple[str,
 
 def _normalize_arena_pool(
     raw_step: dict[str, Any], *, config: dict[str, Any], field: str
-) -> tuple[str, tuple[tuple[str, ...], ...]]:
+) -> tuple[str, tuple[tuple[str, ...], ...], bool]:
     pool_name = _non_empty_text(raw_step.get("pool"), field=f"{field}.pool")
     arena = config.get("arena") or {}
     pools = arena.get("pools") if isinstance(arena, dict) else None
@@ -247,7 +248,10 @@ def _normalize_arena_pool(
                 f"arena.pools.{pool_name}.variant_groups must use one group size"
             )
         groups.append(group)
-    return rating_pool_id, tuple(groups)
+    reporting = _optional_bool(
+        pool.get("reporting"), field=f"arena.pools.{pool_name}.reporting"
+    )
+    return rating_pool_id, tuple(groups), reporting
 
 
 def _raw_loop_ref(raw_step: Any) -> str:
@@ -346,7 +350,7 @@ def _normalize_step(
         )
     if kind == "arena":
         lane, task_class = _normalize_arena_pair(raw_step, field=field)
-        rating_pool_id, variant_groups = _normalize_arena_pool(
+        rating_pool_id, variant_groups, reporting_pool = _normalize_arena_pool(
             raw_step, config=config, field=field
         )
         return OrchestratorProfileStep(
@@ -355,6 +359,7 @@ def _normalize_step(
             lane=lane,
             task_class=task_class,
             rating_pool_id=rating_pool_id,
+            reporting_pool=reporting_pool,
             variant_groups=variant_groups,
         )
     model, effort, default_service_tier = _model_from_step(

@@ -967,6 +967,23 @@ def test_completed_round_payload_success_only_emits_grade_command() -> None:
     assert "runs" not in payload
 
 
+def test_print_next_steps_uses_every_configured_rank(tmp_path, capsys) -> None:
+    __import__("review_suite_arena")._print_next_steps(
+        round_id="round-1",
+        task_id="task-1",
+        round_result={"runs": [{"slot": slot} for slot in "abcd"]},
+        review_cwd=tmp_path,
+        base="main",
+        roster_path=tmp_path / "roster.json",
+        rubric_path=tmp_path / "rubric.json",
+        state_dir=tmp_path / "state",
+        sqlite_path=tmp_path / "state.sqlite",
+        allow_unsafe_windows_wsl_fallback=False,
+    )
+
+    assert capsys.readouterr().err.count("--rank") == 4
+
+
 def test_completed_round_payload_omits_inspect_when_round_id_is_known() -> None:
     payload = _completed_round_payload(
         round_result={
@@ -1894,6 +1911,7 @@ def test_cmd_reroll_slot_records_workflow_anchor_when_completed(
             "requested_prompt": "Stored reroll prompt",
             "arena_round": True,
             "grading_required": True,
+            "reporting_pool": True,
         },
     )
     monkeypatch.setattr(
@@ -1958,6 +1976,7 @@ def test_cmd_reroll_slot_records_workflow_anchor_when_completed(
     assert writes[0]["review_cwd_normalized"] == str(tmp_path.resolve())
     assert writes[0]["arena_round"] is True
     assert writes[0]["grading_required"] is True
+    assert writes[0]["reporting_pool"] is True
     assert anchor_calls[0]["lane"] == "review_t3"
     assert anchor_calls[0]["task_id"] == "branch-1"
 

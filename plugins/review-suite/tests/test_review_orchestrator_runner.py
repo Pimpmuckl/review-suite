@@ -500,6 +500,7 @@ def test_runner_executes_arena_step_with_configured_lane(
         "task_class": "pr_review",
         "lane": "review_t3",
         "rating_pool_id": "discovery-deep-gpt-5.6-v1",
+        "reporting_pool": True,
         "variant_groups": [["a", "b", "c", "d"]],
     }
     persisted: list[dict[str, object]] = []
@@ -523,6 +524,7 @@ def test_runner_executes_arena_step_with_configured_lane(
     assert arena_calls[0]["task_class"] == "pr_review"
     assert arena_calls[0]["lane"] == "review_t3"
     assert arena_calls[0]["rating_pool_id"] == "discovery-deep-gpt-5.6-v1"
+    assert arena_calls[0]["reporting_pool"] is True
     assert arena_calls[0]["variant_groups"] == [["a", "b", "c", "d"]]
     assert arena_calls[0]["step_position"] == 1
     assert arena_calls[0]["step_total"] == 3

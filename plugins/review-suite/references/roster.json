@@ -15,10 +15,7 @@
     "probation_min_samples": 20,
     "probation_max_elo": 1500.0
   },
-  "task_classes": {
-    "phase_review": {},
-    "pr_review": {}
-  },
+  "task_classes": {"phase_review": {}, "pr_review": {}},
   "variants": [
     {
       "id": "gpt-5.3-codex-low",
