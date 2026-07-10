@@ -690,16 +690,16 @@ def test_orchestrator_action_routes_superseded_reviews(tmp_path: Path) -> None:
     assert "restart" not in action
 
 
-def test_orchestrator_action_omits_initial_emergency_github_handoff(
+def test_orchestrator_action_omits_initial_fast_github_handoff(
     tmp_path: Path,
 ) -> None:
     action = review_state._orchestrator_action(
         {
             "stage": "review-green",
-            "mode": {"effective": "emergency"},
+            "mode": {"effective": "fast"},
             "github_review": {"status": "unknown"},
         },
-        "rvw_emergency",
+        "rvw_fast",
         state_dir=tmp_path / "state",
     )
 
@@ -712,7 +712,7 @@ def test_orchestrator_action_routes_terminal_github_result_to_validation(
     action = review_state._orchestrator_action(
         {
             "stage": "review-green",
-            "mode": {"effective": "emergency"},
+            "mode": {"effective": "fast"},
             "identity": {"head": "old-head"},
             "review_heads": {
                 "last_gate_clean_head": "gate-head",
@@ -721,7 +721,7 @@ def test_orchestrator_action_routes_terminal_github_result_to_validation(
             "github_review": {"status": "clean", "reviewed_head": "head-1"},
             "validation": {"full_suite": "unknown", "ci": "unknown"},
         },
-        "rvw_emergency",
+        "rvw_fast",
         state_dir=tmp_path / "state",
         current_head="head-1",
     )

@@ -115,10 +115,10 @@
             {"name": "deep-signoff", "count": 2, "model_ref": "signoff_deep_model", "rerun_on_findings": true}
           ]
         },
-        "emergency": {
+        "fast": {
           "deslop_enabled": false,
           "steps": [
-            {"name": "urgent-signoff", "count": 2, "model_ref": "signoff_brief_model", "max_review_rounds": 2}
+            {"name": "fast-signoff", "count": 2, "model_ref": "signoff_brief_model", "max_review_rounds": 2}
           ]
         }
       }

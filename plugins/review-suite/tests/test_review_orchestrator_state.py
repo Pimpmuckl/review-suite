@@ -87,14 +87,14 @@ def test_create_cycle_is_compact_json_state_keyed_by_normalized_inputs(
         selection="auto",
         effective_selection="stable",
     )
-    emergency = create_cycle(
+    fast = create_cycle(
         cwd=repo,
         base="main",
         branch="HEAD",
         head="head-1",
         merge_base="base-1",
-        requested_mode="emergency",
-        effective_mode="emergency",
+        requested_mode="fast",
+        effective_mode="fast",
         selection="stable",
     )
     skipped = create_cycle(
@@ -116,8 +116,8 @@ def test_create_cycle_is_compact_json_state_keyed_by_normalized_inputs(
     assert state["deslop"] == {"tracked": True, "status": "tracked"}
     assert state["validation"]["review_green"] == "unknown"
     assert state["validation"]["full_suite"] == "unknown"
-    assert emergency["identity"]["branch"] is None
-    assert emergency["deslop"] == {"tracked": False, "status": "skipped-emergency"}
+    assert fast["identity"]["branch"] is None
+    assert fast["deslop"] == {"tracked": False, "status": "skipped-fast"}
     assert skipped["deslop"] == {
         "tracked": False,
         "status": "skipped",
@@ -125,7 +125,7 @@ def test_create_cycle_is_compact_json_state_keyed_by_normalized_inputs(
     }
 
 
-def test_mark_deslop_closed_disables_tracked_sidecar_and_leaves_emergency_untracked(
+def test_mark_deslop_closed_disables_tracked_sidecar_and_leaves_fast_untracked(
     tmp_path: Path,
 ) -> None:
     tracked = _cycle(tmp_path)
@@ -136,20 +136,20 @@ def test_mark_deslop_closed_disables_tracked_sidecar_and_leaves_emergency_untrac
     assert closed_again == closed
     assert tracked["deslop"] == {"tracked": True, "status": "tracked"}
 
-    emergency = create_cycle(
+    fast = create_cycle(
         cwd=tmp_path / "repo",
         base="main",
         branch="HEAD",
         head="head-1",
         merge_base="base-1",
-        requested_mode="emergency",
-        effective_mode="emergency",
+        requested_mode="fast",
+        effective_mode="fast",
         selection="stable",
     )
 
-    assert mark_deslop_closed(emergency)["deslop"] == {
+    assert mark_deslop_closed(fast)["deslop"] == {
         "tracked": False,
-        "status": "skipped-emergency",
+        "status": "skipped-fast",
     }
 
 
@@ -733,12 +733,12 @@ def test_followup_clean_reruns_sticky_signoff_step(tmp_path: Path) -> None:
     ]
 
 
-def test_emergency_terminal_findings_get_one_verification_round(tmp_path: Path) -> None:
+def test_fast_terminal_findings_get_one_verification_round(tmp_path: Path) -> None:
     state = _cycle(tmp_path)
     state["review_plan"] = {
         "steps": [
             {
-                "name": "urgent-signoff",
+                "name": "fast-signoff",
                 "count": 1,
                 "model": "gpt-5.5",
                 "reasoning_effort": "medium",
@@ -751,7 +751,7 @@ def test_emergency_terminal_findings_get_one_verification_round(tmp_path: Path) 
         round_id="signoff-1",
         lane="review_t1",
         step_index=0,
-        step_name="urgent-signoff",
+        step_name="fast-signoff",
         reviewed_head="head-1",
     )
     findings = record_findings_decision(
@@ -766,7 +766,7 @@ def test_emergency_terminal_findings_get_one_verification_round(tmp_path: Path) 
     assert fixed["pending_action"] == {
         "kind": "run-review-step",
         "step_index": 0,
-        "step": "urgent-signoff",
+        "step": "fast-signoff",
         "fix_verification": {
             "source_round_id": "signoff-1",
             "source_lane": "review_t1",
@@ -779,12 +779,12 @@ def test_emergency_terminal_findings_get_one_verification_round(tmp_path: Path) 
     assert fixed["review_heads"]["last_fix_head"] == "head-2"
 
 
-def test_emergency_terminal_findings_stop_after_round_budget(tmp_path: Path) -> None:
-    state = _cycle(tmp_path, mode="emergency")
+def test_fast_terminal_findings_stop_after_round_budget(tmp_path: Path) -> None:
+    state = _cycle(tmp_path, mode="fast")
     state["review_plan"] = {
         "steps": [
             {
-                "name": "urgent-signoff",
+                "name": "fast-signoff",
                 "count": 1,
                 "model": "gpt-5.5",
                 "reasoning_effort": "medium",
@@ -797,7 +797,7 @@ def test_emergency_terminal_findings_stop_after_round_budget(tmp_path: Path) -> 
         round_id="signoff-1",
         lane="review_t1",
         step_index=0,
-        step_name="urgent-signoff",
+        step_name="fast-signoff",
         reviewed_head="head-1",
     )
     first_findings = record_findings_decision(
@@ -812,7 +812,7 @@ def test_emergency_terminal_findings_stop_after_round_budget(tmp_path: Path) -> 
         round_id="signoff-2",
         lane="review_t1",
         step_index=0,
-        step_name="urgent-signoff",
+        step_name="fast-signoff",
         reviewed_head="head-2",
         post_findings_rerun=True,
         fix_verification=first_fixed["pending_action"]["fix_verification"],
@@ -833,7 +833,7 @@ def test_emergency_terminal_findings_stop_after_round_budget(tmp_path: Path) -> 
         "round_id": "signoff-2",
         "lane": "review_t1",
         "step_index": 0,
-        "step": "urgent-signoff",
+        "step": "fast-signoff",
         "max_review_rounds": 2,
         "fix_verification": {
             "source_round_id": "signoff-2",

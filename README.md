@@ -1,181 +1,115 @@
 # Review Suite
 
-Review Suite is a Codex plugin for stateful review workflows:
-
-- plan review
-- deslop review
-- local review orchestration
-- review progress/status checks
-- anchored GitHub `@codex review` polling
+Review Suite is a Codex plugin for stateful code review. One local orchestrator
+runs discovery, signoff, fix verification, validation tracking, and optional
+GitHub review without making the calling agent manage individual reviewer
+rounds.
 
 ## Install
-
-Add this repository as a Codex plugin marketplace:
 
 ```powershell
 codex plugin marketplace add https://github.com/Pimpmuckl/review-suite --ref main
 codex plugin add review-suite@review-suite
 ```
 
-Refresh later with:
+Refresh an existing installation with:
 
 ```powershell
 codex plugin marketplace upgrade review-suite
 ```
 
-## Requirements
+## Review modes
 
-- Codex CLI available as `codex`
-- Python 3.14.6+
-- `uv`
-- `git`
-- GitHub CLI `gh` only for `review-github`
+| Mode | Use it for | Local review |
+| --- | --- | --- |
+| `fast` | Small, localized, well-tested changes | GPT-5.6 Sol medium signoff only; no deslop; at most two review rounds |
+| `brief` | Cost-controlled review while model evaluation is active | One four-model medium discovery brawl, then Sol medium signoff |
+| `normal` | Default behavior changes | Medium discovery budget, optional phase arena round, then Sol medium signoff |
+| `deep` | Stateful, cross-system, security, concurrency, and migration work | Normal stack, xhigh discovery, optional deep arena round, Sol xhigh signoff, and GitHub review when required |
 
-## Quick Start
+Use `normal` unless the change is clearly small enough for `fast` or risky
+enough for `deep`. The current discovery evaluation and the intended future
+three-mode shape are documented in [Review strategy](docs/review-strategy.md).
 
-Use `$review` for local review/status and `$review-github` for PR-scoped GitHub review.
-
-Default local runs print reviewer text once in `Output:`, then one `Action.cmd`.
-
-Review orchestration expects committed review changes. If `git diff` is non-empty but `base..HEAD` is empty, commit the intended changes or stash unrelated worktree changes before rerunning the emitted command.
-If you accidentally repeat `--mode` after amending fixes on the same branch/base/merge-base, Review Suite reconnects to the active review id instead of starting a fresh ladder. Use `--fresh-token` only when you intentionally want a separate ladder.
-Review commands do not support a dirty-worktree override. Do not append `--allow-dirty`; commit intended review changes first.
-After a review id exists, the normal advance command is bare `review.py --id <id>`. Review Suite records structured reviewer `clean` / `findings` verdicts automatically when available, runs the next safe step, and leaves explicit `--decision clean|findings` as a manual override for ambiguous or intentional human judgment cases.
-Inspect an existing id without advancing it with `review.py --id <id> --show-status`.
-
-Modes are built from one phased stack. Phase discovery compares GPT 5.4, GPT 5.5, GPT 5.6 Sol, and GPT 5.6 Terra at medium effort; deep discovery compares the same models at xhigh. Signoff stays on GPT 5.6 Sol.
-Deslop passes are folded into any review that isn't using `emergency` as target.
-
-Arena loops are backend-injected by `review.py` only when user config opts in with `arena.enabled` plus a nonzero `normal_arena_loops` or `deep_arena_loops` budget.
-When enabled, arena loops spend discovery budget first. Each discovery phase keeps at least one four-model discovery brawl. The configured 13-event arena cycle runs four models per event, gives every candidate four appearances, and covers every candidate pair once.
-Arena grades require an explicit rating pool and one `--rank` per best-to-worst placement group; comma-separated variants in one group tie.
-
-```text
-|---- Emergency Phase ----
-|
-|--- Urgent Signoff - Single fast batch, max two rounds after findings
-     |- GPT 5.6 Sol Medium x2
-```
-
-Emergency turns green immediately on a clean urgent signoff. If findings are fixed, it allows one verification rerun; findings after that exhaust the local review budget instead of launching more reviewers.
-
-```text
-|--- Brief / Normal Phase ----
-|    |
-|    |--- Medium Discovery - Until: normal_discovery_loops
-|    |    |- Brief:  GPT 5.4 / 5.5 / 5.6 Sol / 5.6 Terra Medium
-|    |    |- Normal: four-model Medium brawl for remaining passes, min once
-|    |    |- Normal: optional backend-injected phase arena rounds
-|    |
-|    |--- Medium Signoff - Until: Green
-|    |    |- GPT 5.6 Sol Medium x2
-|
-|
-|--- Deep Phase ----
-|    |
-|    |--- Brief / Normal stack first
-|    |    |- Medium Discovery
-|    |    |- Medium Signoff
-|    |
-|    |--- Deep Discovery - Until: deep_discovery_loops
-|    |    |- four-model XHigh brawl for remaining passes, min once
-|    |    |- optional backend-injected PR arena rounds
-|    |
-|    |--- Deep Signoff - Until: Green
-|    |    |- GPT 5.6 Sol XHigh x2
-|
-|
-|--- Github Phase ----
-     |--- GitHub - Until: Green/Waived
-          |- findings -> fix -> follow-up -> rerun Deep Signoff
-```
-
-To explicitly replace an existing local review ladder with a stricter one, use the selected review id:
+## Run a review
 
 ```powershell
-python <review-suite-plugin-root>/scripts/review.py --id rvw_xxx --restart-mode deep --reason "why this run needs stricter review"
+<python> <plugin-root>/scripts/review.py --mode fast|brief|normal|deep --cd <repo-root> --base main
 ```
 
-`--restart-mode` only allows strictness escalation (`brief` to `normal`/`deep`, or `normal` to `deep`). The old review is marked superseded, and the replacement review starts as a fresh ladder for the same repo/base/branch/head/merge-base. The worktree must be clean.
+The first call creates or reconnects a review and prints one `Action.cmd`.
+Follow that command until the review is green or requires a code fix. After a
+review id exists, the normal continuation is:
 
-## Configuration
-
-Default configuration:
-
-```text
-plugins/review-suite/references/default_config.json
+```powershell
+<python> <plugin-root>/scripts/review.py --id <id>
 ```
 
-User override:
+Useful read-only checks:
+
+```powershell
+<python> <plugin-root>/scripts/review.py --status --cd <repo-root> --base main
+<python> <plugin-root>/scripts/review.py --id <id> --show-status
+<python> <plugin-root>/scripts/review.py --id <id> --show-findings
+```
+
+Review orchestration expects committed changes and a clean worktree. Run
+focused validation before review dispatch, then track the full suite and CI on
+the review id. Review green does not mean merge-ready while required validation
+is pending or unknown.
+
+To replace an active review with a stricter one:
+
+```powershell
+<python> <plugin-root>/scripts/review.py --id <id> --restart-mode deep --reason "why deeper review is required"
+```
+
+## Discovery and Arena
+
+Phase discovery currently compares GPT-5.4, GPT-5.5, GPT-5.6 Sol, and GPT-5.6
+Terra at medium effort. Deep discovery compares the same families at xhigh.
+GPT-5.6 Sol remains the final signoff model.
+
+Arena is an opt-in evaluation overlay. When enabled, it replaces part of the
+discovery budget with configured four-model events. The calling agent grades
+ordered placements and ties after checking the reviewer output; Review Suite
+does not infer winners from finding counts or output order.
+
+User configuration lives at:
 
 ```text
 ~/.codex/state/review-suite/config.json
 ```
 
-## Privacy And Network
+The shipped defaults are in
+`plugins/review-suite/references/default_config.json`. Review history, ratings,
+and orchestration state remain under `~/.codex/state/review-suite/`.
 
-Review Suite keeps review state and cost ledgers under the local review-suite state directory.
+## Skills
 
-The plugin does not publish arena telemetry to any external arena service or analytics endpoint.
-
-Network behavior:
-
-- local review workflows launch Codex CLI review sessions
-- `review-github` uses `gh` to post and poll `@codex review`
-- no other external publishing is part of the public plugin
-
-## Runtime Copies
-
-Installed cache paths are launcher paths. A git marketplace install usually launches from:
-
-```text
-~/.codex/plugins/cache/review-suite/review-suite/<version>/
-```
-
-Older local marketplace installs may launch from `~/.codex/plugins/cache/jonat-local/review-suite/local/`. Do not invoke scripts directly from `~/.codex/.tmp/marketplaces/review-suite`; that directory is Codex's marketplace source clone, not the stable plugin launcher surface.
-
-When Review Suite is launched from Codex's installed plugin cache, long-running entrypoints create or reuse a runtime copy under:
-
-```text
-~/.codex/plugin-runtimes/review-suite/<version-hash>/
-```
-
-The installed cache stays a launcher surface. Runtime commands re-exec from the runtime copy, but emitted `Action.cmd` values point back at the installed launcher so old inactive runtime directories can be removed when Windows allows it. Existing review state remains under `~/.codex/state/review-suite`.
+- `review`: local review, continuation, and status.
+- `review-plan`: review a written implementation plan.
+- `review-deslop`: one-off simplification review.
+- `review-github`: anchored GitHub pull-request review.
 
 ## Development
 
-Sync dependencies:
+Requirements: Python 3.14.6+, `uv`, Codex CLI, Git, and GitHub CLI for GitHub
+review.
 
 ```powershell
 uv sync
-```
-
-uv ignores package files uploaded in the last week.
-
-Run tests:
-
-```powershell
 uv run pytest plugins/review-suite/tests -q
+uv run ruff format --check .
+uv run ruff check .
 ```
 
-Compile scripts:
-
-```powershell
-$files = @(
-  Get-ChildItem -LiteralPath plugins/review-suite/scripts -Filter *.py -File
-  Get-ChildItem -LiteralPath plugins/review-suite/scripts/review_suite_core -Filter *.py -File
-)
-uv run python -m py_compile @($files.FullName)
-```
-
-Sync the local installed plugin cache after source edits. When the git marketplace source clone exists, the default command syncs that clone too so local plugin add/refresh paths see the same files:
+After source changes, sync the installed plugin cache and marketplace source:
 
 ```powershell
 .\scripts\sync-installed-cache.ps1
 ```
 
-Sync only the git marketplace source clone used by `codex plugin marketplace add`:
-
-```powershell
-.\scripts\sync-installed-cache.ps1 -MarketplaceSource
-```
+Installed launchers create content-addressed runtime copies under
+`~/.codex/plugin-runtimes/review-suite/`. Run commands through the installed
+plugin cache, not the temporary marketplace clone.

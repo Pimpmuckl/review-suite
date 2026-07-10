@@ -44,7 +44,7 @@ DESLOP_STATUS_DONE = "done"
 DESLOP_STATUS_FAILED = "failed"
 DESLOP_STATUS_CLOSED = "closed"
 DESLOP_STATUS_SKIPPED = "skipped"
-DESLOP_STATUS_SKIPPED_EMERGENCY = "skipped-emergency"
+DESLOP_STATUS_SKIPPED_FAST = "skipped-fast"
 
 GATE_LANES = {"review_t2", "review_t4"}
 NO_WORK_STAGES = {
@@ -122,7 +122,7 @@ def _github_review_required(state: dict[str, Any]) -> bool:
     github_status = str(
         dict(state.get("github_review") or {}).get("status") or "unknown"
     ).strip()
-    return not (_effective_mode(state) == "emergency" and github_status == "unknown")
+    return not (_effective_mode(state) == "fast" and github_status == "unknown")
 
 
 def _github_review_matches_head(state: dict[str, Any], comparison_head: str) -> bool:
@@ -267,9 +267,7 @@ def green_review_head_change_summary(
         github_status in {GITHUB_RESULT_CLEAN, GITHUB_RESULT_WAIVED}
         and github_reviewed_head == reviewed_head
     )
-    github_optional = (
-        _effective_mode(state) == "emergency" and github_status == "unknown"
-    )
+    github_optional = _effective_mode(state) == "fast" and github_status == "unknown"
     if not (github_ready or github_optional):
         return None
 
@@ -376,13 +374,13 @@ def create_cycle(
         effective_selection or requested_selection, field="effective_selection"
     )
     deslop_tracked = (
-        bool(deslop_enabled) if deslop_enabled is not None else effective != "emergency"
+        bool(deslop_enabled) if deslop_enabled is not None else effective != "fast"
     )
     if deslop_tracked:
         deslop_status = DESLOP_STATUS_TRACKED
         deslop_skip = None
-    elif effective == "emergency":
-        deslop_status = DESLOP_STATUS_SKIPPED_EMERGENCY
+    elif effective == "fast":
+        deslop_status = DESLOP_STATUS_SKIPPED_FAST
         deslop_skip = None
     else:
         deslop_status = DESLOP_STATUS_SKIPPED

@@ -1311,23 +1311,23 @@ def test_runner_rejects_mismatched_arena_lane_and_task_class(
         orchestrator_runner.run_one_expensive_step(state, state_dir=tmp_path / "state")
 
 
-def test_runner_skips_emergency_deslop(monkeypatch, tmp_path: Path) -> None:
+def test_runner_skips_fast_deslop(monkeypatch, tmp_path: Path) -> None:
     review_calls = _stub_review(monkeypatch)
 
     def fail_run(*, command: list[str], cwd: Path) -> subprocess.CompletedProcess:
-        raise AssertionError("emergency mode must not run deslop")
+        raise AssertionError("fast mode must not run deslop")
 
     monkeypatch.setattr(orchestrator_runner, "run_deslop_subprocess", fail_run)
 
     result = orchestrator_runner.run_one_expensive_step(
-        _cycle(tmp_path, mode="emergency", deslop_enabled=False),
+        _cycle(tmp_path, mode="fast", deslop_enabled=False),
         state_dir=tmp_path / "state",
     )
 
     assert result.ran_step is True
     assert result.step == "review"
     assert len(review_calls) == 1
-    assert result.state["deslop"]["status"] == "skipped-emergency"
+    assert result.state["deslop"]["status"] == "skipped-fast"
 
     green = record_clean_decision(
         result.state,
