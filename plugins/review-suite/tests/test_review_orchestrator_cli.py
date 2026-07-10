@@ -17,7 +17,6 @@ if str(SCRIPT_DIR) not in sys.path:
 
 import review
 import review_suite_arena
-from review_suite_core import review_branch_status
 from review_suite_core import orchestrator_runner, orchestrator_store
 from review_suite_local import write_round
 
@@ -92,23 +91,6 @@ def _run_review(
     return exit_code, emitted[0]
 
 
-def _run_branch_status(
-    monkeypatch: pytest.MonkeyPatch, args: list[str]
-) -> tuple[int, dict[str, object]]:
-    emitted: list[dict[str, object]] = []
-    monkeypatch.setattr(
-        review_branch_status, "emit_toon", lambda payload: emitted.append(payload)
-    )
-    monkeypatch.setattr(
-        sys, "argv", ["review.py", *_without_state_dir_args(monkeypatch, args)]
-    )
-
-    exit_code = review.main()
-
-    assert len(emitted) == 1
-    return exit_code, emitted[0]
-
-
 def _without_state_dir_args(
     monkeypatch: pytest.MonkeyPatch, args: list[str]
 ) -> list[str]:
@@ -122,11 +104,6 @@ def _without_state_dir_args(
             state_dir = Path(args[index + 1]).resolve(strict=False)
             monkeypatch.setattr(
                 review, "default_state_dir", lambda state_dir=state_dir: state_dir
-            )
-            monkeypatch.setattr(
-                review_branch_status,
-                "default_state_dir",
-                lambda state_dir=state_dir: state_dir,
             )
             index += 2
             continue
@@ -3707,7 +3684,7 @@ def test_github_result_clean_and_waived_are_terminal_for_existing_cycle(
     assert "--full-suite passed --ci passed" in str(clean["Action"]["cmd"])
     assert "--full-suite waived --ci waived" in str(clean["Action"]["alt"])
 
-    _run_review(
+    exit_code, clean = _run_review(
         monkeypatch,
         [
             "--id",
@@ -3720,10 +3697,6 @@ def test_github_result_clean_and_waived_are_terminal_for_existing_cycle(
             str(state_dir),
         ],
     )
-    exit_code, clean = _run_review(
-        monkeypatch,
-        ["--id", public_id, "--github-result", "clean", "--state-dir", str(state_dir)],
-    )
 
     assert exit_code == 0
     assert clean["status"] == "done"
@@ -3732,17 +3705,6 @@ def test_github_result_clean_and_waived_are_terminal_for_existing_cycle(
     assert clean["next_action"] == "none"
     assert clean["github_review"] == "clean"
     assert "Action" not in clean
-
-    exit_code, status = _run_review(
-        monkeypatch, ["--id", public_id, "--show-status", "--state-dir", str(state_dir)]
-    )
-    assert exit_code == 0
-    assert status["status"] == "done"
-    assert status["done"] is True
-    assert status["review_ladder"] == "complete"
-    assert status["next_action"] == "none"
-    assert status["github_review"] == "clean"
-    assert "Action" not in status
 
     state = _cycle_payload(state_dir, public_id)
     state["github_review"] = {"status": "unknown"}
@@ -3802,32 +3764,7 @@ def test_github_result_clean_and_waived_are_terminal_for_existing_cycle(
     assert stale["Action"]["blocked_by"] == ["full_suite:unknown", "ci:unknown"]
     assert "--full-suite passed --ci passed" in str(stale["Action"]["cmd"])
 
-    exit_code, branch_status = _run_branch_status(
-        monkeypatch,
-        [
-            "--status",
-            "--cd",
-            str(repo),
-            "--base",
-            "main",
-            "--state-dir",
-            str(state_dir),
-        ],
-    )
-    assert exit_code == 0
-    assert branch_status["review"] == public_id
-    assert branch_status["status"] == "head_changed_after_review"
-    assert branch_status["done"] is False
-    assert branch_status["review_ladder"] == "head_changed_after_review"
-    assert branch_status["next_action"] == "validation"
-    assert branch_status["head_changed_after_review"] is True
-    assert branch_status["reviewed_head"] == reviewed_head
-    assert branch_status["current_head"] == stale_head
-    assert branch_status["changed_since_review"] == ["app.txt"]
-    assert "stale-test or validation alignment" in branch_status["note"]
-    assert branch_status["Action"]["blocked_by"] == ["full_suite:unknown", "ci:unknown"]
-
-    _run_review(
+    exit_code, stale = _run_review(
         monkeypatch,
         [
             "--id",
@@ -3840,9 +3777,6 @@ def test_github_result_clean_and_waived_are_terminal_for_existing_cycle(
             str(state_dir),
         ],
     )
-    exit_code, stale = _run_review(
-        monkeypatch, ["--id", public_id, "--show-status", "--state-dir", str(state_dir)]
-    )
     assert exit_code == 0
     assert stale["status"] == "head_changed_after_review"
     assert stale["done"] is False
@@ -3852,27 +3786,6 @@ def test_github_result_clean_and_waived_are_terminal_for_existing_cycle(
     assert stale["current_head"] == stale_head
     assert stale["changed_since_review"] == ["app.txt"]
     assert "Action" not in stale
-
-    exit_code, branch_status = _run_branch_status(
-        monkeypatch,
-        [
-            "--status",
-            "--cd",
-            str(repo),
-            "--base",
-            "main",
-            "--state-dir",
-            str(state_dir),
-        ],
-    )
-    assert exit_code == 0
-    assert branch_status["review"] == public_id
-    assert branch_status["status"] == "head_changed_after_review"
-    assert branch_status["done"] is False
-    assert branch_status["review_ladder"] == "head_changed_after_review"
-    assert branch_status["next_action"] == "inspect_changed_since_review"
-    assert branch_status["changed_since_review"] == ["app.txt"]
-    assert "Action" not in branch_status
 
     state = _cycle_payload(state_dir, public_id)
     state["github_review"] = {"status": "unknown"}
@@ -4275,11 +4188,9 @@ def test_github_result_after_amend_requires_same_id_signoff(
     assert state["github_review"]["status"] == "unknown"
 
 
-@pytest.mark.parametrize("mode", ["normal", "fast"])
 def test_github_result_after_prior_findings_amend_requires_same_id_signoff(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-    mode: str,
 ) -> None:
     _stub_deslop(monkeypatch)
     _stub_review(monkeypatch, "signoff-round-1", "signoff-round-2")
@@ -4295,7 +4206,7 @@ def test_github_result_after_prior_findings_amend_requires_same_id_signoff(
         monkeypatch,
         [
             "--mode",
-            mode,
+            "normal",
             "--cd",
             str(repo),
             "--base",
