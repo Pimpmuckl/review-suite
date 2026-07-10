@@ -10,9 +10,10 @@ from .model_labels import (
     supported_reasoning_efforts_text,
 )
 
-SUPPORTED_MODES = ("brief", "normal", "deep", "emergency")
+SUPPORTED_MODES = ("fast", "brief", "normal", "deep")
 SUPPORTED_SELECTIONS = ("stable", "auto")
-RESTART_MODE_ORDER = {"brief": 0, "normal": 1, "deep": 2}
+MODE_STRICTNESS_ORDER = {"fast": 0, "brief": 1, "normal": 2, "deep": 3}
+RESTART_TARGET_MODES = ("brief", "normal", "deep")
 SUPPORTED_SELECTION_REASONS = (
     "explicit_stable",
     "auto_stable_profile",

@@ -101,7 +101,7 @@ def test_windows_cache_launcher_waits_for_runtime_and_returns_child_exit(
     with pytest.raises(SystemExit) as exc:
         bootstrap_from_installed_cache(
             plugin_root / "scripts" / "review.py",
-            argv=["review.py", "--mode", "emergency", "--base", "main"],
+            argv=["review.py", "--mode", "fast", "--base", "main"],
             environ={"CODEX_HOME": str(codex_home)},
             executable="python",
             execv=lambda executable, argv: execv_calls.append((executable, argv)),
@@ -115,7 +115,7 @@ def test_windows_cache_launcher_waits_for_runtime_and_returns_child_exit(
     executable, argv = run_calls[0]
     assert executable == "python"
     assert Path(argv[1]).is_relative_to(codex_home / "plugin-runtimes" / "review-suite")
-    assert tuple(argv[2:]) == ("--mode", "emergency", "--base", "main")
+    assert tuple(argv[2:]) == ("--mode", "fast", "--base", "main")
     assert launcher_values == [str(plugin_root / "scripts" / "review.py")]
     assert os.environ.get(runtime_bootstrap.LAUNCHER_SCRIPT_ENV) is None
 

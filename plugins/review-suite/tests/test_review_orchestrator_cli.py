@@ -2531,7 +2531,7 @@ def test_id_show_status_reports_cycle_without_advancing(
         monkeypatch,
         [
             "--mode",
-            "emergency",
+            "fast",
             "--cd",
             str(repo),
             "--base",
@@ -2552,7 +2552,7 @@ def test_id_show_status_reports_cycle_without_advancing(
     assert exit_code == 0
     assert payload["review"] == public_id
     assert payload["status"] == "decision-pending"
-    assert payload["mode"] == "emergency"
+    assert payload["mode"] == "fast"
     assert payload["cwd"] == str(repo)
     assert payload["base"] == "main"
     assert payload["branch"] == "feature/show-status"
@@ -2561,7 +2561,7 @@ def test_id_show_status_reports_cycle_without_advancing(
         payload["merge_base"] == str(dict(before_state["identity"])["merge_base"])[:12]
     )
     assert payload["rounds"] == 1
-    assert payload["deslop"] == "skipped-emergency"
+    assert payload["deslop"] == "skipped-fast"
     assert dict(payload["worktree"]) == {
         "branch": "feature/show-status",
         "head": str(dict(before_state["identity"])["head"])[:12],
@@ -2789,6 +2789,67 @@ def test_restart_mode_supersedes_cycle_and_starts_fresh_deep_ladder(
     assert review_calls[1]["allow_unsafe_windows_wsl_fallback"] is True
     assert review_calls[1]["step_position"] == 1
     assert review_calls[1]["step_total"] == 4
+
+
+def test_fast_review_can_restart_into_deep_without_becoming_a_restart_target(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    deslop_calls = _stub_deslop(monkeypatch)
+    review_calls = _stub_review(monkeypatch, "fast-round-1", "deep-round-1")
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _use_compact_normal_profile(monkeypatch, state_dir, include_deep=True)
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/restart-fast")
+    _commit_file(repo, "app.txt", "feature\n", "feature")
+
+    _, created = _run_review(
+        monkeypatch,
+        [
+            "--mode",
+            "fast",
+            "--cd",
+            str(repo),
+            "--base",
+            "main",
+            "--state-dir",
+            str(state_dir),
+        ],
+    )
+    old_id = str(created["review"])
+
+    exit_code, restarted = _run_review(
+        monkeypatch,
+        [
+            "--id",
+            old_id,
+            "--restart-mode",
+            "deep",
+            "--reason",
+            "fast review needs deeper analysis",
+            "--state-dir",
+            str(state_dir),
+        ],
+    )
+
+    new_id = str(restarted["review"])
+    assert exit_code == 0
+    assert new_id != old_id
+    assert len(deslop_calls) == 1
+    assert len(review_calls) == 1
+    assert _cycle_payload(state_dir, old_id)["stage"] == "aborted"
+    new_state = _cycle_payload(state_dir, new_id)
+    assert new_state["mode"] == {"requested": "deep", "effective": "deep"}
+    assert new_state["restart"]["from_mode"] == "fast"
+
+    restart_action = next(
+        action
+        for action in review.build_parser()._actions
+        if action.dest == "restart_mode"
+    )
+    assert tuple(restart_action.choices) == ("brief", "normal", "deep")
 
 
 def test_restart_mode_preserves_skip_deslop(
@@ -3114,11 +3175,11 @@ def test_deslop_done_requires_id_and_rejects_other_actions(
         assert "--deslop-done cannot be combined" in errors[-1]
 
 
-def test_deslop_done_is_noop_for_emergency_cycle(
+def test_deslop_done_is_noop_for_fast_cycle(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     def fail_deslop(*, command: list[str], cwd: Path) -> subprocess.CompletedProcess:
-        raise AssertionError("emergency mode must not run deslop")
+        raise AssertionError("fast mode must not run deslop")
 
     monkeypatch.setattr(orchestrator_runner, "run_deslop_subprocess", fail_deslop)
     _stub_review(monkeypatch, "phase_review-round-1")
@@ -3131,7 +3192,7 @@ def test_deslop_done_is_noop_for_emergency_cycle(
         monkeypatch,
         [
             "--mode",
-            "emergency",
+            "fast",
             "--cd",
             str(repo),
             "--base",
@@ -3150,7 +3211,7 @@ def test_deslop_done_is_noop_for_emergency_cycle(
     assert exit_code == 0
     assert "--decision clean" in str(closed["Action"]["cmd"])
     state = _cycle_payload(state_dir, public_id)
-    assert state["deslop"] == {"tracked": False, "status": "skipped-emergency"}
+    assert state["deslop"] == {"tracked": False, "status": "skipped-fast"}
 
 
 def test_deslop_step_prints_output_once(
@@ -3273,7 +3334,7 @@ def test_review_step_output_is_not_reprinted_by_review_py(
         monkeypatch,
         [
             "--mode",
-            "emergency",
+            "fast",
             "--cd",
             str(repo),
             "--base",
@@ -3407,7 +3468,7 @@ def test_github_review_runs_existing_lane_with_canonical_state_dir_and_force(
         monkeypatch,
         [
             "--mode",
-            "emergency",
+            "fast",
             "--cd",
             str(repo),
             "--base",
@@ -3469,7 +3530,7 @@ def test_github_review_persists_resumed_wsl_runtime(
         monkeypatch,
         [
             "--mode",
-            "emergency",
+            "fast",
             "--cd",
             str(repo),
             "--base",
@@ -3879,7 +3940,7 @@ def test_github_result_findings_does_not_auto_start_followup_when_fix_already_co
         monkeypatch,
         [
             "--mode",
-            "emergency",
+            "fast",
             "--cd",
             str(repo),
             "--base",
@@ -4214,7 +4275,7 @@ def test_github_result_after_amend_requires_same_id_signoff(
     assert state["github_review"]["status"] == "unknown"
 
 
-@pytest.mark.parametrize("mode", ["normal", "emergency"])
+@pytest.mark.parametrize("mode", ["normal", "fast"])
 def test_github_result_after_prior_findings_amend_requires_same_id_signoff(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -6047,13 +6108,13 @@ def test_auto_selection_requires_stable_profile(
     assert not (state_dir / "orchestrator" / "index.json").exists()
 
 
-def test_emergency_mode_skips_deslop_and_runs_review(
+def test_fast_mode_skips_deslop_and_runs_review(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     review_calls = _stub_review(monkeypatch)
 
     def fail_run(*, command: list[str], cwd: Path) -> subprocess.CompletedProcess:
-        raise AssertionError("emergency mode must not run deslop")
+        raise AssertionError("fast mode must not run deslop")
 
     monkeypatch.setattr(orchestrator_runner, "run_deslop_subprocess", fail_run)
     repo = tmp_path / "repo"
@@ -6065,7 +6126,7 @@ def test_emergency_mode_skips_deslop_and_runs_review(
         monkeypatch,
         [
             "--mode",
-            "emergency",
+            "fast",
             "--cd",
             str(repo),
             "--base",
@@ -6105,27 +6166,27 @@ def test_emergency_mode_skips_deslop_and_runs_review(
     assert "--full-suite passed --ci passed" in str(github_clean["Action"]["cmd"])
 
 
-def test_emergency_manual_github_findings_keeps_re_review_action(
+def test_fast_manual_github_findings_keeps_re_review_action(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     review_calls = _stub_review(monkeypatch, "signoff-round-1", "signoff-round-2")
 
     def fail_run(*, command: list[str], cwd: Path) -> subprocess.CompletedProcess:
-        raise AssertionError("emergency mode must not run deslop")
+        raise AssertionError("fast mode must not run deslop")
 
     monkeypatch.setattr(orchestrator_runner, "run_deslop_subprocess", fail_run)
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
     _init_repo(repo)
     _commit_file(repo, "app.txt", "base\n", "base")
-    _git(repo, "checkout", "-b", "feature/emergency-github-findings")
+    _git(repo, "checkout", "-b", "feature/fast-github-findings")
     _commit_file(repo, "app.txt", "feature\n", "feature")
 
     _, opened = _run_review(
         monkeypatch,
         [
             "--mode",
-            "emergency",
+            "fast",
             "--cd",
             str(repo),
             "--base",
@@ -6167,7 +6228,7 @@ def test_emergency_manual_github_findings_keeps_re_review_action(
     )
     assert "--decision clean" in str(signoff["Action"]["cmd"])
     assert len(review_calls) == 2
-    assert review_calls[1]["step_name"] == "urgent-signoff"
+    assert review_calls[1]["step_name"] == "fast-signoff"
 
     _, final_clean = _run_review(
         monkeypatch,
@@ -6185,13 +6246,13 @@ def test_emergency_manual_github_findings_keeps_re_review_action(
     )
 
 
-def test_emergency_skip_deslop_flag_reuses_same_cycle(
+def test_fast_skip_deslop_flag_reuses_same_cycle(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     review_calls = _stub_review(monkeypatch)
 
     def fail_run(*, command: list[str], cwd: Path) -> subprocess.CompletedProcess:
-        raise AssertionError("emergency mode must not run deslop")
+        raise AssertionError("fast mode must not run deslop")
 
     monkeypatch.setattr(orchestrator_runner, "run_deslop_subprocess", fail_run)
     repo = tmp_path / "repo"
@@ -6203,7 +6264,7 @@ def test_emergency_skip_deslop_flag_reuses_same_cycle(
         monkeypatch,
         [
             "--mode",
-            "emergency",
+            "fast",
             "--cd",
             str(repo),
             "--base",
@@ -6216,7 +6277,7 @@ def test_emergency_skip_deslop_flag_reuses_same_cycle(
         monkeypatch,
         [
             "--mode",
-            "emergency",
+            "fast",
             "--skip-deslop",
             "--cd",
             str(repo),
@@ -6232,7 +6293,7 @@ def test_emergency_skip_deslop_flag_reuses_same_cycle(
     assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 1
     assert _cycle_payload(state_dir, str(created["review"]))["deslop"] == {
         "tracked": False,
-        "status": "skipped-emergency",
+        "status": "skipped-fast",
     }
 
 
@@ -6242,7 +6303,7 @@ def test_stale_decision_renders_current_action_without_mutating_cycle(
     review_calls = _stub_review(monkeypatch)
 
     def fail_run(*, command: list[str], cwd: Path) -> subprocess.CompletedProcess:
-        raise AssertionError("emergency mode must not run deslop")
+        raise AssertionError("fast mode must not run deslop")
 
     monkeypatch.setattr(orchestrator_runner, "run_deslop_subprocess", fail_run)
     repo = tmp_path / "repo"
@@ -6254,7 +6315,7 @@ def test_stale_decision_renders_current_action_without_mutating_cycle(
         monkeypatch,
         [
             "--mode",
-            "emergency",
+            "fast",
             "--cd",
             str(repo),
             "--base",
@@ -6313,7 +6374,7 @@ def test_stale_decision_persists_auto_resume_transition(
     review_calls = _stub_review(monkeypatch)
 
     def fail_run(*, command: list[str], cwd: Path) -> subprocess.CompletedProcess:
-        raise AssertionError("emergency mode must not run deslop")
+        raise AssertionError("fast mode must not run deslop")
 
     monkeypatch.setattr(orchestrator_runner, "run_deslop_subprocess", fail_run)
     repo = tmp_path / "repo"
@@ -6327,7 +6388,7 @@ def test_stale_decision_persists_auto_resume_transition(
         monkeypatch,
         [
             "--mode",
-            "emergency",
+            "fast",
             "--cd",
             str(repo),
             "--base",
@@ -6364,7 +6425,7 @@ def test_decision_pending_with_missing_metadata_still_errors(
     _stub_review(monkeypatch)
 
     def fail_run(*, command: list[str], cwd: Path) -> subprocess.CompletedProcess:
-        raise AssertionError("emergency mode must not run deslop")
+        raise AssertionError("fast mode must not run deslop")
 
     monkeypatch.setattr(orchestrator_runner, "run_deslop_subprocess", fail_run)
     repo = tmp_path / "repo"
@@ -6376,7 +6437,7 @@ def test_decision_pending_with_missing_metadata_still_errors(
         monkeypatch,
         [
             "--mode",
-            "emergency",
+            "fast",
             "--cd",
             str(repo),
             "--base",
@@ -6405,7 +6466,7 @@ def test_decision_pending_with_missing_metadata_still_errors(
     assert _cycle_payload(state_dir, public_id) == state
 
 
-def test_emergency_mode_stops_after_two_local_review_rounds(
+def test_fast_mode_stops_after_two_local_review_rounds(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -6414,14 +6475,14 @@ def test_emergency_mode_stops_after_two_local_review_rounds(
     state_dir = tmp_path / "state"
     _init_repo(repo)
     _commit_file(repo, "app.txt", "base\n", "base")
-    _git(repo, "checkout", "-b", "feature/emergency-budget")
+    _git(repo, "checkout", "-b", "feature/fast-budget")
     _commit_file(repo, "app.txt", "feature\n", "feature")
 
     _, opened = _run_review(
         monkeypatch,
         [
             "--mode",
-            "emergency",
+            "fast",
             "--cd",
             str(repo),
             "--base",
@@ -6435,7 +6496,7 @@ def test_emergency_mode_stops_after_two_local_review_rounds(
         monkeypatch,
         ["--id", public_id, "--decision", "findings", "--state-dir", str(state_dir)],
     )
-    _commit_file(repo, "app.txt", "feature\nfix one\n", "fix first emergency finding")
+    _commit_file(repo, "app.txt", "feature\nfix one\n", "fix first fast finding")
     _, second_round = _run_review(
         monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)]
     )
@@ -6447,7 +6508,7 @@ def test_emergency_mode_stops_after_two_local_review_rounds(
         ["--id", public_id, "--decision", "findings", "--state-dir", str(state_dir)],
     )
     _commit_file(
-        repo, "app.txt", "feature\nfix one\nfix two\n", "fix second emergency finding"
+        repo, "app.txt", "feature\nfix one\nfix two\n", "fix second fast finding"
     )
     _, exhausted = _run_review(
         monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)]
@@ -6461,7 +6522,7 @@ def test_emergency_mode_stops_after_two_local_review_rounds(
     assert state["pending_action"]["kind"] == "review-round-budget-exhausted"
     assert [item["round_id"] for item in state["rounds"]] == ["urgent-1", "urgent-2"]
     fresh_token = review._fresh_review_token(state)
-    assert "--mode emergency" in str(exhausted["Action"]["cmd"])
+    assert "--mode fast" in str(exhausted["Action"]["cmd"])
     assert "--fresh-token" in str(exhausted["Action"]["cmd"])
     assert fresh_token in str(exhausted["Action"]["cmd"])
 
@@ -6469,7 +6530,7 @@ def test_emergency_mode_stops_after_two_local_review_rounds(
         monkeypatch,
         [
             "--mode",
-            "emergency",
+            "fast",
             "--cd",
             str(repo),
             "--base",

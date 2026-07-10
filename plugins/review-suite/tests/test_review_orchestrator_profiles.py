@@ -39,7 +39,7 @@ def test_default_stable_profiles_cover_all_modes(tmp_path: Path) -> None:
 
     profiles = load_orchestrator_profiles(config)
 
-    assert set(profiles["stable"]) == {"brief", "normal", "deep", "emergency"}
+    assert set(profiles["stable"]) == {"brief", "normal", "deep", "fast"}
     assert config["arena"]["enabled"] is False
     assert config["orchestrator"]["calibration"]["auto_promotion_enabled"] is False
     assert profiles["stable"]["brief"].deslop_enabled is True
@@ -80,11 +80,11 @@ def test_default_stable_profiles_cover_all_modes(tmp_path: Path) -> None:
     assert profiles["stable"]["normal"].steps[-1].rerun_on_findings is True
     assert profiles["stable"]["deep"].steps[3].rerun_on_findings is True
     assert profiles["stable"]["deep"].steps[-1].rerun_on_findings is True
-    assert profiles["stable"]["emergency"].deslop_enabled is False
-    assert [_step_summary(step) for step in profiles["stable"]["emergency"].steps] == [
-        ("review", "urgent-signoff", 2, "medium", False)
+    assert profiles["stable"]["fast"].deslop_enabled is False
+    assert [_step_summary(step) for step in profiles["stable"]["fast"].steps] == [
+        ("review", "fast-signoff", 2, "medium", False)
     ]
-    assert profiles["stable"]["emergency"].steps[0].max_review_rounds == 2
+    assert profiles["stable"]["fast"].steps[0].max_review_rounds == 2
     assert set(profiles) == {"stable"}
 
 
@@ -376,7 +376,7 @@ def test_stable_model_refs_require_model_effort_labels(tmp_path: Path) -> None:
         load_orchestrator_profiles(config)
 
 
-@pytest.mark.parametrize("mode", ["brief", "normal", "deep", "emergency"])
+@pytest.mark.parametrize("mode", ["brief", "normal", "deep", "fast"])
 def test_auto_selection_uses_stable_profile_when_configured(
     tmp_path: Path, mode: str
 ) -> None:

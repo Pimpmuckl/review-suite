@@ -43,7 +43,8 @@ from review_suite_core import (
 )
 from review_suite_core.config import default_state_dir, load_config
 from review_suite_core.orchestrator_profiles import (
-    RESTART_MODE_ORDER,
+    MODE_STRICTNESS_ORDER,
+    RESTART_TARGET_MODES,
     SUPPORTED_MODES,
     resolve_orchestrator_profile,
 )
@@ -131,7 +132,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = AxiArgumentParser(description="Run the review-suite orchestrator shell.")
     parser.add_argument("--id")
     parser.add_argument("--mode", choices=SUPPORTED_MODES)
-    parser.add_argument("--restart-mode", choices=tuple(RESTART_MODE_ORDER))
+    parser.add_argument("--restart-mode", choices=RESTART_TARGET_MODES)
     parser.add_argument("--reason")
     parser.add_argument("--cd")
     parser.add_argument("--base")
@@ -724,12 +725,12 @@ def _restart_reason(args: argparse.Namespace) -> str:
 
 
 def _mode_rank(mode: str) -> int:
-    if mode not in RESTART_MODE_ORDER:
-        allowed = ", ".join(RESTART_MODE_ORDER)
+    if mode not in MODE_STRICTNESS_ORDER:
+        allowed = ", ".join(MODE_STRICTNESS_ORDER)
         raise ValueError(
-            f"review cycle mode {mode} cannot be restarted; supported restart modes: {allowed}"
+            f"review cycle mode {mode} cannot be restarted; supported modes: {allowed}"
         )
-    return RESTART_MODE_ORDER[mode]
+    return MODE_STRICTNESS_ORDER[mode]
 
 
 def _validate_restart_mode(state: dict[str, Any], target_mode: str) -> str:
@@ -1763,7 +1764,7 @@ def _green_cycle_needs_current_head_signoff(
         return False
     github_status = _github_review_status(state)
     if (
-        _mode_label(state) == "emergency" and github_status == "unknown"
+        _mode_label(state) == "fast" and github_status == "unknown"
     ) or github_status in {GITHUB_RESULT_CLEAN, GITHUB_RESULT_WAIVED}:
         return False
     summary = review_ladder_summary(state, current_head=head)
@@ -2367,7 +2368,7 @@ def _github_pending_head_change_identity(
         return None
     github_status = _github_review_status(state)
     if (
-        _mode_label(state) == "emergency" and github_status == "unknown"
+        _mode_label(state) == "fast" and github_status == "unknown"
     ) or github_status in {GITHUB_RESULT_CLEAN, GITHUB_RESULT_WAIVED}:
         return None
     try:
@@ -2535,10 +2536,7 @@ def _action_payload(state: dict[str, Any], *, state_dir: Path) -> dict[str, Any]
                 action = None
         elif _github_review_is_terminal(state):
             action = _github_terminal_action(state, public_id, state_dir=state_dir)
-        elif (
-            _mode_label(state) == "emergency"
-            and _github_review_status(state) == "unknown"
-        ):
+        elif _mode_label(state) == "fast" and _github_review_status(state) == "unknown":
             action = None
         else:
             action = _github_handoff_action(state, state_dir=state_dir)

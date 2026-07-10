@@ -13,7 +13,7 @@ from review_suite_core import (
     resolve_repo_root,
 )
 from review_suite_core.config import default_state_dir
-from review_suite_core.orchestrator_profiles import RESTART_MODE_ORDER
+from review_suite_core.orchestrator_profiles import MODE_STRICTNESS_ORDER
 from review_suite_core.orchestrator_state import (
     HEAD_CHANGED_AFTER_GREEN_REVIEW_LADDER,
     green_review_head_change_summary,
@@ -374,8 +374,8 @@ def _restart_deep_action(
         or ""
     ).strip()
     if (
-        mode not in RESTART_MODE_ORDER
-        or RESTART_MODE_ORDER[mode] >= RESTART_MODE_ORDER["deep"]
+        mode not in MODE_STRICTNESS_ORDER
+        or MODE_STRICTNESS_ORDER[mode] >= MODE_STRICTNESS_ORDER["deep"]
     ):
         return None
     return {
@@ -745,7 +745,7 @@ def _orchestrator_action(
                 return None
             action = _orchestrator_validation_blocker_action(public_id, blockers)
         elif (
-            _orchestrator_mode_label(state) == "emergency"
+            _orchestrator_mode_label(state) == "fast"
             and _orchestrator_github_review_status(state) == "unknown"
         ):
             return None
