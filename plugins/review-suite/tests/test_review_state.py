@@ -108,75 +108,70 @@ def test_review_state_status_rejects_state_dir(
     assert "unrecognized arguments: --state-dir" in rendered
 
 
-def test_effective_base_ref_prefers_configured_upstream_and_marks_stale(
+@pytest.mark.parametrize("default_branch", ["main", "master"])
+def test_effective_base_ref_detects_remote_default_branch(
+    tmp_path: Path, default_branch: str
+) -> None:
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    head = _commit_file(repo, "app.txt", "content\n", "initial")
+    _git(repo, "remote", "add", "origin", str(tmp_path / "origin.git"))
+    _git(repo, "update-ref", f"refs/remotes/origin/{default_branch}", head)
+    _git(
+        repo,
+        "symbolic-ref",
+        "refs/remotes/origin/HEAD",
+        f"refs/remotes/origin/{default_branch}",
+    )
+
+    payload = effective_base_ref(repo, None)
+
+    assert payload == {
+        "base": f"origin/{default_branch}",
+        "requested_base": f"origin/{default_branch}",
+    }
+
+
+def test_effective_base_ref_keeps_explicit_local_base(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    head = _commit_file(repo, "app.txt", "content\n", "initial")
+    _git(repo, "remote", "add", "origin", str(tmp_path / "origin.git"))
+    _git(repo, "update-ref", "refs/remotes/origin/main", head)
+    _git(
+        repo,
+        "symbolic-ref",
+        "refs/remotes/origin/HEAD",
+        "refs/remotes/origin/main",
+    )
+
+    payload = effective_base_ref(repo, "main")
+
+    assert payload == {"base": "main", "requested_base": "main"}
+
+
+def test_effective_base_ref_uses_remote_main_without_symbolic_head(
     tmp_path: Path,
 ) -> None:
     repo = tmp_path / "repo"
     _init_repo(repo)
-    old_main = _commit_file(repo, "app.txt", "old\n", "old main")
-    new_main = _commit_file(repo, "app.txt", "new\n", "new upstream main")
+    head = _commit_file(repo, "app.txt", "content\n", "initial")
     _git(repo, "remote", "add", "origin", str(tmp_path / "origin.git"))
-    _git(repo, "update-ref", "refs/remotes/origin/main", new_main)
-    _git(repo, "reset", "--hard", old_main)
-    _git(repo, "branch", "--set-upstream-to=origin/main", "main")
-    _git(repo, "checkout", "-b", "feature/stale-base")
-    _commit_file(repo, "feature.txt", "feature\n", "feature")
+    _git(repo, "update-ref", "refs/remotes/origin/main", head)
 
-    payload = effective_base_ref(repo, "main")
+    payload = effective_base_ref(repo, None)
 
-    assert payload["requested_base"] == "main"
-    assert payload["base"] == "origin/main"
-    assert payload["base_upstream"] == "origin/main"
-    assert payload["requested_base_head"] == old_main
-    assert payload["base_upstream_head"] == new_main
-    assert payload["effective_base_head"] == new_main
-    assert payload["base_ref_stale"] is True
-    assert payload["base_ref_relation"] == "behind"
+    assert payload == {"base": "origin/main", "requested_base": "origin/main"}
 
 
-def test_effective_base_ref_keeps_requested_base_when_local_branch_is_ahead(
-    tmp_path: Path,
-) -> None:
+def test_effective_base_ref_falls_back_to_local_main(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _init_repo(repo)
-    old_main = _commit_file(repo, "app.txt", "old\n", "old main")
-    _git(repo, "remote", "add", "origin", str(tmp_path / "origin.git"))
-    _git(repo, "update-ref", "refs/remotes/origin/main", old_main)
-    new_main = _commit_file(repo, "app.txt", "new\n", "new local main")
-    _git(repo, "branch", "--set-upstream-to=origin/main", "main")
-    _git(repo, "checkout", "-b", "feature/local-base")
-    _commit_file(repo, "feature.txt", "feature\n", "feature")
+    _commit_file(repo, "app.txt", "content\n", "initial")
 
-    payload = effective_base_ref(repo, "main")
+    payload = effective_base_ref(repo, None)
 
-    assert payload["requested_base"] == "main"
-    assert payload["base"] == "main"
-    assert payload["base_upstream"] == "origin/main"
-    assert payload["requested_base_head"] == new_main
-    assert payload["base_upstream_head"] == old_main
-    assert payload["effective_base_head"] == new_main
-    assert payload["base_ref_stale"] is True
-    assert payload["base_ref_relation"] == "ahead"
-
-
-def test_effective_base_ref_keeps_requested_base_when_upstream_is_unresolved(
-    tmp_path: Path,
-) -> None:
-    repo = tmp_path / "repo"
-    _init_repo(repo)
-    main_head = _commit_file(repo, "app.txt", "main\n", "main")
-    _git(repo, "remote", "add", "origin", str(tmp_path / "origin.git"))
-    _git(repo, "config", "branch.main.remote", "origin")
-    _git(repo, "config", "branch.main.merge", "refs/heads/main")
-
-    payload = effective_base_ref(repo, "main")
-
-    assert payload["requested_base"] == "main"
-    assert payload["base"] == "main"
-    assert payload["base_upstream"] == "origin/main"
-    assert payload["base_upstream_unresolved"] is True
-    assert "requested_base_head" not in payload
-    assert _git(repo, "rev-parse", "main") == main_head
+    assert payload == {"base": "main", "requested_base": "main"}
 
 
 def test_inspect_workflow_status_without_anchor_recommends_full_review(

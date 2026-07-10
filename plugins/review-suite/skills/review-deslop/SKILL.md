@@ -8,7 +8,7 @@ description: "Run an explicit one-off simplification review for a completed impl
 Use only for an explicit cleanup pass. Normal `review` runs manage their own deslop step.
 
 ```powershell
-<python> <review-suite-plugin-root>/scripts/review_deslop.py --base main --cd <repo-root>
+<python> <review-suite-plugin-root>/scripts/review_deslop.py --cd <repo-root>
 <python> <review-suite-plugin-root>/scripts/review_deslop.py --commit <sha> --cd <repo-root>
 <python> <review-suite-plugin-root>/scripts/review_deslop.py --commit <from-sha> <to-sha> --cd <repo-root>
 ```

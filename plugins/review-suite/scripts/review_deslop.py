@@ -76,7 +76,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="Review Deslop post-implementation review wrapper."
     )
     parser.add_argument("--cd")
-    parser.add_argument("--base", default="main")
+    parser.add_argument("--base", help="Override the detected default branch ref.")
     parser.add_argument("--commit", nargs="+")
     parser.add_argument("--focus")
     parser.add_argument("--wsl", action="store_true")
@@ -468,7 +468,7 @@ def main() -> int:
     try:
         args = parser.parse_args()
         commit, commit_end = normalize_commit_spec(args.commit)
-        if commit and args.base != "main":
+        if commit and args.base is not None:
             raise ValueError("use either --base or --commit")
         review_root = resolve_repo_root(args.cd)
         if use_unsafe_windows_wsl_fallback(review_root, bool(args.wsl)):
@@ -492,7 +492,7 @@ def main() -> int:
             review_target = {"commit": commit}
             prompt_base = None
         else:
-            prompt_base = str(effective_base_ref(review_root, str(args.base))["base"])
+            prompt_base = str(effective_base_ref(review_root, args.base)["base"])
             ensure_clean_git_worktree(review_root)
             review_target = {"base": prompt_base}
         static_scan = _start_static_cleanup_scan(

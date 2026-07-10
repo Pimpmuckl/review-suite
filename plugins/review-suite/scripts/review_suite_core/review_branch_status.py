@@ -7,6 +7,7 @@ from pathlib import Path
 
 from review_suite_runtime_bootstrap import launcher_script_path
 from review_suite_core import (
+    effective_base_ref,
     emit_toon,
     format_command,
     inspect_workflow_status,
@@ -994,7 +995,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     _reject_status_unc_wsl(_status_path_for_wsl_check(getattr(args, "cd", None)))
     review_cwd = resolve_repo_root(args.cd)
     state_dir = Path(default_state_dir()).resolve(strict=False)
-    base = str(args.base or "main")
+    base = str(effective_base_ref(review_cwd, args.base)["base"])
     payload = inspect_workflow_status(
         state_dir=state_dir,
         review_cwd=review_cwd,

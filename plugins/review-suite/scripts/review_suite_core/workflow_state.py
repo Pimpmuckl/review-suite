@@ -105,72 +105,43 @@ def _optional_git_text(review_cwd: Path, args: list[str]) -> str | None:
     return value or None
 
 
-def upstream_ref(review_cwd: Path, ref: str) -> str | None:
-    base = str(ref or "").strip()
-    if not base:
-        return None
-    upstream = _optional_git_text(
-        review_cwd,
-        [
-            "git",
-            "rev-parse",
-            "--abbrev-ref",
-            "--symbolic-full-name",
-            f"{base}@{{upstream}}",
-        ],
+def _default_base_ref(review_cwd: Path) -> str:
+    remotes = (_optional_git_text(review_cwd, ["git", "remote"]) or "").splitlines()
+    remotes.sort(key=lambda remote: remote != "origin")
+    for remote in remotes:
+        default_ref = _optional_git_text(
+            review_cwd,
+            [
+                "git",
+                "symbolic-ref",
+                "--quiet",
+                "--short",
+                f"refs/remotes/{remote}/HEAD",
+            ],
+        )
+        if default_ref:
+            return default_ref
+    for remote in remotes:
+        for fallback in ("main", "master"):
+            remote_ref = f"{remote}/{fallback}"
+            if _optional_git_text(
+                review_cwd,
+                ["git", "rev-parse", "--verify", "--quiet", remote_ref],
+            ):
+                return remote_ref
+    for fallback in ("main", "master"):
+        if _optional_git_text(
+            review_cwd, ["git", "rev-parse", "--verify", "--quiet", fallback]
+        ):
+            return fallback
+    raise ValueError(
+        "could not detect the repository default branch; pass --base <ref>"
     )
-    if upstream:
-        return upstream
-    remote = _optional_git_text(review_cwd, ["git", "config", f"branch.{base}.remote"])
-    merge_ref = _optional_git_text(
-        review_cwd, ["git", "config", f"branch.{base}.merge"]
-    )
-    if not remote or not merge_ref:
-        return None
-    branch_name = merge_ref.removeprefix("refs/heads/").strip()
-    if not branch_name:
-        return None
-    if remote == ".":
-        return branch_name
-    return f"{remote}/{branch_name}"
 
 
-def effective_base_ref(review_cwd: Path, base: str) -> dict[str, Any]:
-    requested = str(base or "").strip()
-    if not requested:
-        raise ValueError("base is required")
-    payload: dict[str, Any] = {
-        "base": requested,
-        "requested_base": requested,
-    }
-    upstream = upstream_ref(review_cwd, requested)
-    if not upstream or upstream == requested:
-        return payload
-    payload["base_upstream"] = upstream
-    try:
-        requested_head = resolve_ref(review_cwd, requested)
-        upstream_head = resolve_ref(review_cwd, upstream)
-    except ValueError:
-        payload["base_upstream_unresolved"] = True
-        return payload
-    payload["requested_base_head"] = requested_head
-    payload["base_upstream_head"] = upstream_head
-    payload["base_ref_stale"] = requested_head != upstream_head
-    if requested_head == upstream_head:
-        payload["effective_base_head"] = requested_head
-        payload["base_ref_relation"] = "same"
-        return payload
-    if is_ancestor(review_cwd, requested_head, upstream_head):
-        payload["base"] = upstream
-        payload["effective_base_head"] = upstream_head
-        payload["base_ref_relation"] = "behind"
-    elif is_ancestor(review_cwd, upstream_head, requested_head):
-        payload["effective_base_head"] = requested_head
-        payload["base_ref_relation"] = "ahead"
-    else:
-        payload["effective_base_head"] = requested_head
-        payload["base_ref_relation"] = "diverged"
-    return payload
+def effective_base_ref(review_cwd: Path, base: str | None) -> dict[str, Any]:
+    selected = str(base or "").strip() or _default_base_ref(review_cwd)
+    return {"base": selected, "requested_base": selected}
 
 
 def merge_base(review_cwd: Path, left_ref: str, right_ref: str = "HEAD") -> str:

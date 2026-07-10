@@ -135,7 +135,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--restart-mode", choices=RESTART_TARGET_MODES)
     parser.add_argument("--reason")
     parser.add_argument("--cd")
-    parser.add_argument("--base")
+    parser.add_argument("--base", help="Override the detected default branch ref.")
     parser.add_argument("--decision", choices=(DECISION_CLEAN, DECISION_FINDINGS))
     parser.add_argument("--github-review", action="store_true")
     parser.add_argument("--github-force", action="store_true")
@@ -692,10 +692,6 @@ def _load_cycle_and_state_dir(
         except ValueError:
             continue
     raise ValueError(f"unknown review cycle id: {public_id}")
-
-
-def _base_arg(args: argparse.Namespace) -> str:
-    return str(args.base or "main")
 
 
 def _reject_id_creation_args(args: argparse.Namespace, state: dict[str, Any]) -> None:
@@ -1931,8 +1927,7 @@ def _create_or_resume_cycle(
     review_root = resolve_repo_root(args.cd)
     head = current_head(review_root)
     branch = current_branch(review_root)
-    requested_base = _base_arg(args)
-    base_info = effective_base_ref(review_root, requested_base)
+    base_info = effective_base_ref(review_root, args.base)
     base = str(base_info["base"])
     merge_base_head = merge_base(review_root, base, "HEAD")
     config = load_config(state_dir)

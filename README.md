@@ -34,8 +34,11 @@ three-mode shape are documented in [Review strategy](docs/review-strategy.md).
 ## Run a review
 
 ```powershell
-<python> <plugin-root>/scripts/review.py --mode fast|brief|normal|deep --cd <repo-root> --base main
+<python> <plugin-root>/scripts/review.py --mode fast|brief|normal|deep --cd <repo-root>
 ```
+
+Review Suite detects the remote default branch. Use `--base <ref>` only to
+override it explicitly.
 
 The first call creates or reconnects a review and prints one `Action.cmd`.
 Follow that command until the review is green or requires a code fix. After a
@@ -48,7 +51,7 @@ review id exists, the normal continuation is:
 Useful read-only checks:
 
 ```powershell
-<python> <plugin-root>/scripts/review.py --status --cd <repo-root> --base main
+<python> <plugin-root>/scripts/review.py --status --cd <repo-root>
 <python> <plugin-root>/scripts/review.py --id <id> --show-status
 <python> <plugin-root>/scripts/review.py --id <id> --show-findings
 ```

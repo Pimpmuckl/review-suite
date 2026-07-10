@@ -48,7 +48,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="Review the interdiff after a reviewer-driven fix pass."
     )
     parser.add_argument("--cd")
-    parser.add_argument("--base", default="main")
+    parser.add_argument("--base", help="Override the detected default branch ref.")
     parser.add_argument("--since")
     parser.add_argument("--note")
     parser.add_argument("--note-file")
@@ -248,9 +248,9 @@ def main() -> int:
         note_text = load_followup_note(
             note=args.note, note_file=args.note_file, review_root=review_root
         )
-        requested_base = str(args.base)
-        base_info = effective_base_ref(review_root, requested_base)
+        base_info = effective_base_ref(review_root, args.base)
         branch_base = str(base_info["base"])
+        requested_base = str(base_info["requested_base"])
         if use_unsafe_windows_wsl_fallback(review_root, bool(args.wsl)):
             print(
                 "[review-followup] WARNING: using Windows Codex fallback for a WSL UNC repo. This bypasses the Codex sandbox and is not the happy path.",
