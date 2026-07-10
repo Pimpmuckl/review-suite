@@ -427,6 +427,14 @@ def test_cmd_costs_writes_markdown_report(monkeypatch, tmp_path: Path, capsys) -
     state_dir = tmp_path / "state"
     output = tmp_path / "costs.md"
     rows = []
+    locks: list[tuple[str, dict[str, object]]] = []
+
+    class Lock:
+        def __enter__(self):
+            return None
+
+        def __exit__(self, *args):
+            return None
 
     class Row:
         repo = "repo"
@@ -444,6 +452,10 @@ def test_cmd_costs_writes_markdown_report(monkeypatch, tmp_path: Path, capsys) -
         cost_usd = 0.012345
 
     monkeypatch.setattr("review_suite_arena.resolve_repo_root", lambda cd: repo)
+    monkeypatch.setattr(
+        "review_suite_arena.state_lock",
+        lambda state_dir, name, **kwargs: locks.append((name, kwargs)) or Lock(),
+    )
     monkeypatch.setattr(
         "review_suite_arena.collect_review_cost_rows", lambda **kwargs: rows or [Row()]
     )
@@ -467,6 +479,7 @@ def test_cmd_costs_writes_markdown_report(monkeypatch, tmp_path: Path, capsys) -
     assert "total_cost_usd: 0.012345" in captured.out
     assert "total_implementation_tokens: 1000" in captured.out
     assert "total_implementation_cost_usd: 0.004" in captured.out
+    assert locks == [("cost-reports", {"timeout_seconds": 600})]
 
 
 def test_cmd_costs_renders_cached_rows_after_scoped_refresh(
@@ -1027,10 +1040,21 @@ def test_has_direct_grade_inputs_requires_complete_tuple() -> None:
     )
 
 
-def test_record_grade_queues_reports_after_persisting_round(
+def test_record_grade_refreshes_state_before_queueing_costs(
     monkeypatch, tmp_path: Path
 ) -> None:
     events: list[tuple[str, object]] = []
+
+    class Lock:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def __enter__(self):
+            events.append((self.name, {}))
+
+        def __exit__(self, *args):
+            return None
+
     round_payload = {
         "round_id": "round-1",
         "task_class": "phase_review",
@@ -1051,8 +1075,11 @@ def test_record_grade_queues_reports_after_persisting_round(
         lambda state_dir, payload: events.append(("write", dict(payload))),
     )
     monkeypatch.setattr(
-        "review_suite_arena.launch_arena_report_refresh_best_effort",
-        lambda **kwargs: events.append(("leaderboard", kwargs)) or True,
+        "review_suite_arena.state_lock", lambda state_dir, name: Lock(name)
+    )
+    monkeypatch.setattr(
+        "review_suite_arena._refresh_state_and_reports_locked",
+        lambda **kwargs: events.append(("state", kwargs)),
     )
     monkeypatch.setattr(
         "review_suite_arena.launch_review_cost_report_refresh_best_effort",
@@ -1061,7 +1088,6 @@ def test_record_grade_queues_reports_after_persisting_round(
 
     result = _record_grade_result(
         roster={},
-        roster_path=tmp_path / "roster.json",
         rubric={},
         state_dir=tmp_path / "state",
         round_id="round-1",
@@ -1080,8 +1106,18 @@ def test_record_grade_queues_reports_after_persisting_round(
         "duplicate": False,
         "round_id": "round-1",
     }
-    assert [event[0] for event in events] == ["write", "leaderboard", "costs"]
-    assert events[0][1]["grade_recorded"] is True
+    assert [event[0] for event in events] == [
+        "write",
+        "runs",
+        "operational-state",
+        "reports",
+        "state",
+        "write",
+        "costs",
+    ]
+    assert events[0][1]["grade_refresh_pending"] is True
+    assert events[5][1]["grade_recorded"] is True
+    assert "grade_refresh_pending" not in events[5][1]
 
 
 def test_run_benchmarked_round_rejects_partial_grade_inputs(tmp_path: Path) -> None:

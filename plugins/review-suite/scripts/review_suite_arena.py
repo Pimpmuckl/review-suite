@@ -101,7 +101,6 @@ from review_gate import (
 from review_costs import (
     DEFAULT_COST_REPORT_FILENAME,
     collect_review_cost_rows,
-    launch_arena_report_refresh_best_effort,
     launch_review_cost_report_refresh_best_effort,
     read_review_cost_row_cache,
     update_review_cost_row_cache,
@@ -1469,7 +1468,6 @@ def run_benchmarked_round(
             rubric = load_rubric(rubric_path)
             result = _record_grade_result(
                 roster=roster,
-                roster_path=roster_path,
                 rubric=rubric,
                 state_dir=state_dir,
                 round_id=str(pending_round["round_id"]),
@@ -1610,7 +1608,6 @@ def run_benchmarked_round(
 
     grade_result = _record_grade_result(
         roster=roster,
-        roster_path=roster_path,
         rubric=rubric,
         state_dir=state_dir,
         round_id=payload["round_id"],
@@ -1635,7 +1632,6 @@ def run_benchmarked_round(
 def _record_grade_result(
     *,
     roster: dict[str, object],
-    roster_path: Path,
     rubric: dict[str, object],
     state_dir: Path,
     round_id: str,
@@ -1672,16 +1668,17 @@ def _record_grade_result(
             "duplicate": False,
             "round_id": round_id,
         }
-    round_payload["graded_at"] = str(record["recorded_at"])
+    round_payload["grade_recorded"] = bool(result["recorded"] or result["duplicate"])
+    round_payload["grade_refresh_pending"] = True
     round_payload["graded_by_caller_id"] = caller_id
     round_payload["graded_by_caller_id_source"] = caller_id_source
     round_payload["graded_task_id"] = task_id
-    round_payload["grade_recorded"] = bool(result["recorded"] or result["duplicate"])
+    write_round(state_dir, round_payload)
+    _refresh_state_and_reports(state_dir=state_dir, roster=roster)
+    round_payload["graded_at"] = str(record["recorded_at"])
+    round_payload.pop("grade_refresh_pending", None)
     write_round(state_dir, round_payload)
     round_review_cwd = str(round_payload.get("review_cwd") or "").strip()
-    launch_arena_report_refresh_best_effort(
-        state_dir=state_dir, roster_path=roster_path
-    )
     launch_review_cost_report_refresh_best_effort(
         state_dir=state_dir,
         review_cwd=Path(round_review_cwd) if round_review_cwd else None,
@@ -1690,7 +1687,11 @@ def _record_grade_result(
 
 
 def _refresh_state_and_reports(*, state_dir: Path, roster: dict[str, object]) -> None:
-    with state_lock(state_dir, "runs"), state_lock(state_dir, "reports"):
+    with (
+        state_lock(state_dir, "runs"),
+        state_lock(state_dir, "operational-state"),
+        state_lock(state_dir, "reports"),
+    ):
         _refresh_state_and_reports_locked(
             state_dir=state_dir,
             roster=roster,
@@ -2356,6 +2357,11 @@ def _cost_row_payload(row) -> dict[str, object]:
 
 def cmd_costs(args: argparse.Namespace) -> int:
     state_dir = Path(args.state_dir)
+    with state_lock(state_dir, "cost-reports", timeout_seconds=10 * 60):
+        return _cmd_costs(args, state_dir=state_dir)
+
+
+def _cmd_costs(args: argparse.Namespace, *, state_dir: Path) -> int:
     include_all = bool(getattr(args, "all", False))
     review_cwd = (
         None
@@ -2445,7 +2451,6 @@ def cmd_grade(args: argparse.Namespace) -> int:
     ).strip()
     result = _record_grade_result(
         roster=roster,
-        roster_path=Path(args.roster),
         rubric=rubric,
         state_dir=state_dir,
         round_id=round_id,
@@ -2512,7 +2517,11 @@ def cmd_report(args: argparse.Namespace) -> int:
         return cmd_show_round(args)
     roster = load_roster(Path(args.roster))
     state_dir = Path(args.state_dir)
-    with state_lock(state_dir, "runs"), state_lock(state_dir, "reports"):
+    with (
+        state_lock(state_dir, "runs"),
+        state_lock(state_dir, "operational-state"),
+        state_lock(state_dir, "reports"),
+    ):
         records = _read_enriched_run_records(state_dir)
         summary = aggregate_records(
             roster=roster,
@@ -2545,7 +2554,11 @@ def cmd_refresh(args: argparse.Namespace) -> int:
 def cmd_promote(args: argparse.Namespace) -> int:
     roster = load_roster(Path(args.roster))
     state_dir = Path(args.state_dir)
-    with state_lock(state_dir, "reports"):
+    with (
+        state_lock(state_dir, "runs"),
+        state_lock(state_dir, "operational-state"),
+        state_lock(state_dir, "reports"),
+    ):
         records = read_jsonl(state_dir / RUN_LOG_FILENAME)
         operational_state = load_operational_state(
             state_dir / OPERATIONAL_STATE_FILENAME
@@ -2566,7 +2579,11 @@ def cmd_compact_runs(args: argparse.Namespace) -> int:
     roster = load_roster(Path(args.roster))
     state_dir = Path(args.state_dir)
     run_log_path = state_dir / RUN_LOG_FILENAME
-    with state_lock(state_dir, "runs"), state_lock(state_dir, "reports"):
+    with (
+        state_lock(state_dir, "runs"),
+        state_lock(state_dir, "operational-state"),
+        state_lock(state_dir, "reports"),
+    ):
         records = read_jsonl(run_log_path)
         compacted_records = [compact_benchmark_record(record) for record in records]
         operational_state = load_operational_state(

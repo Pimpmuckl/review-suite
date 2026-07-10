@@ -1230,9 +1230,27 @@ def refresh_review_cost_report_best_effort(
         return None
 
 
-def _launch_arena_command_best_effort(
-    command: list[str], *, cwd: Path, script_path: Path
+def launch_review_cost_report_refresh_best_effort(
+    *, state_dir: Path, review_cwd: Path | None = None
 ) -> bool:
+    script_path = launcher_script_path(__file__, "review_suite_arena.py")
+    resolved_state_dir = state_dir.resolve(strict=False)
+    command = [
+        sys.executable,
+        str(script_path),
+        "costs",
+        "--state-dir",
+        str(resolved_state_dir),
+    ]
+    if review_cwd is not None:
+        review_cwd = review_cwd.resolve(strict=False)
+        command.extend(["--cd", str(review_cwd)])
+
+    cwd = (
+        review_cwd
+        if review_cwd is not None and review_cwd.exists()
+        else resolved_state_dir
+    )
     popen_kwargs: dict[str, Any] = {
         "cwd": str(cwd if cwd.exists() else script_path.parent),
         "stdin": subprocess.DEVNULL,
@@ -1248,38 +1266,3 @@ def _launch_arena_command_best_effort(
     except Exception:
         return False
     return True
-
-
-def launch_review_cost_report_refresh_best_effort(
-    *, state_dir: Path, review_cwd: Path | None = None
-) -> bool:
-    script_path = launcher_script_path(__file__, "review_suite_arena.py")
-    command = [
-        sys.executable,
-        str(script_path),
-        "costs",
-        "--state-dir",
-        str(state_dir.resolve(strict=False)),
-    ]
-    if review_cwd is not None:
-        command.extend(["--cd", str(review_cwd.resolve(strict=False))])
-    cwd = review_cwd if review_cwd is not None and review_cwd.exists() else state_dir
-    return _launch_arena_command_best_effort(command, cwd=cwd, script_path=script_path)
-
-
-def launch_arena_report_refresh_best_effort(
-    *, state_dir: Path, roster_path: Path
-) -> bool:
-    script_path = launcher_script_path(__file__, "review_suite_arena.py")
-    command = [
-        sys.executable,
-        str(script_path),
-        "refresh",
-        "--state-dir",
-        str(state_dir.resolve(strict=False)),
-        "--roster",
-        str(roster_path.resolve(strict=False)),
-    ]
-    return _launch_arena_command_best_effort(
-        command, cwd=state_dir, script_path=script_path
-    )
