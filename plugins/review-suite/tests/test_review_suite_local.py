@@ -2721,6 +2721,59 @@ def test_write_reports_includes_recent_match_history_and_model_header(
     assert "repo-0" not in leaderboard
 
 
+def test_write_reports_includes_independent_leaderboards_for_each_rating_pool(
+    tmp_path: Path,
+) -> None:
+    roster = _roster(
+        _variant("alpha-model", task_classes=["phase_review"]),
+        _variant("bravo-model", task_classes=["phase_review"]),
+    )
+    discovery = _record(
+        recorded_at="2026-04-12T12:00:00Z",
+        round_id="discovery-round",
+        task_class="phase_review",
+        alpha="alpha-model",
+        beta="bravo-model",
+        rating_pool_id="discovery-pool",
+    )
+    arena = _record(
+        recorded_at="2026-04-12T13:00:00Z",
+        round_id="arena-round",
+        task_class="phase_review",
+        alpha="alpha-model",
+        beta="bravo-model",
+        groups=[["bravo-model"], ["alpha-model"]],
+        rating_pool_id="arena-pool",
+    )
+    arena["reporting_pool"] = True
+
+    summary = aggregate_records(
+        roster=roster,
+        records=[discovery, arena],
+        operational_state=_operational_state(
+            champion_ids=[], probation_ids=[], cooling={}
+        ),
+    )
+    task = summary["task_classes"]["phase_review"]
+    assert task["rating_pool_id"] == "arena-pool"
+    assert [pool["rating_pool_id"] for pool in task["rating_pools"]] == [
+        "arena-pool",
+        "discovery-pool",
+    ]
+
+    write_reports(tmp_path, summary)
+
+    leaderboard = (tmp_path / "leaderboard.md").read_text(encoding="utf-8")
+    arena_section = leaderboard.split("### arena-pool", maxsplit=1)[1].split(
+        "### discovery-pool", maxsplit=1
+    )[0]
+    discovery_section = leaderboard.split("### discovery-pool", maxsplit=1)[1].split(
+        "## review_t3", maxsplit=1
+    )[0]
+    assert "| bravo-model | 1512.0 | 1 | 1/0/0 |" in arena_section
+    assert "| alpha-model | 1512.0 | 1 | 1/0/0 |" in discovery_section
+
+
 def test_write_reports_match_history_uses_configured_k_factor(tmp_path: Path) -> None:
     state_dir = tmp_path / "state"
     rounds_dir = state_dir / "rounds"

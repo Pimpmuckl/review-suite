@@ -4240,6 +4240,8 @@ def aggregate_records(
     roster: dict[str, Any],
     records: list[dict[str, Any]],
     operational_state: dict[str, Any],
+    *,
+    _include_rating_pools: bool = True,
 ) -> dict[str, Any]:
     settings = roster.get("settings", {})
     k_factor = float(settings.get("elo_k_factor", 24))
@@ -4419,12 +4421,42 @@ def aggregate_records(
             ),
             reverse=True,
         )
-        summary["task_classes"][task_class] = {
+        task_summary = {
             "operational": operational_state["task_classes"][task_class],
             "rating_pool_id": rating_pool_id,
             "leaderboard": leaderboard,
             "recent_rounds": recent_rounds[-50:],
         }
+        if _include_rating_pools:
+            pool_ids = list(dict.fromkeys(pool_id for _, (pool_id, _, _) in placed))
+            if rating_pool_id in pool_ids:
+                pool_ids.remove(rating_pool_id)
+                pool_ids.insert(0, rating_pool_id)
+            task_summary["rating_pools"] = []
+            for pool_id in pool_ids:
+                if pool_id == rating_pool_id:
+                    pool_summary = task_summary
+                else:
+                    pool_records = [
+                        record
+                        for record, placement in placed
+                        if placement[0] == pool_id
+                    ]
+                    pool_summary = aggregate_records(
+                        roster,
+                        pool_records,
+                        operational_state,
+                        _include_rating_pools=False,
+                    )["task_classes"][task_class]
+                task_summary["rating_pools"].append(
+                    {
+                        "rating_pool_id": pool_id,
+                        "reporting_pool": pool_id == rating_pool_id,
+                        "leaderboard": pool_summary["leaderboard"],
+                        "recent_rounds": pool_summary["recent_rounds"],
+                    }
+                )
+        summary["task_classes"][task_class] = task_summary
     return summary
 
 
@@ -4443,12 +4475,6 @@ def write_reports(state_dir: Path, summary: dict[str, Any]) -> None:
         champion_ids = list(op.get("champion_variant_ids") or [])
         lines.append(f"## {public_task_name(task_class)}")
         lines.append("")
-        lines.append(
-            f"- Rating pool: {format_markdown_inline(task.get('rating_pool_id') or 'none')}"
-        )
-        lines.append(
-            f"- Champion: `{', '.join(champion_ids) if champion_ids else 'none'}`"
-        )
         cooldowns = op.get("cooldowns") or {}
         if cooldowns:
             joined = "; ".join(
@@ -4456,19 +4482,29 @@ def write_reports(state_dir: Path, summary: dict[str, Any]) -> None:
                 for variant_id, entry in sorted(cooldowns.items())
             )
             lines.append(f"- Cooldowns: {joined}")
-        lines.append("")
-        lines.append(
-            "| model | elo | samples | W/T/L | found/opp | found % | missed % | low-quality % | sec | tok/job | cost/job |"
-        )
-        lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
-        for row in task["leaderboard"]:
+        rating_pools = list(task.get("rating_pools") or [task])
+        for pool in rating_pools:
+            pool_id = pool.get("rating_pool_id") or "none"
+            lines.append(f"### {format_markdown_inline(pool_id)}")
+            lines.append("")
+            lines.append(f"- Rating pool: {format_markdown_inline(pool_id)}")
+            if pool.get("reporting_pool", True):
+                lines.append(
+                    f"- Champion: `{', '.join(champion_ids) if champion_ids else 'none'}`"
+                )
+            lines.append("")
             lines.append(
-                f"| {format_markdown_inline(row['variant_label'])} | {format_decimal(row['elo'])} | {row['sample_count']} | {row['wtl']} | "
-                f"{row['valid_finding_count']}/{row['finding_opportunity_count']} | {format_decimal(row['valid_finding_rate'])} | "
-                f"{format_decimal(row['missed_bug_loss_rate'])} | {format_decimal(row['low_quality_loss_rate'])} | {format_decimal(row['median_elapsed_seconds'])} | "
-                f"{format_compact_tokens(row['median_total_tokens'])} | {format_cost_cents(row['median_cost_usd'])} |"
+                "| model | elo | samples | W/T/L | found/opp | found % | missed % | low-quality % | sec | tok/job | cost/job |"
             )
-        lines.append("")
+            lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
+            for row in pool["leaderboard"]:
+                lines.append(
+                    f"| {format_markdown_inline(row['variant_label'])} | {format_decimal(row['elo'])} | {row['sample_count']} | {row['wtl']} | "
+                    f"{row['valid_finding_count']}/{row['finding_opportunity_count']} | {format_decimal(row['valid_finding_rate'])} | "
+                    f"{format_decimal(row['missed_bug_loss_rate'])} | {format_decimal(row['low_quality_loss_rate'])} | {format_decimal(row['median_elapsed_seconds'])} | "
+                    f"{format_compact_tokens(row['median_total_tokens'])} | {format_cost_cents(row['median_cost_usd'])} |"
+                )
+            lines.append("")
     lines.append("## Notes")
     lines.append("")
     lines.append(
