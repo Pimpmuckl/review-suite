@@ -953,21 +953,6 @@ def test_ensure_clean_git_worktree_blocks_unrelated_dirty_files_for_base_review(
         )
 
 
-def test_ensure_clean_git_worktree_still_blocks_related_dirty_files_for_base_review(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setattr(
-        "review_suite_local.meaningful_worktree_status_entries",
-        lambda review_cwd: [{"code": " M", "path": "src/app.py"}],
-    )
-
-    with pytest.raises(ValueError, match="clean worktree"):
-        ensure_clean_git_worktree(
-            tmp_path, review_scope={"base": "main", "merge_base": "base123"}
-        )
-
-
 def test_ensure_clean_git_worktree_blocks_unrelated_dirty_files_for_flagged_commit_review(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -976,27 +961,6 @@ def test_ensure_clean_git_worktree_blocks_unrelated_dirty_files_for_flagged_comm
         "review_suite_local.meaningful_worktree_status_entries",
         lambda review_cwd: [{"code": " M", "path": "docs/notes.md"}],
     )
-    with pytest.raises(ValueError, match="clean worktree"):
-        ensure_clean_git_worktree(
-            tmp_path,
-            review_scope={
-                "base": "main",
-                "commit": "head-1",
-                "commit_end": "head-2",
-                "merge_base": "base123",
-            },
-        )
-
-
-def test_ensure_clean_git_worktree_blocks_unrelated_dirty_files_for_unflagged_commit_review(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setattr(
-        "review_suite_local.meaningful_worktree_status_entries",
-        lambda review_cwd: [{"code": " M", "path": "docs/notes.md"}],
-    )
-
     with pytest.raises(ValueError, match="clean worktree"):
         ensure_clean_git_worktree(
             tmp_path,

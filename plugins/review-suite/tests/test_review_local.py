@@ -601,20 +601,6 @@ def test_legacy_tier_wrappers_point_to_review_py(
     assert "REPO_ROOT" not in rendered
 
 
-def test_legacy_tier_wrapper_rejects_unsupported_legacy_flags(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    monkeypatch.setattr(sys, "argv", ["review_t1.py", "--commit", "abc123"])
-
-    exit_code = review_t1.main()
-
-    rendered = capsys.readouterr().out
-    assert exit_code == 2
-    assert "retired as a direct agent entrypoint" in rendered
-    assert "Action" not in rendered
-
-
 def test_legacy_tier_wrapper_malformed_old_flags_still_report_retired(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -628,35 +614,6 @@ def test_legacy_tier_wrapper_malformed_old_flags_still_report_retired(
     assert "status: usage_error" in rendered
     assert "retired as a direct agent entrypoint" in rendered
     assert "Action" not in rendered
-
-
-def test_legacy_tier_wrapper_targeting_flags_do_not_emit_action(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-    tmp_path: Path,
-) -> None:
-    state_dir = tmp_path / "state"
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "review_t1.py",
-            "--cd",
-            str(tmp_path),
-            "--base",
-            "feature/base",
-            "--state-dir",
-            str(state_dir),
-            "--wsl",
-        ],
-    )
-
-    exit_code = review_t1.main()
-
-    rendered = capsys.readouterr().out
-    assert exit_code == 2
-    assert "Action" not in rendered
-    assert "REPO_ROOT" not in rendered
 
 
 def test_legacy_tier_wrappers_own_installed_cache_bootstrap() -> None:

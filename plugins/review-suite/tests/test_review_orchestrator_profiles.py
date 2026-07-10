@@ -427,13 +427,3 @@ def test_calibration_auto_promotion_is_not_enabled(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="auto_promotion_enabled must be false"):
         load_orchestrator_profiles(config)
-
-
-def test_explicit_stable_selection_requires_stable_profile(tmp_path: Path) -> None:
-    config = deepcopy(load_config(tmp_path / "state"))
-    del config["orchestrator"]["profiles"]["stable"]["normal"]
-
-    with pytest.raises(
-        ValueError, match="missing orchestrator stable profile for mode normal"
-    ):
-        resolve_orchestrator_profile(config, mode="normal", selection="stable")

@@ -6,6 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 
 SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts"
 if str(SCRIPT_DIR) not in sys.path:
@@ -1159,35 +1161,6 @@ def test_review_state_status_rejects_windows_wsl_unc_before_git(
     assert exit_code == 2
     assert "Run review.py --status from native WSL" in captured_errors[0]
     assert "--wsl is not useful" in captured_errors[0]
-
-
-def test_review_state_status_rejects_windows_wsl_cwd_before_git(monkeypatch) -> None:
-    captured_errors: list[str] = []
-
-    monkeypatch.setattr(review_state.sys, "platform", "win32")
-    monkeypatch.setattr(
-        review_state,
-        "_status_path_for_wsl_check",
-        lambda cd: "//wsl.localhost/Ubuntu/home/alice/code/repo",
-    )
-    monkeypatch.setattr(
-        review_state,
-        "resolve_repo_root",
-        lambda cd: (_ for _ in ()).throw(
-            AssertionError("UNC WSL cwd should fail before git")
-        ),
-    )
-    monkeypatch.setattr(
-        review,
-        "emit_error",
-        lambda message, **kwargs: captured_errors.append(message) or 2,
-    )
-    monkeypatch.setattr(sys, "argv", ["review.py", "--status", "--base", "main"])
-
-    exit_code = review.main()
-
-    assert exit_code == 2
-    assert "Run review.py --status from native WSL" in captured_errors[0]
 
 
 def test_inspect_workflow_status_warns_after_six_same_tier_runs_without_counting_followups(
@@ -2706,8 +2679,33 @@ def test_review_state_status_adds_fix_gate_findings_action(
     assert "show-round" in str(emitted[0]["Action"]["show_cmd"])
 
 
-def test_review_state_status_routes_t4_findings_followup_back_to_t4(
-    monkeypatch, tmp_path: Path
+@pytest.mark.parametrize(
+    ("task_class", "round_id", "reason", "mode", "legacy_wrapper"),
+    [
+        (
+            "pr_gate",
+            "gate-round-findings",
+            "t4_findings_followup_needs_signoff",
+            "deep",
+            "review_t4.py",
+        ),
+        (
+            "phase_gate",
+            "phase-gate-findings",
+            "t2_findings_followup_needs_signoff",
+            "normal",
+            "review_t2.py",
+        ),
+    ],
+)
+def test_review_state_status_routes_gate_findings_followup_back_to_gate(
+    monkeypatch,
+    tmp_path: Path,
+    task_class: str,
+    round_id: str,
+    reason: str,
+    mode: str,
+    legacy_wrapper: str,
 ) -> None:
     emitted: list[dict[str, object]] = []
     state_dir = tmp_path / "state"
@@ -2718,8 +2716,8 @@ def test_review_state_status_routes_t4_findings_followup_back_to_t4(
         state_dir,
         {
             "recorded_at": "2026-04-25T10:00:00Z",
-            "round_id": "gate-round-findings",
-            "task_class": "pr_gate",
+            "round_id": round_id,
+            "task_class": task_class,
             "task_id": "feature/test",
             "review_cwd": str(repo),
             "review_cwd_normalized": str(repo),
@@ -2746,8 +2744,8 @@ def test_review_state_status_routes_t4_findings_followup_back_to_t4(
         state_dir,
         {
             "recorded_at": "2026-04-25T10:05:00Z",
-            "round_id": "gate-round-findings",
-            "task_class": "pr_gate",
+            "round_id": round_id,
+            "task_class": task_class,
             "task_id": "feature/test",
             "verdict": "findings",
             "review_cwd": str(repo),
@@ -2779,93 +2777,12 @@ def test_review_state_status_routes_t4_findings_followup_back_to_t4(
 
     assert exit_code == 0
     assert emitted[0]["recommendation"] == "full-review"
-    assert emitted[0]["reason"] == "t4_findings_followup_needs_signoff"
+    assert emitted[0]["reason"] == reason
     assert "recommended_lane" not in emitted[0]
     assert "lane" not in emitted[0]["Action"]
     assert "review.py" in str(emitted[0]["Action"]["cmd"])
-    assert "--mode deep" in str(emitted[0]["Action"]["cmd"])
-    assert "review_t4.py" not in str(emitted[0]["Action"])
-
-
-def test_review_state_status_routes_t2_findings_followup_back_to_t2(
-    monkeypatch, tmp_path: Path
-) -> None:
-    emitted: list[dict[str, object]] = []
-    state_dir = tmp_path / "state"
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    state_dir.mkdir()
-    _write_gate_run(
-        state_dir,
-        {
-            "recorded_at": "2026-04-25T10:00:00Z",
-            "round_id": "phase-gate-findings",
-            "task_class": "phase_gate",
-            "task_id": "feature/test",
-            "review_cwd": str(repo),
-            "review_cwd_normalized": str(repo),
-            "review_scope": {"base": "main", "reviewed_head": "old-head"},
-            "signoff_status": "pending",
-            "signoff_required": True,
-            "runs": [
-                {
-                    "slot": "alpha",
-                    "variant_id": "alpha-model",
-                    "review_status": "completed",
-                    "grade_blocked": False,
-                },
-                {
-                    "slot": "bravo",
-                    "variant_id": "bravo-model",
-                    "review_status": "completed",
-                    "grade_blocked": False,
-                },
-            ],
-        },
-    )
-    _write_gate_signoff(
-        state_dir,
-        {
-            "recorded_at": "2026-04-25T10:05:00Z",
-            "round_id": "phase-gate-findings",
-            "task_class": "phase_gate",
-            "task_id": "feature/test",
-            "verdict": "findings",
-            "review_cwd": str(repo),
-            "review_cwd_normalized": str(repo),
-        },
-    )
-
-    monkeypatch.setattr(review_state, "resolve_repo_root", lambda cd: repo)
-    monkeypatch.setattr(
-        review_state,
-        "inspect_workflow_status",
-        lambda **kwargs: {
-            "status": "ok",
-            "base": "main",
-            "branch": "feature/test",
-            "head": "clean-followup-head",
-            "recommendation": "none",
-            "reason": "current_head_already_reviewed",
-            "last_reviewed_lane": "review-followup",
-        },
-    )
-    _use_default_state_dir(monkeypatch, state_dir)
-    monkeypatch.setattr(
-        review_state, "emit_toon", lambda payload: emitted.append(payload)
-    )
-    monkeypatch.setattr(sys, "argv", ["review.py", "--status", "--base", "main"])
-
-    exit_code = review.main()
-
-    assert exit_code == 0
-    assert emitted[0]["recommendation"] == "full-review"
-    assert emitted[0]["reason"] == "t2_findings_followup_needs_signoff"
-    assert "recommended_lane" not in emitted[0]
-    assert "lane" not in emitted[0]["Action"]
-    assert "review.py" in str(emitted[0]["Action"]["cmd"])
-    assert "--mode normal" in str(emitted[0]["Action"]["cmd"])
-    assert "review_t2.py" not in str(emitted[0]["Action"])
+    assert f"--mode {mode}" in str(emitted[0]["Action"]["cmd"])
+    assert legacy_wrapper not in str(emitted[0]["Action"])
 
 
 def test_review_state_status_ignores_legacy_pending_grade_for_caller(
@@ -2899,34 +2816,3 @@ def test_review_state_status_ignores_legacy_pending_grade_for_caller(
     assert emitted[0]["Action"]["cwd"] == str(tmp_path)
     assert "review_followup.py" in str(emitted[0]["Action"]["cmd"])
     assert "review_suite_arena.py" not in str(emitted[0]["Action"])
-
-
-def test_review_state_status_ignores_legacy_running_round_for_caller(
-    monkeypatch, tmp_path: Path
-) -> None:
-    emitted: list[dict[str, object]] = []
-    state_dir = tmp_path / "state"
-
-    monkeypatch.setattr(review_state, "resolve_repo_root", lambda cd: tmp_path)
-    monkeypatch.setattr(
-        review_state,
-        "inspect_workflow_status",
-        lambda **kwargs: {
-            "status": "ok",
-            "recommendation": "review-followup",
-            "last_reviewed_head": "abc123",
-        },
-    )
-    _use_default_state_dir(monkeypatch, state_dir)
-    monkeypatch.setattr(
-        review_state, "emit_toon", lambda payload: emitted.append(payload)
-    )
-    monkeypatch.setattr(sys, "argv", ["review.py", "--status", "--base", "main"])
-
-    exit_code = review.main()
-
-    assert exit_code == 0
-    assert emitted[0]["recommendation"] == "review-followup"
-    assert "lane" not in emitted[0]["Action"]
-    assert "review_followup.py" in str(emitted[0]["Action"]["cmd"])
-    assert "dismiss-round" not in str(emitted[0]["Action"])

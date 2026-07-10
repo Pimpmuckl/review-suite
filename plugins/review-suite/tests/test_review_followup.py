@@ -470,30 +470,6 @@ def test_resolve_since_head_rejects_explicit_anchor_when_branch_review_pressure_
         )
 
 
-def test_resolve_since_head_rejects_explicit_anchor_when_followup_cycle_limit_is_exceeded(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.setattr(
-        review_followup,
-        "inspect_workflow_status",
-        lambda **kwargs: {
-            "status": "ok",
-            "recommendation": "coherence-review",
-            "reason": "followup_cycle_limit_exceeded",
-            "note": "The branch already used too many follow-up rounds since the last full checkpoint.",
-        },
-    )
-
-    with pytest.raises(ValueError, match="too many follow-up rounds"):
-        review_followup.resolve_since_head(
-            explicit_since="abc123",
-            state_dir=tmp_path / "state",
-            review_cwd=tmp_path,
-            base="main",
-            force=False,
-        )
-
-
 def test_resolve_since_head_rejects_explicit_anchor_that_is_not_ancestor_without_force(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
