@@ -1063,6 +1063,7 @@ def run_orchestrated_arena_round(
     rating_pool_id: str | None = None,
     reporting_pool: bool = False,
     variant_groups: list[list[str]] | None = None,
+    variant_ids: list[str] | None = None,
     review_cwd: Path,
     state_dir: Path,
     sqlite_path: Path,
@@ -1107,6 +1108,7 @@ def run_orchestrated_arena_round(
         excluded_variant_ids=set(),
         rating_pool_id=rating_pool_id,
         variant_groups=variant_groups,
+        variant_ids=variant_ids,
     )
     branch_default = task_id or _current_branch_name(review_cwd) or payload["round_id"]
     payload["task_class"] = task_class

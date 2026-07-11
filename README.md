@@ -72,6 +72,9 @@ available for deliberate calibration.
 Arena is an opt-in evaluation overlay. Normal and deep run their configured
 Arena counts only when Arena is enabled and the count is positive. The calling
 agent grades the outputs; Review Suite never selects or promotes a winner.
+Each reporting pool uses its balanced groups once, then favors under-sampled
+candidates and opponents they have met least often. New candidates join the
+existing pool at 1500 Elo without resetting established ratings.
 
 User configuration lives at:
 

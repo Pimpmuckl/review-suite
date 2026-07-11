@@ -22,7 +22,7 @@
     "shortDescription": "Stateful review workflows",
     "longDescription": "Use Review Suite for the default local review orchestrator, plan review, one-off deslop, status checks, and GitHub review.",
     "developerName": "Jonathan",
-    "category": "Coding",
+    "category": "Developer Tools",
     "capabilities": [
       "Interactive",
       "Write"

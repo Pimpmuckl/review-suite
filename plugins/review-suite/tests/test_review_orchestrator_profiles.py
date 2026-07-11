@@ -271,6 +271,7 @@ def test_default_arena_pools_are_exact_fresh_balanced_cohorts(tmp_path: Path) ->
     }
     for pool_name, candidates in expected.items():
         groups = pools[pool_name]["variant_groups"]
+        assert set(pools[pool_name]["variant_ids"]) == candidates
         assert len(groups) == 13
         assert {variant for group in groups for variant in group} == candidates
         assert Counter(variant for group in groups for variant in group) == Counter(
@@ -282,6 +283,16 @@ def test_default_arena_pools_are_exact_fresh_balanced_cohorts(tmp_path: Path) ->
         assert len(pairs) == 78
         assert set(pairs.values()) == {1}
         assert sum(map(len, groups)) == 52
+
+
+def test_arena_candidate_list_must_cover_bootstrap_schedule(tmp_path: Path) -> None:
+    config = deepcopy(load_config(tmp_path / "state"))
+    config["arena"]["enabled"] = True
+    config["orchestrator"]["stable_defaults"]["normal_arena_loops"] = 1
+    config["arena"]["pools"]["arena_phase"]["variant_ids"].remove("gpt-5.6-sol-medium")
+
+    with pytest.raises(ValueError, match="must include every scheduled variant"):
+        load_orchestrator_profiles(config)
 
 
 def test_arena_steps_reject_mismatched_lane_and_task_class(tmp_path: Path) -> None:

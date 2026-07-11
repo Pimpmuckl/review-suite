@@ -495,6 +495,7 @@ def test_profile_resolution_serializes_configured_arena_pool(tmp_path: Path) -> 
     assert arena_step["rating_pool_id"] == "arena-phase-gpt-5.6-v1"
     assert arena_step["reporting_pool"] is True
     assert len(arena_step["variant_groups"]) == 13
+    assert len(arena_step["variant_ids"]) == 13
 
 
 def _gate_signoff_decisions(state_dir: Path) -> list[dict[str, object]]:
@@ -738,6 +739,7 @@ def test_orchestrator_arena_helper_uses_pr_prompt_for_pr_review(
         step_name="arena-pr-review",
         rating_pool_id="arena-deep-gpt-5.6-v1",
         variant_groups=[["a", "b", "c", "d"]],
+        variant_ids=["a", "b", "c", "d", "e"],
         review_cwd=repo,
         state_dir=state_dir,
         sqlite_path=tmp_path / "state.sqlite",
@@ -769,6 +771,7 @@ def test_orchestrator_arena_helper_uses_pr_prompt_for_pr_review(
     assert select_calls[0]["task_class"] == "pr_review"
     assert select_calls[0]["rating_pool_id"] == "arena-deep-gpt-5.6-v1"
     assert select_calls[0]["variant_groups"] == [["a", "b", "c", "d"]]
+    assert select_calls[0]["variant_ids"] == ["a", "b", "c", "d", "e"]
     assert result["lane"] == "review_t3"
     assert result["reviewed_head"] == head
     assert result["arena_round"] is True
