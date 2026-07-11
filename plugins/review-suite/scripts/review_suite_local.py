@@ -16,6 +16,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from hashlib import blake2s
+from itertools import combinations
 from pathlib import Path
 from typing import Any, Callable
 
@@ -2125,6 +2126,87 @@ def _configured_variant_group(
     return [indexed[variant_id] for variant_id in variant_ids], schedule_index
 
 
+def _balanced_configured_variant_group(
+    *,
+    roster: dict[str, Any],
+    operational_state: dict[str, Any],
+    records: list[dict[str, Any]],
+    task_class: str,
+    rating_pool_id: str,
+    variant_ids: list[str],
+    group_size: int,
+    excluded_variant_ids: set[str],
+) -> list[dict[str, Any]]:
+    if group_size > len(PUBLIC_REVIEWER_LABELS):
+        raise ValueError(
+            f"configured arena group exceeds {len(PUBLIC_REVIEWER_LABELS)} reviewer slots"
+        )
+    indexed = variant_index(roster)
+    if len(variant_ids) != len(set(variant_ids)):
+        raise ValueError("configured arena candidate ids cannot repeat a variant")
+    unknown = [variant_id for variant_id in variant_ids if variant_id not in indexed]
+    if unknown:
+        raise ValueError(f"unknown configured arena variants: {', '.join(unknown)}")
+    ineligible = [
+        variant_id
+        for variant_id in variant_ids
+        if not variant_is_arena_eligible(indexed[variant_id], task_class)
+    ]
+    if ineligible:
+        raise ValueError(
+            f"configured arena variants are unavailable for {task_class}: "
+            + ", ".join(ineligible)
+        )
+    cooling = _active_cooldowns(operational_state, task_class)
+    available_ids = [
+        variant_id
+        for variant_id in variant_ids
+        if variant_id not in excluded_variant_ids and variant_id not in cooling
+    ]
+    if len(available_ids) < group_size:
+        raise ValueError(
+            f"configured arena needs {group_size} available variants for {task_class}"
+        )
+
+    pool_records = [
+        record
+        for record in records
+        if record.get("task_class") == task_class
+        and record.get("rating_pool_id") == rating_pool_id
+    ]
+    sample_counts = summarize_counts(pool_records, task_class)
+    pair_counts: dict[tuple[str, str], int] = {}
+    for record in pool_records:
+        participants = [
+            str(run.get("variant_id") or "")
+            for run in record.get("runs", [])
+            if str(run.get("variant_id") or "") in available_ids
+        ]
+        for left, right in combinations(sorted(set(participants)), 2):
+            pair = (left, right)
+            pair_counts[pair] = pair_counts.get(pair, 0) + 1
+
+    order = {variant_id: index for index, variant_id in enumerate(available_ids)}
+
+    def meetings(left: str, right: str) -> int:
+        return pair_counts.get(tuple(sorted((left, right))), 0)
+
+    selected: list[str] = []
+    while len(selected) < group_size:
+        remaining = [item for item in available_ids if item not in selected]
+        selected.append(
+            min(
+                remaining,
+                key=lambda item: (
+                    sum(meetings(item, chosen) for chosen in selected),
+                    sample_counts.get(item, 0),
+                    order[item],
+                ),
+            )
+        )
+    return [indexed[variant_id] for variant_id in selected]
+
+
 def select_pair(
     *,
     roster: dict[str, Any],
@@ -2138,22 +2220,43 @@ def select_pair(
     excluded_variant_ids: set[str] | None = None,
     rating_pool_id: str | None = None,
     variant_groups: list[list[str]] | None = None,
+    variant_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     settings = roster.get("settings", {})
     excluded_variant_ids = excluded_variant_ids or set()
     schedule_index: int | None = None
     if variant_groups is not None:
-        selected, schedule_index = _configured_variant_group(
-            roster=roster,
-            operational_state=operational_state,
-            records=records,
-            task_class=task_class,
-            rating_pool_id=str(rating_pool_id or "").strip(),
-            variant_groups=variant_groups,
-            excluded_variant_ids=excluded_variant_ids,
+        pool_id = str(rating_pool_id or "").strip()
+        pool_record_count = sum(
+            1
+            for record in records
+            if record.get("task_class") == task_class
+            and record.get("rating_pool_id") == pool_id
         )
+        if variant_ids and pool_record_count >= len(variant_groups):
+            selected = _balanced_configured_variant_group(
+                roster=roster,
+                operational_state=operational_state,
+                records=records,
+                task_class=task_class,
+                rating_pool_id=pool_id,
+                variant_ids=variant_ids,
+                group_size=len(variant_groups[0]),
+                excluded_variant_ids=excluded_variant_ids,
+            )
+            selection_pairing = "configured_balanced"
+        else:
+            selected, schedule_index = _configured_variant_group(
+                roster=roster,
+                operational_state=operational_state,
+                records=records,
+                task_class=task_class,
+                rating_pool_id=pool_id,
+                variant_groups=variant_groups,
+                excluded_variant_ids=excluded_variant_ids,
+            )
+            selection_pairing = "configured_schedule"
         selection_mode = "configured"
-        selection_pairing = "configured_schedule"
     else:
         all_variants = [
             variant
@@ -2233,10 +2336,11 @@ def select_pair(
         payload.update(
             {
                 "rating_pool_id": str(rating_pool_id).strip(),
-                "schedule_index": schedule_index,
                 "schedule_length": len(variant_groups),
             }
         )
+        if schedule_index is not None:
+            payload["schedule_index"] = schedule_index
     return payload
 
 

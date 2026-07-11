@@ -832,6 +832,7 @@ def _run_profile_arena_once(
         reporting_pool=bool(step.get("reporting_pool")),
         variant_groups=[list(group) for group in step.get("variant_groups") or []]
         or None,
+        variant_ids=[str(value) for value in step.get("variant_ids") or []] or None,
         review_cwd=cwd,
         state_dir=state_dir,
         sqlite_path=Path.home() / ".codex" / "state_5.sqlite",

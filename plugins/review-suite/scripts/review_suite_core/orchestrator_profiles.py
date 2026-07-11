@@ -43,6 +43,7 @@ class OrchestratorProfileStep:
     rating_pool_id: str | None = None
     reporting_pool: bool = False
     variant_groups: tuple[tuple[str, ...], ...] = ()
+    variant_ids: tuple[str, ...] = ()
     rerun_on_findings: bool = False
     max_review_rounds: int | None = None
 
@@ -219,7 +220,7 @@ def _normalize_arena_pair(raw_step: dict[str, Any], *, field: str) -> tuple[str,
 
 def _normalize_arena_pool(
     raw_step: dict[str, Any], *, config: dict[str, Any], field: str
-) -> tuple[str, tuple[tuple[str, ...], ...], bool]:
+) -> tuple[str, tuple[tuple[str, ...], ...], tuple[str, ...], bool]:
     pool_name = _non_empty_text(raw_step.get("pool"), field=f"{field}.pool")
     arena = config.get("arena") or {}
     pools = arena.get("pools") if isinstance(arena, dict) else None
@@ -250,10 +251,32 @@ def _normalize_arena_pool(
                 f"arena.pools.{pool_name}.variant_groups must use one group size"
             )
         groups.append(group)
+    raw_variant_ids = pool.get("variant_ids")
+    variant_ids: tuple[str, ...] = ()
+    if raw_variant_ids is not None:
+        candidate_field = f"arena.pools.{pool_name}.variant_ids"
+        if not isinstance(raw_variant_ids, list) or len(raw_variant_ids) < int(
+            group_size or 2
+        ):
+            raise ValueError(
+                f"{candidate_field} must contain at least {group_size or 2} variants"
+            )
+        variant_ids = tuple(
+            _non_empty_text(value, field=candidate_field) for value in raw_variant_ids
+        )
+        if len(variant_ids) != len(set(variant_ids)):
+            raise ValueError(f"{candidate_field} cannot contain duplicate variants")
+        missing = sorted(
+            {value for group in groups for value in group} - set(variant_ids)
+        )
+        if missing:
+            raise ValueError(
+                f"{candidate_field} must include every scheduled variant: {', '.join(missing)}"
+            )
     reporting = _optional_bool(
         pool.get("reporting"), field=f"arena.pools.{pool_name}.reporting"
     )
-    return rating_pool_id, tuple(groups), reporting
+    return rating_pool_id, tuple(groups), variant_ids, reporting
 
 
 def _raw_loop_ref(raw_step: Any) -> str:
@@ -352,8 +375,8 @@ def _normalize_step(
         )
     if kind == "arena":
         lane, task_class = _normalize_arena_pair(raw_step, field=field)
-        rating_pool_id, variant_groups, reporting_pool = _normalize_arena_pool(
-            raw_step, config=config, field=field
+        rating_pool_id, variant_groups, variant_ids, reporting_pool = (
+            _normalize_arena_pool(raw_step, config=config, field=field)
         )
         return OrchestratorProfileStep(
             kind=kind,
@@ -363,6 +386,7 @@ def _normalize_step(
             rating_pool_id=rating_pool_id,
             reporting_pool=reporting_pool,
             variant_groups=variant_groups,
+            variant_ids=variant_ids,
         )
     model, effort, default_service_tier = _model_from_step(
         raw_step, stable_defaults=stable_defaults, field=field

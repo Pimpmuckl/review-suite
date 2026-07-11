@@ -1615,6 +1615,8 @@ def _apply_profile_resolution(state: dict[str, Any], resolution: Any) -> dict[st
             if step.reporting_pool:
                 payload["reporting_pool"] = True
             payload["variant_groups"] = [list(group) for group in step.variant_groups]
+            if step.variant_ids:
+                payload["variant_ids"] = list(step.variant_ids)
             return payload
         payload.update(
             {

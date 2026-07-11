@@ -2262,6 +2262,62 @@ def test_configured_selection_uses_only_its_fresh_pool_schedule() -> None:
     assert [run["variant_id"] for run in payload["runs"]] == ["b", "c", "d", "e"]
 
 
+def test_configured_selection_balances_drop_in_after_bootstrap() -> None:
+    roster = _roster(*(_variant(name) for name in "abcde"))
+    records = [
+        {
+            "task_class": "phase_review",
+            "rating_pool_id": "arena-pool",
+            "runs": [{"variant_id": name} for name in "abcd"],
+        }
+    ]
+
+    payload = select_pair(
+        roster=roster,
+        operational_state=_operational_state(
+            champion_ids=[], probation_ids=[], cooling={}
+        ),
+        records=records,
+        task_class="phase_review",
+        review_cwd=None,
+        seed=None,
+        rating_pool_id="arena-pool",
+        variant_groups=[["a", "b", "c", "d"]],
+        variant_ids=["a", "b", "c", "d", "e"],
+    )
+
+    selected = [run["variant_id"] for run in payload["runs"]]
+    assert payload["selection_pairing"] == "configured_balanced"
+    assert "e" in selected
+    assert set(selected) & set("abcd")
+    assert "schedule_index" not in payload
+
+
+def test_balanced_configured_selection_preserves_reviewer_slot_limit() -> None:
+    roster = _roster(*(_variant(name) for name in "abcdefgh"))
+
+    with pytest.raises(ValueError, match="configured arena group exceeds 6"):
+        select_pair(
+            roster=roster,
+            operational_state=_operational_state(
+                champion_ids=[], probation_ids=[], cooling={}
+            ),
+            records=[
+                {
+                    "task_class": "phase_review",
+                    "rating_pool_id": "arena-pool",
+                    "runs": [{"variant_id": name} for name in "abcdefg"],
+                }
+            ],
+            task_class="phase_review",
+            review_cwd=None,
+            seed=None,
+            rating_pool_id="arena-pool",
+            variant_groups=[["a", "b", "c", "d", "e", "f", "g"]],
+            variant_ids=["a", "b", "c", "d", "e", "f", "g", "h"],
+        )
+
+
 def test_select_pair_uses_scramble_even_when_champion_metadata_exists(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

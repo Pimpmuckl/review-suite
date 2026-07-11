@@ -34,6 +34,21 @@
       "arena_phase": {
         "rating_pool_id": "arena-phase-gpt-5.6-v1",
         "reporting": true,
+        "variant_ids": [
+          "gpt-5.4-low",
+          "gpt-5.4-medium",
+          "gpt-5.5-low",
+          "gpt-5.5-medium",
+          "gpt-5.6-luna-medium",
+          "gpt-5.6-luna-high",
+          "gpt-5.6-luna-xhigh",
+          "gpt-5.6-luna-max",
+          "gpt-5.6-terra-medium",
+          "gpt-5.6-terra-high",
+          "gpt-5.6-terra-xhigh",
+          "gpt-5.6-sol-low",
+          "gpt-5.6-sol-medium"
+        ],
         "variant_groups": [
           ["gpt-5.4-low", "gpt-5.4-medium", "gpt-5.5-medium", "gpt-5.6-terra-high"],
           ["gpt-5.4-medium", "gpt-5.5-low", "gpt-5.6-luna-medium", "gpt-5.6-terra-xhigh"],
@@ -53,6 +68,21 @@
       "arena_deep": {
         "rating_pool_id": "arena-deep-gpt-5.6-v1",
         "reporting": true,
+        "variant_ids": [
+          "gpt-5.4-medium",
+          "gpt-5.4-high",
+          "gpt-5.4-xhigh",
+          "gpt-5.5-medium",
+          "gpt-5.5-high",
+          "gpt-5.5-xhigh",
+          "gpt-5.6-terra-medium",
+          "gpt-5.6-terra-high",
+          "gpt-5.6-terra-xhigh",
+          "gpt-5.6-terra-max",
+          "gpt-5.6-sol-medium",
+          "gpt-5.6-sol-high",
+          "gpt-5.6-sol-xhigh"
+        ],
         "variant_groups": [
           ["gpt-5.4-medium", "gpt-5.4-high", "gpt-5.5-medium", "gpt-5.6-terra-max"],
           ["gpt-5.4-high", "gpt-5.4-xhigh", "gpt-5.5-high", "gpt-5.6-sol-medium"],
