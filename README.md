@@ -22,7 +22,7 @@ codex plugin marketplace upgrade review-suite
 | --- | --- | --- |
 | `fast` | UI-only, local presentation, and other small, well-tested changes | Dual Sol medium; no deslop, Arena, or GitHub review; at most two local rounds |
 | `normal` | Everything else | Deslop sidecar, configured phase Arena rounds when enabled, then dual Sol medium until green and GitHub review |
-| `deep` | Billing, login/auth, security, database integrity/migrations, concurrency, and similarly critical logic | Deslop sidecar, dual Sol medium until green, configured deep Arena rounds when enabled, dual Sol xhigh until green, then GitHub review |
+| `deep` | Billing, login/auth, security, business-critical systems, database integrity/migrations, concurrency, and similarly critical logic | Deslop sidecar, dual Sol medium until green, configured deep Arena rounds when enabled, dual Sol xhigh until green, then GitHub review |
 
 These are risk heuristics, not permission to downgrade a UI-looking change that
 crosses a trust or data-integrity boundary.
