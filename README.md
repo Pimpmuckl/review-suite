@@ -1,9 +1,7 @@
 # Review Suite
 
-Review Suite is a Codex plugin for stateful code review. One local orchestrator
-runs discovery, signoff, fix verification, validation tracking, and optional
-GitHub review without making the calling agent manage individual reviewer
-rounds.
+Review Suite is a Codex plugin for stateful local review, fix verification,
+validation tracking, and optional GitHub review.
 
 ## Install
 
@@ -22,23 +20,22 @@ codex plugin marketplace upgrade review-suite
 
 | Mode | Use it for | Local review |
 | --- | --- | --- |
-| `fast` | Small, localized, well-tested changes | GPT-5.6 Sol medium signoff only; no deslop; at most two review rounds |
-| `brief` | Cost-controlled review while model evaluation is active | One four-model medium discovery brawl, then Sol medium signoff |
-| `normal` | Default behavior changes | Medium discovery budget, optional phase arena round, then Sol medium signoff |
-| `deep` | Stateful, cross-system, security, concurrency, and migration work | Normal stack, xhigh discovery, optional deep arena round, Sol xhigh signoff, and GitHub review when required |
+| `fast` | UI-only, local presentation, and other small, well-tested changes | Dual Sol medium; no deslop, Arena, or GitHub review; at most two local rounds |
+| `normal` | Everything else | Deslop sidecar, configured phase Arena rounds when enabled, then dual Sol medium until green and GitHub review |
+| `deep` | Billing, login/auth, security, database integrity/migrations, concurrency, and similarly critical logic | Deslop sidecar, dual Sol medium until green, configured deep Arena rounds when enabled, dual Sol xhigh until green, then GitHub review |
 
-Use `normal` unless the change is clearly small enough for `fast` or risky
-enough for `deep`. The current discovery evaluation and the intended future
-three-mode shape are documented in [Review strategy](docs/review-strategy.md).
+These are risk heuristics, not permission to downgrade a UI-looking change that
+crosses a trust or data-integrity boundary.
 
 ## Run a review
 
 ```powershell
-<python> <plugin-root>/scripts/review.py --mode fast|brief|normal|deep --cd <repo-root>
+<python> <plugin-root>/scripts/review.py --cd <repo-root>
 ```
 
-Review Suite detects the remote default branch. Use `--base <ref>` only to
-override it explicitly.
+Omitting `--mode` creates a `normal` review. Pass `--mode fast` or `--mode deep`
+only when the risk warrants it. Review Suite detects the remote default branch;
+use `--base <ref>` only to override it explicitly.
 
 The first call creates or reconnects a review and prints one `Action.cmd`.
 Follow that command until the review is green or requires a code fix. After a
@@ -69,14 +66,12 @@ To replace an active review with a stricter one:
 
 ## Discovery and Arena
 
-Phase discovery currently compares GPT-5.4, GPT-5.5, GPT-5.6 Sol, and GPT-5.6
-Terra at medium effort. Deep discovery compares the same families at xhigh.
-GPT-5.6 Sol remains the final signoff model.
+Stable profiles do not run discovery brawls. Discovery pools and ratings remain
+available for deliberate calibration.
 
-Arena is an opt-in evaluation overlay. When enabled, it replaces part of the
-discovery budget with configured four-model events. The calling agent grades
-ordered placements and ties after checking the reviewer output; Review Suite
-does not infer winners from finding counts or output order.
+Arena is an opt-in evaluation overlay. Normal and deep run their configured
+Arena counts only when Arena is enabled and the count is positive. The calling
+agent grades the outputs; Review Suite never selects or promotes a winner.
 
 User configuration lives at:
 

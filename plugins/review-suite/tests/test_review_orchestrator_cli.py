@@ -125,32 +125,6 @@ def _stub_deslop(monkeypatch: pytest.MonkeyPatch, *returncodes: int) -> list[lis
 
 
 def _review_discovery_config(config: dict[str, object]) -> dict[str, object]:
-    profiles = config["orchestrator"]["profiles"]["stable"]
-    for mode in ("brief", "normal", "deep"):
-        profiles[mode]["steps"] = [
-            {
-                "name": "broad-discovery"
-                if step.get("pool") == "discovery_phase"
-                else "deep-discovery",
-                "count": 4 if step.get("pool") == "discovery_phase" else 2,
-                "model_ref": "discovery_brief_model"
-                if step.get("pool") == "discovery_phase"
-                else "discovery_deep_model",
-                **{
-                    key: step[key]
-                    for key in (
-                        "loop_ref",
-                        "subtract_loop_ref",
-                        "subtract_if",
-                        "min_loops",
-                    )
-                    if key in step
-                },
-            }
-            if step.get("pool") in {"discovery_phase", "discovery_deep"}
-            else step
-            for step in profiles[mode]["steps"]
-        ]
     return config
 
 
@@ -437,10 +411,30 @@ def _use_compact_normal_profile(
     monkeypatch: pytest.MonkeyPatch, state_dir: Path, *, include_deep: bool = False
 ) -> dict[str, object]:
     config = _review_discovery_config(deepcopy(review.load_config(state_dir)))
-    defaults = config["orchestrator"]["stable_defaults"]
-    defaults["normal_discovery_loops"] = 1
+    profiles = config["orchestrator"]["profiles"]["stable"]
+    profiles["normal"]["steps"] = [
+        {
+            "name": "broad-discovery",
+            "count": 1,
+            "model_ref": "discovery_phase_model",
+        },
+        *profiles["normal"]["steps"],
+    ]
     if include_deep:
-        defaults["deep_discovery_loops"] = 1
+        profiles["deep"]["steps"] = [
+            {
+                "name": "broad-discovery",
+                "count": 1,
+                "model_ref": "discovery_phase_model",
+            },
+            profiles["deep"]["steps"][0],
+            {
+                "name": "deep-discovery",
+                "count": 1,
+                "model_ref": "discovery_deep_model",
+            },
+            profiles["deep"]["steps"][-1],
+        ]
     monkeypatch.setattr(review, "load_config", lambda state_dir: config)
     return config
 
@@ -455,7 +449,7 @@ def _use_single_step_normal_profile(
         {
             "name": "precision-signoff",
             "count": 2,
-            "model_ref": "signoff_brief_model",
+            "model_ref": "signoff_normal_model",
             "rerun_on_findings": True,
         }
     ]
@@ -488,27 +482,19 @@ def _write_cycle_payload(
 
 def test_profile_resolution_serializes_configured_arena_pool(tmp_path: Path) -> None:
     config = review.load_config(tmp_path / "state")
+    config["arena"]["enabled"] = True
+    config["orchestrator"]["stable_defaults"]["normal_arena_loops"] = 1
     resolution = review.resolve_orchestrator_profile(
-        config, mode="brief", selection="stable"
+        config, mode="normal", selection="stable"
     )
 
     state = review._apply_profile_resolution({"selection": {}}, resolution)
 
-    assert state["review_plan"]["steps"][0] == {
-        "kind": "arena",
-        "name": "phase-discovery-brawl",
-        "lane": "review_t1",
-        "task_class": "phase_review",
-        "rating_pool_id": "discovery-phase-gpt-5.6-v1",
-        "variant_groups": [
-            [
-                "gpt-5.4-medium",
-                "gpt-5.5-medium",
-                "gpt-5.6-sol-medium",
-                "gpt-5.6-terra-medium",
-            ]
-        ],
-    }
+    arena_step = state["review_plan"]["steps"][0]
+    assert arena_step["name"] == "arena-phase-review"
+    assert arena_step["rating_pool_id"] == "arena-phase-gpt-5.6-v1"
+    assert arena_step["reporting_pool"] is True
+    assert len(arena_step["variant_groups"]) == 13
 
 
 def _gate_signoff_decisions(state_dir: Path) -> list[dict[str, object]]:
@@ -1196,11 +1182,11 @@ def test_create_resume_and_id_reprint_use_one_pending_action(
     assert "mode" not in payload
     assert "selection" not in payload
     assert "grading" not in payload
-    assert set(dict(payload["Action"])) == {"cmd", "deslop_done"}
+    assert set(dict(payload["Action"])) == {"cmd", "alt", "deslop_done"}
     assert f"--id {public_id}" in str(payload["Action"]["cmd"])
     assert "--state-dir" not in str(payload["Action"]["cmd"])
     assert str(state_dir) not in str(payload["Action"]["cmd"])
-    assert "--decision" not in str(payload["Action"]["cmd"])
+    assert "--decision clean" in str(payload["Action"]["cmd"])
     assert "--deslop-done" in str(payload["Action"]["deslop_done"])
     assert "--state-dir" not in str(payload["Action"]["deslop_done"])
     assert str(state_dir) not in str(payload["Action"]["deslop_done"])
@@ -1214,7 +1200,8 @@ def test_create_resume_and_id_reprint_use_one_pending_action(
     }
     assert "grading" not in state
     assert state["deslop"]["status"] == "done"
-    assert state["rounds"] == []
+    assert len(state["rounds"]) == 1
+    assert len(review_calls) == 1
 
     exit_code, resumed = _run_review(monkeypatch, args)
     assert exit_code == 0
@@ -1283,6 +1270,7 @@ def test_create_resume_and_id_reprint_use_one_pending_action(
     assert "stage" not in second_step
     assert "--decision clean" in str(second_step["Action"]["cmd"])
     assert len(review_calls) == 2
+
     assert review_calls[0]["step_name"] == "broad-discovery"
     assert review_calls[0]["step_position"] == 1
     assert review_calls[0]["step_total"] == 2
@@ -1373,6 +1361,149 @@ def test_create_resume_and_id_reprint_use_one_pending_action(
     assert len(review_calls) == 2
 
 
+def test_new_cycle_defaults_to_normal_without_mode(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _stub_deslop(monkeypatch)
+    _stub_review(monkeypatch)
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+
+    _, created = _run_review(
+        monkeypatch,
+        [
+            "--cd",
+            str(repo),
+            "--base",
+            "main",
+            "--state-dir",
+            str(state_dir),
+        ],
+    )
+
+    state = _cycle_payload(state_dir, str(created["review"]))
+    assert state["mode"] == {"requested": "normal", "effective": "normal"}
+    mode_action = next(
+        action for action in review.build_parser()._actions if action.dest == "mode"
+    )
+    assert tuple(mode_action.choices) == ("fast", "normal", "deep")
+
+
+def test_decision_retries_failed_deslop_and_advances(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    deslop_calls = _stub_deslop(monkeypatch, 9, 0)
+    review_calls = _stub_review(monkeypatch)
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+
+    _, created = _run_review(
+        monkeypatch,
+        [
+            "--mode",
+            "normal",
+            "--cd",
+            str(repo),
+            "--base",
+            "main",
+            "--state-dir",
+            str(state_dir),
+        ],
+    )
+    public_id = str(created["review"])
+
+    _run_review(
+        monkeypatch,
+        ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)],
+    )
+
+    state = _cycle_payload(state_dir, public_id)
+    assert state["deslop"]["status"] == "done"
+    assert [decision["command"] for decision in state["decisions"]] == ["clean"]
+    assert state["validation"]["review_green"] == "passed"
+    assert len(deslop_calls) == 2
+    assert len(review_calls) == 1
+
+
+def test_automatic_decision_waits_for_failed_deslop_retry(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    deslop_calls = _stub_deslop(monkeypatch, 9, 0)
+    review_calls = _stub_review_with_terminal(monkeypatch, "clean")
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+
+    _, created = _run_review(
+        monkeypatch,
+        [
+            "--mode",
+            "normal",
+            "--cd",
+            str(repo),
+            "--base",
+            "main",
+            "--state-dir",
+            str(state_dir),
+        ],
+    )
+    public_id = str(created["review"])
+    assert _cycle_payload(state_dir, public_id)["decisions"] == []
+
+    _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+
+    state = _cycle_payload(state_dir, public_id)
+    assert state["deslop"]["status"] == "done"
+    assert [decision["command"] for decision in state["decisions"]] == ["clean"]
+    assert state["validation"]["review_green"] == "passed"
+    assert len(deslop_calls) == 2
+    assert len(review_calls) == 1
+
+
+def test_head_change_waits_for_failed_deslop_retry(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    deslop_calls = _stub_deslop(monkeypatch, 9, 0)
+    review_calls = _stub_review(monkeypatch)
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/deslop-head-change")
+    _commit_file(repo, "app.txt", "feature\n", "feature")
+
+    _, created = _run_review(
+        monkeypatch,
+        [
+            "--mode",
+            "normal",
+            "--cd",
+            str(repo),
+            "--base",
+            "main",
+            "--state-dir",
+            str(state_dir),
+        ],
+    )
+    public_id = str(created["review"])
+    fixed_head = _commit_file(repo, "app.txt", "feature\nfix\n", "fix review")
+
+    _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+
+    state = _cycle_payload(state_dir, public_id)
+    assert state["deslop"]["status"] == "done"
+    assert [decision["command"] for decision in state["decisions"]] == ["findings"]
+    assert state["review_heads"]["last_fix_head"] == fixed_head
+    assert state["pending_action"]["fix_verification"]["findings_reviewed_head"]
+    assert len(deslop_calls) == 2
+    assert len(review_calls) == 1
+
+
 @pytest.mark.parametrize("flag", ["--skip-deslop", "--no-deslop"])
 def test_create_with_skip_deslop_runs_review_without_sidecar(
     flag: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -1457,7 +1588,7 @@ def test_skip_deslop_does_not_resume_same_head_sidecar_cycle(
 
     assert sidecar["review"] != skipped["review"]
     assert len(deslop_calls) == 1
-    assert len(review_calls) == 1
+    assert len(review_calls) == 2
     assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 2
     assert (
         _cycle_payload(state_dir, str(sidecar["review"]))["deslop"]["status"] == "done"
@@ -1496,23 +1627,9 @@ def test_id_auto_records_structured_clean_and_runs_next_step(
         ],
     )
     public_id = str(created["review"])
-
-    exit_code, first_step = _run_review(
-        monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)]
-    )
-
-    assert exit_code == 0
-    assert "--decision" not in str(first_step["Action"]["cmd"])
-    assert len(review_calls) == 1
     state = _cycle_payload(state_dir, public_id)
-    assert state["decisions"] == [
-        {
-            "round_id": "phase_review-round-1",
-            "lane": "review_t1",
-            "command": "clean",
-            "reviewed_head": state["rounds"][0]["reviewed_head"],
-        }
-    ]
+    assert len(review_calls) == 1
+    assert state["decisions"][0]["command"] == "clean"
     assert state["pending_action"] == {
         "kind": "run-review-step",
         "step_index": 1,
@@ -1856,7 +1973,7 @@ def test_id_show_findings_reads_orchestrator_round_payload_without_running(
 
     args = [
         "--mode",
-        "brief",
+        "normal",
         "--cd",
         str(repo),
         "--base",
@@ -2151,7 +2268,7 @@ def test_restart_mode_supersedes_cycle_and_starts_fresh_deep_ladder(
     assert new_id != old_id
     assert f"--id {new_id}" in str(restarted["Action"]["cmd"])
     assert len(deslop_calls) == 2
-    assert len(review_calls) == 1
+    assert len(review_calls) == 2
     assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 2
 
     old_state = _cycle_payload(state_dir, old_id)
@@ -2197,7 +2314,7 @@ def test_restart_mode_supersedes_cycle_and_starts_fresh_deep_ladder(
     )
     assert retry["review"] == new_id
     assert len(deslop_calls) == 2
-    assert len(review_calls) == 1
+    assert len(review_calls) == 2
 
     _, old_reprint = _run_review(
         monkeypatch, ["--id", old_id, "--state-dir", str(state_dir)]
@@ -2263,7 +2380,7 @@ def test_fast_review_can_restart_into_deep_without_becoming_a_restart_target(
     assert exit_code == 0
     assert new_id != old_id
     assert len(deslop_calls) == 1
-    assert len(review_calls) == 1
+    assert len(review_calls) == 2
     assert _cycle_payload(state_dir, old_id)["stage"] == "aborted"
     new_state = _cycle_payload(state_dir, new_id)
     assert new_state["mode"] == {"requested": "deep", "effective": "deep"}
@@ -2274,7 +2391,7 @@ def test_fast_review_can_restart_into_deep_without_becoming_a_restart_target(
         for action in review.build_parser()._actions
         if action.dest == "restart_mode"
     )
-    assert tuple(restart_action.choices) == ("brief", "normal", "deep")
+    assert tuple(restart_action.choices) == ("normal", "deep")
 
 
 def test_restart_mode_requires_escalation_reason_and_stricter_mode(
@@ -2324,7 +2441,7 @@ def test_restart_mode_requires_escalation_reason_and_stricter_mode(
             "--id",
             public_id,
             "--restart-mode",
-            "brief",
+            "normal",
             "--reason",
             "try downgrade",
         ],
@@ -2551,6 +2668,7 @@ def test_deslop_step_prints_output_once(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     calls: list[list[str]] = []
+    _stub_review(monkeypatch)
 
     def fake_run(*, command: list[str], cwd: Path) -> subprocess.CompletedProcess:
         calls.append(command)
@@ -2581,8 +2699,7 @@ def test_deslop_step_prints_output_once(
 
     assert exit_code == 0
     assert "stage" not in payload
-    assert captured.out.count("Output:") == 1
-    assert "review-deslop:" in captured.out
+    assert captured.out.count("review-deslop:") == 1
     assert "Remove redundant helper." in captured.out
     assert "--output-only" in calls[0]
 
@@ -2649,6 +2766,7 @@ def test_id_rejects_creation_context_flags(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _stub_deslop(monkeypatch)
+    _stub_review(monkeypatch)
     repo = tmp_path / "repo"
     state_dir = tmp_path / "default-state"
     _init_repo(repo)
@@ -2705,6 +2823,7 @@ def test_github_review_rejects_cycle_before_local_green(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _stub_deslop(monkeypatch)
+    _stub_review(monkeypatch)
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
     _init_repo(repo)
@@ -3423,7 +3542,7 @@ def test_github_result_after_amend_requires_same_id_signoff(
     assert state["github_review"]["status"] == "unknown"
 
 
-def test_mode_rerun_after_deslop_amend_reuses_existing_cycle_without_rerunning_deslop(
+def test_mode_rerun_after_concurrent_deslop_amend_reuses_existing_cycle(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -3452,7 +3571,7 @@ def test_mode_rerun_after_deslop_amend_reuses_existing_cycle_without_rerunning_d
     )
     public_id = str(created["review"])
     state = _cycle_payload(state_dir, public_id)
-    assert state["stage"] == "created"
+    assert state["stage"] == "decision-pending"
     assert state["deslop"]["status"] == "done"
     assert state["identity"]["head"] == original_head
     assert len(deslop_calls) == 1
@@ -3478,7 +3597,7 @@ def test_mode_rerun_after_deslop_amend_reuses_existing_cycle_without_rerunning_d
     assert resumed["review"] == public_id
     assert "--decision clean" in str(resumed["Action"]["cmd"])
     assert len(deslop_calls) == 1
-    assert len(review_calls) == 1
+    assert len(review_calls) == 2
     assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 1
     state = _cycle_payload(state_dir, public_id)
     assert state["identity"]["head"] == amended_head
@@ -3558,7 +3677,7 @@ def test_mode_rerun_allows_non_overlapping_merge_base_drift_without_rerunning_de
     assert resumed["review"] == public_id
     assert "--decision clean" in str(resumed["Action"]["cmd"])
     assert len(deslop_calls) == 1
-    assert len(review_calls) == 1
+    assert len(review_calls) == 2
     assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 1
     state = _cycle_payload(state_dir, public_id)
     assert state["identity"]["head"] == rebased_head
@@ -3635,12 +3754,14 @@ def test_mode_rerun_after_non_equivalent_base_drift_starts_fresh_cycle(
     assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 2
 
 
-def test_mode_rerun_after_new_pre_review_commit_starts_fresh_cycle(
+def test_mode_rerun_after_initial_review_commit_reuses_cycle(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     deslop_calls = _stub_deslop(monkeypatch)
-    _stub_review(monkeypatch, "phase_review-round-1")
+    review_calls = _stub_review(
+        monkeypatch, "phase_review-round-1", "phase_review-round-2"
+    )
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
     _use_compact_normal_profile(monkeypatch, state_dir)
@@ -3680,11 +3801,13 @@ def test_mode_rerun_after_new_pre_review_commit_starts_fresh_cycle(
     )
 
     assert exit_code == 0
-    assert fresh["review"] != old_id
-    assert len(deslop_calls) == 2
-    state = _cycle_payload(state_dir, str(fresh["review"]))
+    assert fresh["review"] == old_id
+    assert len(deslop_calls) == 1
+    state = _cycle_payload(state_dir, old_id)
     assert state["identity"]["head"] == new_head
-    assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 2
+    assert len(review_calls) == 2
+    assert state["rounds"][-1]["reviewed_head"] == new_head
+    assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 1
 
 
 def test_mode_rerun_after_overlapping_merge_base_drift_starts_fresh_cycle(
@@ -3744,7 +3867,7 @@ def test_mode_rerun_after_overlapping_merge_base_drift_starts_fresh_cycle(
     assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 2
 
 
-def test_mode_rerun_after_pre_review_reset_starts_fresh_cycle(
+def test_mode_rerun_after_initial_review_reset_reuses_cycle(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -3789,11 +3912,11 @@ def test_mode_rerun_after_pre_review_reset_starts_fresh_cycle(
     )
 
     assert exit_code == 0
-    assert fresh["review"] != old_id
-    assert len(deslop_calls) == 2
-    state = _cycle_payload(state_dir, str(fresh["review"]))
+    assert fresh["review"] == old_id
+    assert len(deslop_calls) == 1
+    state = _cycle_payload(state_dir, old_id)
     assert state["identity"]["head"] == base_head
-    assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 2
+    assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 1
 
 
 def test_mode_rerun_with_multiple_matching_cycles_requires_id(

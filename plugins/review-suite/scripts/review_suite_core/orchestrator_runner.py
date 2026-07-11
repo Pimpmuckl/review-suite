@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -33,6 +34,7 @@ from .lens_runtime import (
     progress_heartbeat_line,
 )
 from .orchestrator_state import (
+    DESLOP_STATUS_TRACKED,
     STAGE_CREATED,
     STAGE_DECISION_PENDING,
     STAGE_FOLLOWUP_PENDING,
@@ -1397,6 +1399,51 @@ def _run_followup_review_once(
     )
 
 
+def _run_profile_step_once(
+    state: dict[str, Any],
+    *,
+    state_dir: Path,
+    persist_state: StatePersister | None,
+) -> OrchestratorRunnerResult:
+    step_index, step = _next_profile_step(state)
+    if _step_kind(step) == "gate":
+        return _run_profile_gate_once(
+            state, state_dir=state_dir, step_index=step_index, step=step
+        )
+    if _step_kind(step) == "arena":
+        return _run_profile_arena_once(
+            state,
+            state_dir=state_dir,
+            step_index=step_index,
+            step=step,
+            persist_state=persist_state,
+        )
+    return _run_profile_review_once(
+        state,
+        state_dir=state_dir,
+        step_index=step_index,
+        step=step,
+        persist_state=persist_state,
+    )
+
+
+def _merge_deslop_result(
+    state: dict[str, Any], deslop_result: OrchestratorRunnerResult
+) -> dict[str, Any]:
+    next_state = dict(state)
+    next_state["deslop"] = dict(deslop_result.state.get("deslop") or {})
+    review_recovery = dict(state.get("recovery") or {})
+    deslop_retry_recovery = str(review_recovery.get("reason") or "").startswith(
+        "deslop failed"
+    )
+    if (
+        str(review_recovery.get("status") or "") in {"", "none"}
+        or deslop_retry_recovery
+    ):
+        next_state["recovery"] = dict(deslop_result.state.get("recovery") or {})
+    return next_state
+
+
 def run_one_expensive_step(
     state: dict[str, Any],
     *,
@@ -1405,7 +1452,38 @@ def run_one_expensive_step(
 ) -> OrchestratorRunnerResult:
     resolved_state_dir = state_dir or Path.home() / ".codex" / "state" / "review-suite"
     if deslop_should_run(state):
-        return _run_deslop_once(state)
+        deslop_status = str(dict(state.get("deslop") or {}).get("status") or "")
+        if (
+            deslop_status == DESLOP_STATUS_TRACKED
+            and state.get("stage") == STAGE_CREATED
+            and review_profile_has_next_step(state)
+        ):
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                deslop_future = executor.submit(_run_deslop_once, state)
+                review_result = _run_profile_step_once(
+                    state,
+                    state_dir=resolved_state_dir,
+                    persist_state=persist_state,
+                )
+                deslop_result = deslop_future.result()
+            next_state = _merge_deslop_result(review_result.state, deslop_result)
+            return OrchestratorRunnerResult(
+                next_state,
+                ran_step=True,
+                step=review_result.step,
+            )
+        deslop_result = _run_deslop_once(state)
+        if (
+            state.get("stage") not in {STAGE_CREATED, STAGE_RETRY_REQUESTED}
+            or dict(state.get("pending_action") or {}).get("kind") == "arena-blocked"
+        ):
+            next_state = _merge_deslop_result(state, deslop_result)
+            return OrchestratorRunnerResult(
+                next_state,
+                ran_step=True,
+                step="deslop",
+            )
+        return deslop_result
     if state.get("stage") == STAGE_RUNNING:
         return _collect_running_review_once(state, state_dir=resolved_state_dir)
     if (
@@ -1414,24 +1492,9 @@ def run_one_expensive_step(
     ):
         return _recover_blocked_arena_once(state, state_dir=resolved_state_dir)
     if _review_should_run(state):
-        step_index, step = _next_profile_step(state)
-        if _step_kind(step) == "gate":
-            return _run_profile_gate_once(
-                state, state_dir=resolved_state_dir, step_index=step_index, step=step
-            )
-        if _step_kind(step) == "arena":
-            return _run_profile_arena_once(
-                state,
-                state_dir=resolved_state_dir,
-                step_index=step_index,
-                step=step,
-                persist_state=persist_state,
-            )
-        return _run_profile_review_once(
+        return _run_profile_step_once(
             state,
             state_dir=resolved_state_dir,
-            step_index=step_index,
-            step=step,
             persist_state=persist_state,
         )
     if state.get("stage") == STAGE_FOLLOWUP_PENDING:

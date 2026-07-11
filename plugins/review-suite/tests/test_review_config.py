@@ -53,14 +53,12 @@ def test_default_public_config_loads(tmp_path: Path) -> None:
     )
     assert config["orchestrator"]["selection"] == "auto"
     assert config["orchestrator"]["stable_defaults"] == {
-        "discovery_brief_model": "gpt-5.4-medium",
+        "discovery_phase_model": "gpt-5.4-medium",
         "discovery_deep_model": "gpt-5.4-xhigh",
         "discovery_loops": 1,
-        "normal_discovery_loops": 3,
         "normal_arena_loops": 13,
-        "deep_discovery_loops": 2,
         "deep_arena_loops": 13,
-        "signoff_brief_model": "gpt-5.6-sol-medium",
+        "signoff_normal_model": "gpt-5.6-sol-medium",
         "signoff_deep_model": "gpt-5.6-sol-xhigh",
     }
 
@@ -84,7 +82,7 @@ def test_user_config_overrides_defaults(tmp_path: Path) -> None:
                 },
                 "orchestrator": {
                     "stable_defaults": {
-                        "signoff_brief_model": "gpt-5.4-high",
+                        "signoff_normal_model": "gpt-5.4-high",
                         "discovery_loops": 2,
                     }
                 },
@@ -106,11 +104,11 @@ def test_user_config_overrides_defaults(tmp_path: Path) -> None:
     assert phase_gate.discovery_loops == 2
     assert pr_gate.signoff_variant_id == "gpt-5.6-sol-xhigh"
     assert (
-        config["orchestrator"]["stable_defaults"]["discovery_brief_model"]
+        config["orchestrator"]["stable_defaults"]["discovery_phase_model"]
         == "gpt-5.4-medium"
     )
     assert (
-        config["orchestrator"]["stable_defaults"]["signoff_brief_model"]
+        config["orchestrator"]["stable_defaults"]["signoff_normal_model"]
         == "gpt-5.4-high"
     )
 

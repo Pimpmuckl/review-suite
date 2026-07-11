@@ -73,6 +73,7 @@ from review_suite_core.orchestrator_state import (
     DESLOP_STATUS_DONE,
     DESLOP_STATUS_SKIPPED,
     create_cycle,
+    deslop_is_ready,
     mark_deslop_closed,
     mark_fix_detected,
     mark_latest_profile_step_rerun_needed,
@@ -1922,8 +1923,7 @@ def _compatible_continuation_cycle(
 def _create_or_resume_cycle(
     *, args: argparse.Namespace, state_dir: Path
 ) -> dict[str, Any]:
-    if not args.mode:
-        raise ValueError("--mode is required when creating a review cycle")
+    mode = str(args.mode or "normal")
     review_root = resolve_repo_root(args.cd)
     head = current_head(review_root)
     branch = current_branch(review_root)
@@ -1932,7 +1932,7 @@ def _create_or_resume_cycle(
     merge_base_head = merge_base(review_root, base, "HEAD")
     config = load_config(state_dir)
     resolution = resolve_orchestrator_profile(
-        config, mode=str(args.mode), selection=_configured_selection(config)
+        config, mode=mode, selection=_configured_selection(config)
     )
     profile_deslop_enabled = bool(resolution.profile.deslop_enabled)
     skip_deslop = bool(args.skip_deslop) and profile_deslop_enabled
@@ -2133,9 +2133,16 @@ def _advance_without_decision(
         return saved
 
     for _ in range(6):
-        resumed = _resume_progress(ready_state, state_dir=state_dir)
-        resumed = _blocked_decision_recovery_state(resumed, state_dir=state_dir)
-        decided = _auto_record_structured_decision(resumed, state_dir=state_dir)
+        if deslop_is_ready(ready_state):
+            resumed = _resume_progress(ready_state, state_dir=state_dir)
+            resumed = _blocked_decision_recovery_state(resumed, state_dir=state_dir)
+        else:
+            resumed = ready_state
+        decided = (
+            _auto_record_structured_decision(resumed, state_dir=state_dir)
+            if deslop_is_ready(resumed)
+            else resumed
+        )
         if decided != resumed:
             ready_state = decided
             continue
@@ -2158,7 +2165,16 @@ def _advance_without_decision(
 def _apply_decision(
     state: dict[str, Any], decision: str, *, state_dir: Path
 ) -> dict[str, Any]:
-    ready_state = _resume_progress(state, state_dir=state_dir)
+    ready_state = (
+        _resume_progress(state, state_dir=state_dir)
+        if deslop_is_ready(state)
+        else state
+    )
+    if not deslop_is_ready(ready_state):
+        ready_state = run_one_expensive_step(ready_state, state_dir=state_dir).state
+        if not deslop_is_ready(ready_state):
+            return ready_state
+        ready_state = _resume_progress(ready_state, state_dir=state_dir)
     try:
         return _apply_decision_to_ready_state(
             ready_state, decision, state_dir=state_dir
