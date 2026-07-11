@@ -45,6 +45,18 @@ DESLOP_STATUS_FAILED = "failed"
 DESLOP_STATUS_CLOSED = "closed"
 DESLOP_STATUS_SKIPPED = "skipped"
 DESLOP_STATUS_SKIPPED_FAST = "skipped-fast"
+DESLOP_RETRY_STAGES = {
+    STAGE_CREATED,
+    STAGE_RUNNING,
+    STAGE_DECISION_PENDING,
+    STAGE_FIX_PENDING,
+    STAGE_FOLLOWUP_PENDING,
+    STAGE_GATE_RERUN_NEEDED,
+    STAGE_REVIEW_GREEN,
+    STAGE_LOCAL_GREEN_HANDOFF,
+    STAGE_BLOCKED,
+    STAGE_RETRY_REQUESTED,
+}
 
 GATE_LANES = {"review_t2", "review_t4"}
 NO_WORK_STAGES = {
@@ -1225,7 +1237,15 @@ def deslop_should_run(state: dict[str, Any]) -> bool:
     deslop = dict(state.get("deslop") or {})
     if not bool(deslop.get("tracked")):
         return False
-    if state.get("stage") not in {STAGE_CREATED, STAGE_RETRY_REQUESTED}:
+    status = str(deslop.get("status") or "")
+    if status == DESLOP_STATUS_FAILED:
+        return state.get("stage") in DESLOP_RETRY_STAGES
+    if status == DESLOP_STATUS_TRACKED and state.get("stage") == STAGE_RUNNING:
+        return True
+    if state.get("stage") not in {
+        STAGE_CREATED,
+        STAGE_RETRY_REQUESTED,
+    }:
         return False
     if dict(state.get("pending_action") or {}).get("kind") not in (
         None,
@@ -1233,10 +1253,7 @@ def deslop_should_run(state: dict[str, Any]) -> bool:
         "resume-after-deslop",
     ):
         return False
-    return str(deslop.get("status") or "") in {
-        DESLOP_STATUS_TRACKED,
-        DESLOP_STATUS_FAILED,
-    }
+    return status == DESLOP_STATUS_TRACKED
 
 
 def mark_deslop_done(state: dict[str, Any], *, command: str) -> dict[str, Any]:

@@ -1,6 +1,6 @@
 ---
 name: review
-description: "Run local code review/status; choose `fast`, `brief`, `normal`, or `deep` by risk."
+description: "Run local code review/status; choose `fast`, `normal`, or `deep` by risk."
 ---
 
 # Review
@@ -8,7 +8,7 @@ description: "Run local code review/status; choose `fast`, `brief`, `normal`, or
 Use for local code review.
 
 ```powershell
-<python> <review-suite-plugin-root>/scripts/review.py --mode fast|brief|normal|deep --cd <repo-root>
+<python> <review-suite-plugin-root>/scripts/review.py --cd <repo-root>
 ```
 
 Path rules:
@@ -17,20 +17,20 @@ Path rules:
 - Follow emitted `Action.cmd`; runtime-backed runs should emit installed-launcher paths for follow-up commands.
 
 Mode:
-- `fast`: small, localized, well-tested changes; GPT 5.6 Sol medium signoff only, no deslop, and no more than two local review rounds.
-- `brief`: one four-model medium discovery brawl, then GPT 5.6 Sol medium signoff.
-- `normal`: default behavior changes; four-model medium discovery budget, then GPT 5.6 Sol medium signoff.
-- `deep`: stateful, cross-system, security, concurrency, migration, and other high-risk work; normal stack, four-model xhigh discovery budget, GPT 5.6 Sol xhigh signoff, then GitHub when required.
+- Omit `--mode` for `normal`, the default for ordinary changes.
+- Use `--mode fast` for UI-only, local presentation, and other small, well-tested changes. It runs dual GPT-5.6 Sol medium signoff with no deslop, Arena, or GitHub review and stops after at most two local rounds.
+- Use `--mode deep` for billing, login/authentication, authorization/security, database integrity or migrations, concurrency, and similarly critical or high-blast-radius logic.
+- Treat those mappings as risk heuristics. A nominally UI-only change that crosses a trust or data-integrity boundary is not `fast`.
 
 Rules:
 - Run focused validation before dispatch; start slow full-suite/CI after dispatch and track final status.
-- Non-fast runs may include a deslop sidecar. When emitted and handled/no longer useful, close it only with `review.py --id <id> --deslop-done`.
+- Normal and deep run deslop as a sidecar; handle or dismiss its output before completion, then close it with `review.py --id <id> --deslop-done`.
 - To replace an existing ladder with stricter review, use `review.py --id <id> --restart-mode deep --reason "<why>"` while the original repo/base/branch/head/merge-base still match and the worktree is clean; plain `--mode deep --cd <repo-root>` is not a restart.
 - Review orchestration expects committed review changes. If `git diff` is non-empty but `base..HEAD` is empty, commit intended changes or stash unrelated worktree changes before rerunning.
 - Review commands do not support a dirty-worktree override. Do not append `--allow-dirty`; commit intended review changes first.
 - Read `Output:`, then follow the emitted `Action.cmd`.
 - For arena grading actions, grade only after checking findings against the diff/repo. Plausible but unverified findings do not count as valid. Use `scope_bloat_loss` when a review asks for product behavior, AI guardrails, validation, fallback behavior, UX policy, or safety checks that are not required by the diff, a real bug, a trust boundary, or the user request.
-- Supply the requested rating pool and repeat `--rank` from best to worst; comma-separated variants within one rank tie.
+- Supply the requested rating pool and repeat `--rank` from best to worst; comma-separated variants within one rank tie. The caller grades; Review Suite never promotes a winner automatically.
 - Without an id, use `review.py --status --cd <repo-root>` for branch/gate routing.
 - The default base is the repository's remote default branch. Use `--base <ref>` only as an explicit override.
 - The normal advance command after a review id exists is bare `review.py --id <id>`; explicit `--decision clean|findings` is an override when Review Suite cannot auto-advance from a structured reviewer verdict or a human intentionally disagrees.

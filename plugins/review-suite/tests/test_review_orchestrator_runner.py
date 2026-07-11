@@ -4,6 +4,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from threading import Event
 
 import pytest
 
@@ -14,12 +15,16 @@ if str(SCRIPT_DIR) not in sys.path:
 
 from review_suite_core import orchestrator_runner
 from review_suite_core.orchestrator_state import (
+    STAGE_ABORTED,
     STAGE_CREATED,
     STAGE_DECISION_PENDING,
     STAGE_REVIEW_GREEN,
     STAGE_RETRY_REQUESTED,
+    STAGE_RUNNING,
+    abort_cycle,
     create_cycle,
     mark_arena_recovery_requested,
+    mark_blocked,
     mark_fix_detected,
     mark_review_step_pending,
     mark_review_step_running,
@@ -224,24 +229,31 @@ def _stub_gate(monkeypatch, *round_ids: str) -> list[dict[str, object]]:
     return calls
 
 
-def test_runner_executes_one_deslop_step_and_marks_done(
+def test_runner_executes_deslop_and_first_review_step_together(
     monkeypatch, tmp_path: Path
 ) -> None:
     calls: list[tuple[list[str], Path]] = []
+    review_started = Event()
     review_calls = _stub_review(monkeypatch)
+    stub_review = orchestrator_runner.run_review_step
+
+    def concurrent_review(**kwargs: object) -> dict[str, object]:
+        review_started.set()
+        return stub_review(**kwargs)
 
     def fake_run(*, command: list[str], cwd: Path) -> subprocess.CompletedProcess:
+        assert review_started.wait(timeout=1)
         calls.append((command, cwd))
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
+    monkeypatch.setattr(orchestrator_runner, "run_review_step", concurrent_review)
     monkeypatch.setattr(orchestrator_runner, "run_deslop_subprocess", fake_run)
 
     result = orchestrator_runner.run_one_expensive_step(_cycle(tmp_path))
 
     assert result.ran_step is True
-    assert result.step == "deslop"
-    assert result.state["stage"] == STAGE_CREATED
-    assert result.state["pending_action"] == {"kind": "resume-after-deslop"}
+    assert result.step == "review"
+    assert result.state["stage"] == STAGE_DECISION_PENDING
     assert result.state["deslop"]["status"] == "done"
     assert result.state["deslop"]["returncode"] == 0
     assert len(calls) == 1
@@ -250,33 +262,26 @@ def test_runner_executes_one_deslop_step_and_marks_done(
     assert "--output-only" in command
     assert command[-2:] == ["--base", "main"]
     assert cwd == tmp_path / "repo"
-
-    second = orchestrator_runner.run_one_expensive_step(
-        result.state, state_dir=tmp_path / "state"
-    )
-
-    assert second.ran_step is True
-    assert second.step == "review"
-    assert second.state["stage"] == STAGE_DECISION_PENDING
-    assert second.state["pending_action"] == {
+    assert len(review_calls) == 1
+    assert result.state["pending_action"] == {
         "kind": "decision",
         "round_id": "phase_review-round-1",
         "lane": "review_t1",
         "step_index": 0,
         "step": "precision",
     }
-    assert second.state["rounds"][0]["round_id"] == "phase_review-round-1"
-    assert second.state["rounds"][0]["lane"] == "review_t1"
-    assert second.state["rounds"][0]["kind"] == "review"
-    assert second.state["rounds"][0]["review_status"] == "completed"
-    assert second.state["rounds"][0]["output_refs"] == [
+    assert result.state["rounds"][0]["round_id"] == "phase_review-round-1"
+    assert result.state["rounds"][0]["lane"] == "review_t1"
+    assert result.state["rounds"][0]["kind"] == "review"
+    assert result.state["rounds"][0]["review_status"] == "completed"
+    assert result.state["rounds"][0]["output_refs"] == [
         "rollout://thread/gpt-5.5-medium"
     ]
     assert len(calls) == 1
     assert len(review_calls) == 1
 
     third = orchestrator_runner.run_one_expensive_step(
-        second.state, state_dir=tmp_path / "state"
+        result.state, state_dir=tmp_path / "state"
     )
 
     assert third.ran_step is False
@@ -1284,6 +1289,7 @@ def test_runner_marks_failed_deslop_retryable_and_retries_from_retry_stage(
 ) -> None:
     calls = 0
     output: list[str] = []
+    review_calls = _stub_review(monkeypatch, "discarded-round", "accepted-round")
 
     def fake_run(*, command: list[str], cwd: Path) -> subprocess.CompletedProcess:
         nonlocal calls
@@ -1303,21 +1309,127 @@ def test_runner_marks_failed_deslop_retryable_and_retries_from_retry_stage(
     failed = orchestrator_runner.run_one_expensive_step(_cycle(tmp_path))
 
     assert failed.ran_step is True
-    assert failed.state["stage"] == STAGE_RETRY_REQUESTED
-    assert failed.state["pending_action"] == {"kind": "run-deslop"}
+    assert failed.state["stage"] == STAGE_DECISION_PENDING
+    assert failed.state["rounds"][0]["round_id"] == "discarded-round"
     assert failed.state["deslop"]["status"] == "failed"
     assert failed.state["deslop"]["returncode"] == 9
     assert failed.state["recovery"]["status"] == STAGE_RETRY_REQUESTED
     assert failed.state["recovery"]["retry_count"] == 1
     assert "deslop stderr details" in output
+    assert len(review_calls) == 1
 
     retried = orchestrator_runner.run_one_expensive_step(failed.state)
 
     assert retried.ran_step is True
-    assert retried.state["stage"] == STAGE_CREATED
+    assert retried.state["stage"] == STAGE_DECISION_PENDING
     assert retried.state["deslop"]["status"] == "done"
+    assert retried.state["rounds"][0]["round_id"] == "discarded-round"
     assert retried.state["recovery"]["status"] == "none"
+    assert len(review_calls) == 1
     assert calls == 2
+
+
+def test_runner_recovers_tracked_deslop_before_collecting_running_review(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        orchestrator_runner,
+        "run_deslop_subprocess",
+        lambda **kwargs: subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+    )
+    running = mark_review_step_running(
+        _cycle(tmp_path),
+        round_id="running-round",
+        lane="review_t1",
+        step_index=0,
+        step_name="precision",
+        reviewed_head="head-1",
+        round_state_dir="state/rounds",
+    )
+
+    recovered = orchestrator_runner.run_one_expensive_step(running)
+
+    assert recovered.step == "deslop"
+    assert recovered.state["stage"] == STAGE_RUNNING
+    assert recovered.state["deslop"]["status"] == "done"
+    assert recovered.state["pending_action"] == running["pending_action"]
+
+
+def test_runner_preserves_arena_recovery_while_retrying_deslop(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        orchestrator_runner,
+        "run_deslop_subprocess",
+        lambda **kwargs: subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+    )
+    pending = mark_review_step_pending(
+        _cycle(tmp_path),
+        round_id="blocked-round",
+        lane="review_t1",
+        step_index=0,
+        step_name="precision",
+        reviewed_head="head-1",
+    )
+    blocked = mark_arena_recovery_requested(
+        pending,
+        reason="blocked",
+        round_id="blocked-round",
+        lane="review_t1",
+        step_index=0,
+        step_name="precision",
+        round_state_dir="state/rounds",
+    )
+    blocked["deslop"]["status"] = "failed"
+
+    recovered = orchestrator_runner.run_one_expensive_step(blocked)
+
+    assert recovered.state["deslop"]["status"] == "done"
+    assert recovered.state["stage"] == STAGE_RETRY_REQUESTED
+    assert recovered.state["pending_action"]["kind"] == "arena-blocked"
+    assert recovered.state["recovery"]["round_id"] == "blocked-round"
+
+
+def test_runner_preserves_gate_recovery_while_retrying_deslop(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        orchestrator_runner,
+        "run_deslop_subprocess",
+        lambda **kwargs: subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+    )
+    blocked = mark_blocked(
+        _cycle(tmp_path), reason="gate failed", round_id="gate-round"
+    )
+    blocked["deslop"]["status"] = "failed"
+
+    recovered = orchestrator_runner.run_one_expensive_step(blocked)
+
+    assert recovered.state["deslop"]["status"] == "done"
+    assert recovered.state["stage"] == "blocked"
+    assert recovered.state["recovery"]["reason"] == "gate failed"
+    assert recovered.state["recovery"]["round_id"] == "gate-round"
+
+
+def test_runner_does_not_retry_failed_deslop_for_aborted_cycle(
+    monkeypatch, tmp_path: Path
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    def fake_run(**kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(dict(kwargs))
+        return subprocess.CompletedProcess([], 0, stdout="", stderr="")
+
+    monkeypatch.setattr(orchestrator_runner, "run_deslop_subprocess", fake_run)
+    state = _cycle(tmp_path)
+    state["deslop"]["status"] = "failed"
+    aborted = abort_cycle(state, reason="superseded")
+
+    result = orchestrator_runner.run_one_expensive_step(aborted)
+
+    assert result.ran_step is False
+    assert result.state["stage"] == STAGE_ABORTED
+    assert calls == []
 
 
 def test_runner_runs_real_followup_once_from_followup_pending(
