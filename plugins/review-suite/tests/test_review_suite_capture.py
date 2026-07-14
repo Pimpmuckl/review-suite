@@ -1138,3 +1138,51 @@ def test_rollout_capture_missing_threads_table_returns_none(tmp_path: Path) -> N
         )
         is None
     )
+
+
+def test_review_child_lookup_skips_malformed_rollout(tmp_path: Path) -> None:
+    sqlite_path = tmp_path / "state_5.sqlite"
+    malformed = tmp_path / "malformed.jsonl"
+    matched = tmp_path / "matched.jsonl"
+    malformed.write_text("{not-json\n", encoding="utf-8")
+    _write_jsonl(
+        matched,
+        [
+            {
+                "type": "session_meta",
+                "payload": {"parent_thread_id": "launcher-alpha"},
+            }
+        ],
+    )
+    con = sqlite3.connect(sqlite_path)
+    con.execute(THREAD_SCHEMA)
+    _insert_thread(
+        con,
+        thread_id="malformed",
+        rollout_path=malformed,
+        cwd="repo",
+        source='{"subagent":"review"}',
+        created_at=2,
+        updated_at=2,
+        tokens_used=0,
+        title="review",
+    )
+    _insert_thread(
+        con,
+        thread_id="matched",
+        rollout_path=matched,
+        cwd="repo",
+        source='{"subagent":"review"}',
+        created_at=1,
+        updated_at=1,
+        tokens_used=0,
+        title="review",
+    )
+    con.commit()
+    con.close()
+
+    child = rollout_capture.find_review_child_thread(
+        sqlite_path=sqlite_path, parent_thread_id="launcher-alpha"
+    )
+
+    assert child and child["id"] == "matched"

@@ -143,22 +143,28 @@ def rollout_final_assistant_text(path: Path) -> str:
 
 
 def rollout_parent_thread_id(path: Path) -> str | None:
-    key = _path_cache_key(path)
+    try:
+        key = _path_cache_key(path)
+    except OSError:
+        return None
     if key in _ROLLOUT_PARENT_CACHE:
         return _ROLLOUT_PARENT_CACHE[key]
     parent_thread_id = None
-    with path.open("r", encoding="utf-8", errors="replace") as handle:
-        for line in handle:
-            if not line.strip():
-                continue
-            row = json.loads(line)
-            if row.get("type") == "session_meta":
-                payload = row.get("payload", {})
-                if isinstance(payload, dict):
-                    parent_thread_id = (
-                        str(payload.get("parent_thread_id") or "") or None
-                    )
-                break
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                if not line.strip():
+                    continue
+                row = json.loads(line)
+                if row.get("type") == "session_meta":
+                    payload = row.get("payload", {})
+                    if isinstance(payload, dict):
+                        parent_thread_id = (
+                            str(payload.get("parent_thread_id") or "") or None
+                        )
+                    break
+    except OSError, json.JSONDecodeError:
+        parent_thread_id = None
     _ROLLOUT_PARENT_CACHE[key] = parent_thread_id
     return parent_thread_id
 
