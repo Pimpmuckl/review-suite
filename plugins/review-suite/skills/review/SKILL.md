@@ -26,6 +26,7 @@ Rules:
 - Run focused validation before dispatch; start slow full-suite/CI after dispatch and track final status.
 - Normal and deep run deslop as a sidecar; handle or dismiss its output before completion, then close it with `review.py --id <id> --deslop-done`.
 - To replace an existing ladder with stricter review, use `review.py --id <id> --restart-mode deep --reason "<why>"` while the original repo/base/branch/head/merge-base still match and the worktree is clean; plain `--mode deep --cd <repo-root>` is not a restart.
+- When the local round budget is exhausted, follow the emitted `review.py --id <id> --new-cycle`; it starts one same-mode successor and rejects non-exhausted reviews.
 - Review orchestration expects committed review changes. If `git diff` is non-empty but `base..HEAD` is empty, commit intended changes or stash unrelated worktree changes before rerunning.
 - Review commands do not support a dirty-worktree override. Do not append `--allow-dirty`; commit intended review changes first.
 - Read `Output:`, then follow the emitted `Action.cmd`.

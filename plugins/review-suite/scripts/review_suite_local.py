@@ -3755,9 +3755,12 @@ def launch_round(
             file=sys.stderr,
             flush=True,
         )
+    launched_count = 0
     for run in round_payload["runs"]:
         if _run_is_finalized(run):
             continue
+        if launched_count:
+            time.sleep(MULTI_REVIEW_DISPATCH_STAGGER_SECONDS)
         variant = indexed[run["variant_id"]]
         _launch_reviewer_process(
             round_payload=round_payload,
@@ -3768,6 +3771,7 @@ def launch_round(
             review_scope=review_scope,
             allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
         )
+        launched_count += 1
         running_run = deepcopy(run)
         running_payload["runs"] = [
             running_run

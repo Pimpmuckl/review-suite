@@ -64,6 +64,13 @@ To replace an active review with a stricter one:
 <python> <plugin-root>/scripts/review.py --id <id> --restart-mode deep --reason "why deeper review is required"
 ```
 
+When a review exhausts its local round budget, its emitted action can start one
+same-mode successor without repeating the repository context:
+
+```powershell
+<python> <plugin-root>/scripts/review.py --id <id> --new-cycle
+```
+
 ## Discovery and Arena
 
 Stable profiles do not run discovery brawls. Discovery pools and ratings remain

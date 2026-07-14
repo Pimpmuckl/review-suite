@@ -178,11 +178,58 @@ def load_cycle_by_public_id(state_dir: Path, public_id: str) -> dict[str, Any]:
 
 
 def save_cycle(state_dir: Path, state: dict[str, Any]) -> dict[str, Any]:
+    with orchestrator_store_lock(state_dir=state_dir, name=ORCHESTRATOR_CYCLES_LOCK):
+        cycle_key = str(state.get("cycle_key") or "").strip()
+        current = load_cycle_by_key(state_dir, cycle_key) if cycle_key else None
+        payload = deepcopy(state)
+        if current and str(
+            dict(current.get("superseded_by") or {}).get("review") or ""
+        ):
+            for key in ("stage", "pending_action", "recovery", "superseded_by"):
+                payload[key] = deepcopy(current.get(key))
+        return _save_cycle_unlocked(state_dir, payload)
+
+
+def _save_cycle_unlocked(state_dir: Path, state: dict[str, Any]) -> dict[str, Any]:
     cycle_key = str(state.get("cycle_key") or "").strip()
     if not cycle_key:
         raise ValueError("cycle_key is required")
+    payload = deepcopy(state)
+    payload["public_id"] = public_id_for_cycle_key(state_dir, cycle_key)
+    _atomic_write_json(cycle_path(state_dir, cycle_key), payload)
+    return payload
+
+
+def reserve_cycle_successor(
+    state_dir: Path,
+    *,
+    source: dict[str, Any],
+    successor: dict[str, Any],
+) -> tuple[dict[str, Any], bool]:
+    source_key = str(source.get("cycle_key") or "").strip()
+    if not source_key:
+        raise ValueError("source cycle_key is required")
     with orchestrator_store_lock(state_dir=state_dir, name=ORCHESTRATOR_CYCLES_LOCK):
-        payload = deepcopy(state)
-        payload["public_id"] = public_id_for_cycle_key(state_dir, cycle_key)
-        _atomic_write_json(cycle_path(state_dir, cycle_key), payload)
-        return payload
+        current = load_cycle_by_key(state_dir, source_key)
+        if current is None:
+            raise ValueError(f"source review cycle state is missing: {source_key}")
+        superseded = dict(current.get("superseded_by") or {})
+        existing_id = str(superseded.get("review") or "").strip()
+        if existing_id:
+            existing_key = str(superseded.get("cycle_key") or "").strip()
+            requested_key = str(successor.get("cycle_key") or "").strip()
+            if existing_key != requested_key:
+                raise ValueError(
+                    f"source review cycle already has a different successor: {existing_id}"
+                )
+            return load_cycle_by_public_id(state_dir, existing_id), False
+        saved_successor = _save_cycle_unlocked(state_dir, successor)
+        saved_source = deepcopy(current)
+        for key in ("stage", "pending_action", "recovery", "superseded_by"):
+            saved_source[key] = deepcopy(source.get(key))
+        redirect = dict(saved_source.get("superseded_by") or {})
+        redirect["review"] = str(saved_successor["public_id"])
+        redirect["cycle_key"] = str(saved_successor["cycle_key"])
+        saved_source["superseded_by"] = redirect
+        _save_cycle_unlocked(state_dir, saved_source)
+        return saved_successor, True

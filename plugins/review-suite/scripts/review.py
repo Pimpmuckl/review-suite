@@ -93,6 +93,8 @@ from review_suite_core.orchestrator_store import (
     cycles_dir,
     load_cycle_by_key,
     load_cycle_by_public_id,
+    orchestrator_store_lock,
+    reserve_cycle_successor,
     save_cycle,
 )
 from review_suite_local import (
@@ -134,6 +136,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--id")
     parser.add_argument("--mode", choices=SUPPORTED_MODES)
     parser.add_argument("--restart-mode", choices=RESTART_TARGET_MODES)
+    parser.add_argument(
+        "--new-cycle",
+        action="store_true",
+        help="Start one successor cycle after this review exhausts its round budget.",
+    )
     parser.add_argument("--reason")
     parser.add_argument("--cd")
     parser.add_argument("--base", help="Override the detected default branch ref.")
@@ -175,7 +182,6 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print compact status for --id without running review.",
     )
-    parser.add_argument("--fresh-token", help=argparse.SUPPRESS)
     parser.add_argument("--wsl", action="store_true")
     return parser
 
@@ -194,6 +200,12 @@ class NoDecisionPendingError(ValueError):
         self.state = state
 
 
+class SuccessorAdvanceBusyError(RuntimeError):
+    def __init__(self, state: dict[str, Any]) -> None:
+        super().__init__("successor review is already advancing")
+        self.state = state
+
+
 def _runtime_uses_wsl(state: dict[str, Any]) -> bool:
     return bool(
         dict(state.get("runtime") or {}).get("allow_unsafe_windows_wsl_fallback")
@@ -202,40 +214,6 @@ def _runtime_uses_wsl(state: dict[str, Any]) -> bool:
 
 def _review_command(public_id: str, *extra: str, state_dir: Path | None = None) -> str:
     command = [sys.executable, str(_launcher_script_path()), "--id", public_id, *extra]
-    return format_command(command)
-
-
-def _new_review_command(
-    state: dict[str, Any], *, state_dir: Path, fresh_token: str | None = None
-) -> str:
-    identity = dict(state.get("identity") or {})
-    mode = str(
-        dict(state.get("mode") or {}).get("requested")
-        or dict(state.get("mode") or {}).get("effective")
-        or ""
-    ).strip()
-    cwd = str(identity.get("cwd") or "").strip()
-    base = str(identity.get("base") or "").strip()
-    if not mode or not cwd or not base:
-        raise ValueError(
-            "review cycle is missing mode, cwd, or base for a fresh review command"
-        )
-    command = [
-        sys.executable,
-        str(_launcher_script_path()),
-        "--mode",
-        mode,
-        "--cd",
-        str(cwd_path_from_normalized(cwd)),
-        "--base",
-        base,
-    ]
-    if fresh_token:
-        command.extend(["--fresh-token", fresh_token])
-    if _cycle_cli_skips_deslop(state):
-        command.append("--skip-deslop")
-    if _runtime_uses_wsl(state):
-        command.append("--wsl")
     return format_command(command)
 
 
@@ -731,14 +709,20 @@ def _mode_rank(mode: str) -> int:
 
 
 def _validate_restart_mode(state: dict[str, Any], target_mode: str) -> str:
-    mode = dict(state.get("mode") or {})
-    current_mode = str(mode.get("effective") or mode.get("requested") or "").strip()
+    current_mode = _current_mode(state)
     current_rank = _mode_rank(current_mode)
     target_rank = _mode_rank(target_mode)
     if target_rank <= current_rank:
         raise ValueError(
             f"--restart-mode must increase strictness from {current_mode}; requested {target_mode}"
         )
+    return current_mode
+
+
+def _current_mode(state: dict[str, Any]) -> str:
+    mode = dict(state.get("mode") or {})
+    current_mode = str(mode.get("effective") or mode.get("requested") or "").strip()
+    _mode_rank(current_mode)
     return current_mode
 
 
@@ -1721,25 +1705,6 @@ def _with_equivalent_base_drift_review_head(
     return next_state
 
 
-def _fresh_token_claims_budget_exhausted_continuation(
-    state: dict[str, Any], fresh_token: str | None
-) -> bool:
-    token = str(fresh_token or "").strip()
-    if not token:
-        return False
-    pending = dict(state.get("pending_action") or {})
-    if str(pending.get("kind") or "").strip() != "review-round-budget-exhausted":
-        return False
-    return _fresh_review_token(state) == token
-
-
-def _creation_cycle_token(args: argparse.Namespace, *, skip_deslop: bool) -> str | None:
-    token = str(args.fresh_token or "").strip()
-    if not skip_deslop:
-        return token or None
-    return f"skip-deslop:{token}" if token else "skip-deslop"
-
-
 def _cycle_cli_skips_deslop(state: dict[str, Any]) -> bool:
     deslop = dict(state.get("deslop") or {})
     if str(deslop.get("status") or "").strip() != DESLOP_STATUS_SKIPPED:
@@ -1812,13 +1777,11 @@ def _compatible_continuation_cycle(
     head: str,
     merge_base_head: str,
     effective_mode: str,
-    fresh_token: str | None = None,
     skip_deslop: bool = False,
 ) -> dict[str, Any] | None:
     normalized_cwd = normalize_cwd(str(review_root))
     normalized_branch = _normalized_branch(branch)
     candidates: list[tuple[float, str, dict[str, Any], dict[str, Any] | None]] = []
-    fresh_token_forces_new_cycle = False
     directory = cycles_dir(state_dir)
     if not directory.exists():
         return None
@@ -1881,15 +1844,7 @@ def _compatible_continuation_cycle(
         )
         if match_kind is None:
             continue
-        if _fresh_token_claims_budget_exhausted_continuation(state, fresh_token):
-            fresh_token_forces_new_cycle = True
-            continue
-        if str(fresh_token or "").strip() and match_kind == "exact":
-            fresh_token_forces_new_cycle = True
-            continue
         candidates.append((path.stat().st_mtime, match_kind, state, base_drift))
-    if fresh_token_forces_new_cycle:
-        return None
     if not candidates:
         return None
     exact_candidates = [
@@ -1946,7 +1901,6 @@ def _create_or_resume_cycle(
         head=head,
         merge_base_head=merge_base_head,
         effective_mode=resolution.effective_mode,
-        fresh_token=args.fresh_token,
         skip_deslop=skip_deslop,
     )
     if continuation is not None:
@@ -1963,7 +1917,7 @@ def _create_or_resume_cycle(
         effective_selection=resolution.effective_selection,
         deslop_enabled=profile_deslop_enabled and not skip_deslop,
         deslop_skip_source="cli" if skip_deslop else None,
-        cycle_token=_creation_cycle_token(args, skip_deslop=skip_deslop),
+        cycle_token="skip-deslop" if skip_deslop else None,
     )
     if str(base_info["requested_base"]) != base:
         state["identity"]["requested_base"] = str(base_info["requested_base"])
@@ -2001,7 +1955,7 @@ def _copy_runtime_options(
 
 
 def _current_restart_identity(
-    state: dict[str, Any],
+    state: dict[str, Any], *, require_exact: bool = True
 ) -> tuple[Path, str, str | None, str, str]:
     identity = dict(state.get("identity") or {})
     cwd = str(identity.get("cwd") or "").strip()
@@ -2023,25 +1977,27 @@ def _current_restart_identity(
         )
     head = current_head(review_root)
     expected_head = str(identity.get("head") or "").strip()
-    if head != expected_head:
+    if require_exact and head != expected_head:
         raise ValueError(
             "cannot restart review cycle after HEAD changed; start a new review instead"
         )
     merge_base_head = merge_base(review_root, base, "HEAD")
     expected_merge_base = str(identity.get("merge_base") or "").strip()
-    if merge_base_head != expected_merge_base:
+    if require_exact and merge_base_head != expected_merge_base:
         raise ValueError(
             "cannot restart review cycle after merge-base changed; start a new review instead"
         )
     return review_root, base, branch, head, merge_base_head
 
 
-def _create_restart_cycle(
+def _create_successor_cycle(
     *,
     state: dict[str, Any],
     state_dir: Path,
     target_mode: str,
     reason: str,
+    kind: str,
+    require_exact_identity: bool,
 ) -> tuple[dict[str, Any], bool]:
     if isinstance(state.get("superseded_by"), dict):
         replacement = str(
@@ -2050,8 +2006,10 @@ def _create_restart_cycle(
         raise ValueError(
             f"review cycle is already superseded{f' by {replacement}' if replacement else ''}"
         )
-    current_mode = _validate_restart_mode(state, target_mode)
-    review_root, base, branch, head, merge_base_head = _current_restart_identity(state)
+    current_mode = _current_mode(state)
+    review_root, base, branch, head, merge_base_head = _current_restart_identity(
+        state, require_exact=require_exact_identity
+    )
     config = load_config(state_dir)
     selection = str(
         dict(state.get("selection") or {}).get("requested")
@@ -2096,32 +2054,114 @@ def _create_restart_cycle(
             "supersedes_cycle_key": str(state.get("cycle_key") or ""),
             "from_mode": current_mode,
             "reason": reason,
+            "kind": kind,
         }
     )
     return _apply_profile_resolution(replacement, resolution), False
 
 
-def _restart_cycle(
-    state: dict[str, Any], *, state_dir: Path, target_mode: str, reason: str
+def _start_successor_cycle(
+    state: dict[str, Any],
+    *,
+    state_dir: Path,
+    target_mode: str,
+    reason: str,
+    kind: str,
+    require_exact_identity: bool,
 ) -> dict[str, Any]:
-    replacement, existing_replacement = _create_restart_cycle(
+    replacement, _ = _create_successor_cycle(
         state=state,
         state_dir=state_dir,
         target_mode=target_mode,
         reason=reason,
+        kind=kind,
+        require_exact_identity=require_exact_identity,
     )
-    if not existing_replacement:
-        replacement = _advance_without_decision(replacement, state_dir=state_dir)
-    saved_replacement = save_cycle(state_dir, replacement)
     superseded = abort_cycle(state, reason=reason)
     superseded["superseded_by"] = {
-        "review": str(saved_replacement.get("public_id") or ""),
-        "cycle_key": str(saved_replacement.get("cycle_key") or ""),
         "mode": target_mode,
         "reason": reason,
+        "kind": kind,
     }
-    save_cycle(state_dir, superseded)
-    return saved_replacement
+    saved_replacement, _ = reserve_cycle_successor(
+        state_dir,
+        source=superseded,
+        successor=replacement,
+    )
+    return _resume_reserved_successor(saved_replacement, state_dir=state_dir)
+
+
+def _resume_reserved_successor(
+    state: dict[str, Any], *, state_dir: Path
+) -> dict[str, Any]:
+    if state.get("stage") not in {STAGE_CREATED, STAGE_RUNNING}:
+        return state
+    cycle_key = str(state.get("cycle_key") or "").strip()
+    try:
+        with orchestrator_store_lock(
+            state_dir=state_dir,
+            name=f"successor-{cycle_key}",
+            timeout_seconds=1,
+        ):
+            current = load_cycle_by_key(state_dir, cycle_key) or state
+            if current.get("stage") not in {STAGE_CREATED, STAGE_RUNNING}:
+                return current
+            advanced = _advance_without_decision(current, state_dir=state_dir)
+            return save_cycle(state_dir, advanced)
+    except TimeoutError:
+        raise SuccessorAdvanceBusyError(
+            load_cycle_by_key(state_dir, cycle_key) or state
+        ) from None
+
+
+def _is_successor_cycle(state: dict[str, Any]) -> bool:
+    restart = dict(state.get("restart") or {})
+    return bool(str(restart.get("token") or "").strip())
+
+
+def _successor_needs_locked_resume(state: dict[str, Any]) -> bool:
+    return _is_successor_cycle(state) and state.get("stage") in {
+        STAGE_CREATED,
+        STAGE_RUNNING,
+    }
+
+
+def _restart_cycle(
+    state: dict[str, Any], *, state_dir: Path, target_mode: str, reason: str
+) -> dict[str, Any]:
+    _validate_restart_mode(state, target_mode)
+    return _start_successor_cycle(
+        state,
+        state_dir=state_dir,
+        target_mode=target_mode,
+        reason=reason,
+        kind="mode-restart",
+        require_exact_identity=True,
+    )
+
+
+def _new_cycle_after_budget_exhaustion(
+    state: dict[str, Any], *, state_dir: Path
+) -> dict[str, Any]:
+    superseded = dict(state.get("superseded_by") or {})
+    replacement_id = str(superseded.get("review") or "").strip()
+    if (
+        replacement_id
+        and str(superseded.get("kind") or "").strip() == "budget-exhausted"
+    ):
+        replacement = load_cycle_by_public_id(state_dir, replacement_id)
+        return _resume_reserved_successor(replacement, state_dir=state_dir)
+    pending = dict(state.get("pending_action") or {})
+    if str(pending.get("kind") or "").strip() != "review-round-budget-exhausted":
+        raise ValueError("--new-cycle requires an exhausted review round budget")
+    return _start_successor_cycle(
+        state,
+        state_dir=state_dir,
+        target_mode=_current_mode(state),
+        reason="review round budget exhausted",
+        kind="budget-exhausted",
+        require_exact_identity=False,
+    )
 
 
 def _advance_without_decision(
@@ -2206,18 +2246,6 @@ def _record_validation_status(
         full_suite=args.full_suite,
         ci=args.ci,
     )
-
-
-def _fresh_review_token(state: dict[str, Any]) -> str:
-    pending = dict(state.get("pending_action") or {})
-    active = dict(state.get("active_findings") or {})
-    parts = [
-        "budget-exhausted",
-        str(state.get("cycle_key") or "").strip(),
-        str(pending.get("round_id") or active.get("round_id") or "").strip(),
-        str(active.get("fix_head") or "").strip(),
-    ]
-    return ":".join(part for part in parts if part)
 
 
 def _record_github_result(
@@ -2510,15 +2538,12 @@ def _action_payload(state: dict[str, Any], *, state_dir: Path) -> dict[str, Any]
         if pending.get("kind") == "review-round-budget-exhausted":
             max_rounds = pending.get("max_review_rounds")
             step = str(pending.get("step") or "review").strip() or "review"
-            fresh_token = _fresh_review_token(state)
             action = {
-                "cmd": _new_review_command(
-                    state, state_dir=state_dir, fresh_token=fresh_token
-                ),
+                "cmd": _review_command(public_id, "--new-cycle", state_dir=state_dir),
                 "note": (
                     f"{step} reached its {max_rounds} round review budget; "
                     "no more local reviewers will be launched. "
-                    "Action.cmd starts a new review if the latest fix needs another local review pass."
+                    "Action.cmd starts one successor cycle if another local review pass is needed."
                 ),
             }
             return _with_deslop_done_action(
@@ -2646,6 +2671,7 @@ def main() -> int:
             if (
                 args.mode
                 or args.restart_mode
+                or args.new_cycle
                 or args.reason
                 or args.decision
                 or args.github_review
@@ -2659,7 +2685,6 @@ def main() -> int:
                 or args.skip_deslop
                 or args.show_findings
                 or args.show_status
-                or args.fresh_token
             ):
                 raise ValueError(
                     "--status cannot be combined with review creation, id actions, validation, or restart flags"
@@ -2667,8 +2692,26 @@ def main() -> int:
             return cmd_branch_status(args)
         if args.restart_mode and not args.id:
             raise ValueError("--restart-mode requires --id")
-        if args.fresh_token and args.id:
-            raise ValueError("--fresh-token cannot be combined with --id")
+        if args.new_cycle and not args.id:
+            raise ValueError("--new-cycle requires --id")
+        if args.new_cycle and (
+            args.restart_mode
+            or args.reason
+            or args.decision
+            or args.github_review
+            or args.github_force
+            or args.github_result
+            or args.github_note
+            or has_validation_status
+            or args.deslop_done
+            or args.show_findings
+            or args.show_status
+            or args.wsl
+        ):
+            raise ValueError(
+                "--new-cycle cannot be combined with restart, decisions, GitHub review, GitHub results, "
+                "GitHub notes, validation status flags, deslop-done, show-findings, show-status, or wsl"
+            )
         if args.skip_deslop and args.id:
             raise ValueError(
                 "--skip-deslop/--no-deslop can only be used when creating a review cycle"
@@ -2765,6 +2808,10 @@ def main() -> int:
                 return _show_findings(state, state_dir=state_dir)
             if args.show_status:
                 return _show_status(state, state_dir=state_dir)
+            if args.new_cycle:
+                state = _new_cycle_after_budget_exhaustion(state, state_dir=state_dir)
+                _render(state, state_dir=state_dir)
+                return 0
             if args.deslop_done:
                 state = mark_deslop_closed(state)
                 saved = save_cycle(state_dir, state)
@@ -2819,12 +2866,28 @@ def main() -> int:
             if has_validation_status:
                 state = _record_validation_status(state, args)
             elif not args.decision:
-                state = _advance_without_decision(state, state_dir=state_dir)
+                state = (
+                    _resume_reserved_successor(state, state_dir=state_dir)
+                    if _successor_needs_locked_resume(state)
+                    else _advance_without_decision(state, state_dir=state_dir)
+                )
         else:
             state = _create_or_resume_cycle(args=args, state_dir=state_dir)
             state = _advance_without_decision(state, state_dir=state_dir)
         saved = save_cycle(state_dir, state)
         _render(saved, state_dir=state_dir)
+        return 0
+    except SuccessorAdvanceBusyError as exc:
+        emit_toon(
+            {
+                "review": str(exc.state.get("public_id") or ""),
+                "status": "busy",
+                "done": False,
+                "review_ladder": "pending",
+                "next_action": "wait",
+                "note": "The successor review is already advancing; retry this id after the active command finishes.",
+            }
+        )
         return 0
     except ValueError as exc:
         return emit_error(str(exc), status="usage_error", help_items=[_help_command()])
