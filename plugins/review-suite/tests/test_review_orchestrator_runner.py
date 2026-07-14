@@ -4,7 +4,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
-from threading import Event
+from threading import Barrier
 
 import pytest
 
@@ -233,16 +233,16 @@ def test_runner_executes_deslop_and_first_review_step_together(
     monkeypatch, tmp_path: Path
 ) -> None:
     calls: list[tuple[list[str], Path]] = []
-    review_started = Event()
+    both_started = Barrier(2, timeout=10)
     review_calls = _stub_review(monkeypatch)
     stub_review = orchestrator_runner.run_review_step
 
     def concurrent_review(**kwargs: object) -> dict[str, object]:
-        review_started.set()
+        both_started.wait()
         return stub_review(**kwargs)
 
     def fake_run(*, command: list[str], cwd: Path) -> subprocess.CompletedProcess:
-        assert review_started.wait(timeout=1)
+        both_started.wait()
         calls.append((command, cwd))
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
