@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import signal
 import subprocess
 import sys
 import tempfile
@@ -9,6 +8,10 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
+
+IS_WINDOWS = os.name == "nt"
+POSIX_SIGTERM = 15
+POSIX_SIGKILL = 9
 
 
 @dataclass(frozen=True)
@@ -55,7 +58,6 @@ def launch_captured_child_process(
             text=True,
             encoding="utf-8",
             errors="replace",
-            start_new_session=os.name != "nt",
         )
         if stdin_text and proc.stdin is not None:
             proc.stdin.write(stdin_text)
@@ -80,10 +82,41 @@ def launch_captured_child_process(
         stderr_tmp.close()
 
 
-def terminate_process_tree(pid: int | None) -> None:
+def _posix_process_tree(root_pid: int) -> list[int]:
+    result = subprocess.run(
+        ["ps", "-e", "-o", "pid=,ppid="],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    children: dict[int, list[int]] = {}
+    for line in result.stdout.splitlines():
+        fields = line.split()
+        if len(fields) != 2:
+            continue
+        child_pid, parent_pid = map(int, fields)
+        children.setdefault(parent_pid, []).append(child_pid)
+    descendants: list[int] = []
+    pending = list(children.get(root_pid, []))
+    while pending:
+        child_pid = pending.pop()
+        descendants.append(child_pid)
+        pending.extend(children.get(child_pid, []))
+    return [root_pid, *descendants]
+
+
+def _pid_exists(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def terminate_process_tree(pid: int | None, *, grace_seconds: float = 0.5) -> None:
     if not pid:
         return
-    if os.name == "nt":
+    if IS_WINDOWS:
         subprocess.run(
             ["taskkill", "/PID", str(int(pid)), "/T", "/F"],
             stdout=subprocess.DEVNULL,
@@ -91,11 +124,22 @@ def terminate_process_tree(pid: int | None) -> None:
             check=False,
         )
         return
-    try:
-        os.killpg(os.getpgid(int(pid)), signal.SIGTERM)
-    except OSError:
+    targets = _posix_process_tree(int(pid))
+    for target in targets:
         try:
-            os.kill(int(pid), signal.SIGTERM)
+            os.kill(target, POSIX_SIGTERM)
+        except OSError:
+            pass
+    deadline = time.monotonic() + max(0.0, grace_seconds)
+    while time.monotonic() < deadline and any(
+        _pid_exists(target) for target in targets
+    ):
+        time.sleep(0.05)
+    for target in reversed(targets):
+        if not _pid_exists(target):
+            continue
+        try:
+            os.kill(target, POSIX_SIGKILL)
         except OSError:
             pass
 

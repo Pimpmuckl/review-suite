@@ -138,3 +138,30 @@ def test_wait_timeout_terminates_process_tree(monkeypatch: pytest.MonkeyPatch) -
 
     assert result.timed_out is True
     assert terminated == [42]
+
+
+def test_posix_process_tree_escalates_survivors_to_sigkill(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    signals: list[tuple[int, int]] = []
+    monkeypatch.setattr("review_suite_core.process_runtime.IS_WINDOWS", False)
+    monkeypatch.setattr(
+        "review_suite_core.process_runtime._posix_process_tree", lambda _: [10, 11]
+    )
+    monkeypatch.setattr("review_suite_core.process_runtime._pid_exists", lambda _: True)
+    monkeypatch.setattr("review_suite_core.process_runtime.time.sleep", lambda _: None)
+    monkeypatch.setattr(
+        "review_suite_core.process_runtime.os.kill",
+        lambda pid, sig: signals.append((pid, sig)),
+    )
+
+    from review_suite_core.process_runtime import terminate_process_tree
+
+    terminate_process_tree(10, grace_seconds=0)
+
+    assert signals == [
+        (10, 15),
+        (11, 15),
+        (11, 9),
+        (10, 9),
+    ]
