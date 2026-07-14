@@ -27,12 +27,10 @@ from rollout_capture import (
     enrich_thread_record,
     find_review_child_thread,
     find_thread_by_id,
-    find_thread_by_title,
     rollout_activity_summary,
 )
 from review_suite_core import (
     EFFECTIVE_BASE_METADATA_KEYS,
-    codex_reasoning_effort,
     current_head,
     effective_base_ref,
     format_command,
@@ -116,6 +114,8 @@ CAPACITY_RETRY_MAX_ATTEMPTS = 1
 MULTI_REVIEW_DISPATCH_STAGGER_SECONDS = 5.0
 VARIANT_STATES = {"active", "disabled", "retired"}
 REVIEW_STALL_WARNING_SECONDS = 10 * 60
+REVIEW_INACTIVITY_DEADLINE_SECONDS = 30 * 60
+REVIEW_ABSOLUTE_DEADLINE_SECONDS = 2 * 60 * 60
 TRANSPORT_STALL_GRACE_SECONDS = 3 * 60
 TRANSPORT_RECONNECT_PATTERNS = (
     "stream disconnected",
@@ -1606,91 +1606,47 @@ def _live_review_thread(
         else ""
     )
     session_id = extract_session_id(stderr_text)
-    review_cwd_text = str(review_cwd)
-    started_at = _started_at_epoch_seconds(run.get("started_at"))
-    created_after = (
-        max(0, started_at - 5) if started_at is not None else int(time.time()) - 5
-    )
-    title = str(run.get("title") or "")
-    model = str(variant["model"])
-    reasoning_effort = str(
-        run.get("effective_reasoning_effort")
-        or codex_reasoning_effort(model, str(variant["reasoning_effort"]))
-    )
-
-    def is_direct_review_thread(
-        candidate: dict[str, Any], *, require_session_match: bool
-    ) -> bool:
-        if str(candidate.get("source") or "") == REVIEW_SUBAGENT_SOURCE:
-            return True
-        if require_session_match and str(candidate.get("id") or "") != str(
-            session_id or ""
-        ):
-            return False
-        if not require_session_match:
-            return False
-        try:
-            candidate_created_at = int(candidate.get("created_at"))
-        except TypeError, ValueError:
-            candidate_created_at = None
-        if candidate_created_at is None or candidate_created_at < created_after:
-            return False
-        return (
-            title
-            and str(candidate.get("title") or "") == title
-            and str(candidate.get("cwd") or "") == review_cwd_text
-            and str(candidate.get("model") or "").lower() == model.lower()
-            and str(candidate.get("reasoning_effort") or "").lower()
-            == reasoning_effort.lower()
-        )
-
-    if session_id:
-        candidate = find_thread_by_id(sqlite_path=sqlite_path, thread_id=session_id)
-        if candidate:
-            if is_direct_review_thread(candidate, require_session_match=True):
-                return candidate
-            child = find_review_child_thread(
-                sqlite_path=sqlite_path,
-                cwd=str(candidate.get("cwd") or review_cwd_text),
-                title=str(candidate.get("title") or ""),
-                model=model,
-                reasoning_effort=reasoning_effort,
-                created_at=candidate.get("created_at"),
-                updated_at=candidate.get("updated_at"),
-            )
-            if child:
-                return child
-            return None
-    child = find_review_child_thread(
-        sqlite_path=sqlite_path,
-        cwd=review_cwd_text,
-        title=title,
-        model=model,
-        reasoning_effort=reasoning_effort,
-        created_at=started_at,
-    )
-    if child:
-        return child
-    candidate = find_thread_by_title(
-        sqlite_path=sqlite_path,
-        title=title,
-        cwd=review_cwd_text,
-        created_after=created_after,
-    )
-    if not candidate:
+    if not session_id:
         return None
-    if is_direct_review_thread(candidate, require_session_match=False):
+    candidate = find_thread_by_id(sqlite_path=sqlite_path, thread_id=session_id)
+    if candidate and str(candidate.get("source") or "") == REVIEW_SUBAGENT_SOURCE:
         return candidate
-    child = find_review_child_thread(
-        sqlite_path=sqlite_path,
-        cwd=str(candidate.get("cwd") or review_cwd_text),
-        title=str(candidate.get("title") or ""),
-        model=model,
-        reasoning_effort=reasoning_effort,
-        created_at=candidate.get("created_at"),
-        updated_at=candidate.get("updated_at"),
+    return find_review_child_thread(
+        sqlite_path=sqlite_path, parent_thread_id=session_id
     )
-    return child
+
+
+def _reviewer_deadline_reason(
+    *,
+    run: dict[str, Any],
+    variant: dict[str, Any],
+    sqlite_path: Path,
+    review_cwd: Path,
+    now: datetime | None = None,
+) -> str | None:
+    current = utc_now() if now is None else now
+    started = _run_started_at_datetime(run)
+    if (
+        started
+        and (current - started).total_seconds() >= REVIEW_ABSOLUTE_DEADLINE_SECONDS
+    ):
+        return "absolute_deadline"
+    thread = _live_review_thread(
+        run=run,
+        variant=variant,
+        sqlite_path=sqlite_path,
+        review_cwd=review_cwd,
+    )
+    rollout_path = Path(str((thread or {}).get("rollout_path") or ""))
+    activity = rollout_activity_summary(rollout_path) if rollout_path.is_file() else {}
+    last_activity = activity.get("last_meaningful_at") or started
+    if (
+        last_activity
+        and (current - last_activity).total_seconds()
+        >= REVIEW_INACTIVITY_DEADLINE_SECONDS
+    ):
+        return "inactivity_deadline"
+    return None
 
 
 def _print_stall_warnings(
@@ -3397,82 +3353,23 @@ def collect_completed_review_capture(
         final_message_path=final_message_path,
     )
     session_id = extract_session_id(stderr_text)
-    review_cwd_text = str(review_cwd)
-    model = str(variant["model"])
-    reasoning_effort = str(
-        variant.get("effective_reasoning_effort")
-        or codex_reasoning_effort(model, str(variant["reasoning_effort"]))
-    )
     thread = None
-    launcher_thread = None
-    started_after = _started_at_epoch_seconds(started_at)
-    created_after = (
-        max(0, started_after - 5) if started_after is not None else int(time.time()) - 5
-    )
     if session_id:
         for attempt in range(6):
             candidate = find_thread_by_id(sqlite_path=sqlite_path, thread_id=session_id)
-            if candidate:
-                if str(candidate.get("source") or "") == REVIEW_SUBAGENT_SOURCE:
-                    thread = candidate
-                    break
-                launcher_thread = candidate
-                review_child_thread = find_review_child_thread(
-                    sqlite_path=sqlite_path,
-                    cwd=str(candidate.get("cwd") or review_cwd_text),
-                    title=str(candidate.get("title") or ""),
-                    model=model,
-                    reasoning_effort=reasoning_effort,
-                    created_at=candidate.get("created_at"),
-                    updated_at=candidate.get("updated_at"),
+            if (
+                candidate
+                and str(candidate.get("source") or "") == REVIEW_SUBAGENT_SOURCE
+            ):
+                thread = candidate
+            else:
+                thread = find_review_child_thread(
+                    sqlite_path=sqlite_path, parent_thread_id=session_id
                 )
-                if review_child_thread:
-                    thread = review_child_thread
-                    break
-            if attempt < 5:
-                time.sleep(0.5)
-    if not thread:
-        for attempt in range(6):
-            thread = find_review_child_thread(
-                sqlite_path=sqlite_path,
-                cwd=review_cwd_text,
-                model=model,
-                reasoning_effort=reasoning_effort,
-                created_at=started_after,
-            )
             if thread:
                 break
             if attempt < 5:
                 time.sleep(0.5)
-    if not thread:
-        for attempt in range(6):
-            candidate = find_thread_by_title(
-                sqlite_path=sqlite_path,
-                title=title,
-                cwd=review_cwd_text,
-                created_after=created_after,
-            )
-            if candidate:
-                if str(candidate.get("source") or "") == REVIEW_SUBAGENT_SOURCE:
-                    thread = candidate
-                    break
-                launcher_thread = candidate
-                review_child_thread = find_review_child_thread(
-                    sqlite_path=sqlite_path,
-                    cwd=str(candidate.get("cwd") or review_cwd_text),
-                    title=str(candidate.get("title") or ""),
-                    model=model,
-                    reasoning_effort=reasoning_effort,
-                    created_at=candidate.get("created_at"),
-                    updated_at=candidate.get("updated_at"),
-                )
-                if review_child_thread:
-                    thread = review_child_thread
-                    break
-            if attempt < 5:
-                time.sleep(0.5)
-    if not thread and launcher_thread:
-        thread = launcher_thread
     enriched = enrich_thread_record(thread) if thread else {}
     if not reviewer_output and enriched.get("reviewer_output"):
         reviewer_output = enriched["reviewer_output"]
@@ -3518,6 +3415,30 @@ def collect_completed_review_capture(
             f"rollout://{enriched['id']}/{variant_id}" if enriched.get("id") else None
         ),
     }
+
+
+def reject_duplicate_review_references(runs: list[dict[str, Any]]) -> None:
+    duplicate_indexes: set[int] = set()
+    for key in ("thread_id", "rollout_path", "reviewer_output_ref"):
+        indexes_by_value: dict[str, list[int]] = {}
+        for index, run in enumerate(runs):
+            value = str(run.get(key) or "").strip()
+            if value:
+                indexes_by_value.setdefault(value, []).append(index)
+        for indexes in indexes_by_value.values():
+            if len(indexes) > 1:
+                duplicate_indexes.update(indexes)
+    for index in duplicate_indexes:
+        run = runs[index]
+        run.update(
+            {
+                "review_status": "duplicate_output",
+                "status_summary": "Reviewer output duplicated another reviewer's rollout reference and was rejected.",
+                "grade_blocked": True,
+                "grade_block_reason": "duplicate_reviewer_output",
+                "terminal_command": None,
+            }
+        )
 
 
 def _load_live_run_artifacts(item: dict[str, Any]) -> tuple[str, str]:
@@ -3695,6 +3616,7 @@ def _collect_completed_run_from_artifacts(
     sqlite_path: Path,
     review_cwd: Path,
     transport_stalled: bool = False,
+    timed_out: bool = False,
 ) -> dict[str, Any]:
     variant_id = str(item["variant_id"])
     variant = dict(indexed[variant_id])
@@ -3715,6 +3637,7 @@ def _collect_completed_run_from_artifacts(
         if item.get("final_message_path")
         else None,
         transport_stalled=transport_stalled,
+        timed_out=timed_out,
     )
 
 
@@ -3990,6 +3913,7 @@ def collect_round_results(
                 sqlite_path=sqlite_path,
                 review_cwd=review_cwd,
                 transport_stalled=bool(item.get("transport_stalled")),
+                timed_out=bool(item.get("timed_out")),
             )
             item.update(terminal_summary)
             write_round(state_dir, round_payload)
@@ -4008,6 +3932,23 @@ def collect_round_results(
         if now - last_progress >= progress_interval_seconds:
             _print_transport_events(alive)
             for item in list(alive):
+                variant = dict(indexed[str(item["variant_id"])])
+                deadline_reason = _reviewer_deadline_reason(
+                    run=item,
+                    variant=variant,
+                    sqlite_path=sqlite_path,
+                    review_cwd=review_cwd,
+                )
+                if deadline_reason is not None:
+                    label = public_reviewer_label(str(item.get("slot") or "reviewer"))
+                    print(
+                        f"[review-suite] {label} reached {deadline_reason}; stopping reviewer.",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    item["timed_out"] = True
+                    _terminate_process_tree(item.get("pid"))
+                    continue
                 stall_reason = _transport_stalled(item)
                 if stall_reason is None:
                     hang_reason = _transport_hung_after_output(item)
@@ -4060,15 +4001,17 @@ def collect_round_results(
                 sqlite_path=sqlite_path,
                 review_cwd=review_cwd,
                 transport_stalled=bool(item.get("transport_stalled")),
+                timed_out=bool(item.get("timed_out")),
             )
         )
         _cleanup_run_artifacts(item)
+    reject_duplicate_review_references(completed_runs)
     round_payload = deepcopy(round_payload)
     round_payload["status"] = "completed"
     round_payload["review_completed_at"] = utc_now_iso()
-    round_payload["live_completion_statuses"] = dict(
-        sorted(live_completion_statuses.items())
-    )
+    round_payload["live_completion_statuses"] = {
+        str(run["slot"]): reviewer_completion_status(run) for run in completed_runs
+    }
     round_payload["runs"] = completed_runs
     cooldown_updates = _apply_capacity_cooldowns(
         state_dir=state_dir, round_payload=round_payload

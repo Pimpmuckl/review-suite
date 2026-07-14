@@ -1144,10 +1144,10 @@ def test_collect_round_results_stops_transport_stalled_live_reviewer(
         "review_suite_local._terminate_process_tree", lambda pid: killed.add(int(pid))
     )
     monkeypatch.setattr(
-        "review_suite_local.find_review_child_thread", lambda **kwargs: None
+        "review_suite_local._reviewer_deadline_reason", lambda **_: None
     )
     monkeypatch.setattr(
-        "review_suite_local.find_thread_by_title", lambda **kwargs: None
+        "review_suite_local.find_review_child_thread", lambda **kwargs: None
     )
     monkeypatch.setattr(
         "review_suite_local._apply_capacity_cooldowns", lambda **kwargs: []
@@ -1215,10 +1215,10 @@ def test_collect_round_results_stops_transport_hung_after_output_as_completed(
         "review_suite_local._terminate_process_tree", lambda pid: killed.add(int(pid))
     )
     monkeypatch.setattr(
-        "review_suite_local.find_review_child_thread", lambda **kwargs: None
+        "review_suite_local._reviewer_deadline_reason", lambda **_: None
     )
     monkeypatch.setattr(
-        "review_suite_local.find_thread_by_title", lambda **kwargs: None
+        "review_suite_local.find_review_child_thread", lambda **kwargs: None
     )
     monkeypatch.setattr(
         "review_suite_local._apply_capacity_cooldowns", lambda **kwargs: []
@@ -1262,6 +1262,58 @@ def test_collect_round_results_stops_transport_hung_after_output_as_completed(
     assert result["runs"][0]["review_status"] == "completed"
     assert result["runs"][0]["grade_blocked"] is False
     assert killed == {123}
+
+
+def test_reviewer_deadlines_bound_inactivity_and_total_runtime(tmp_path: Path) -> None:
+    variant = {"model": "gpt-test", "reasoning_effort": "xhigh"}
+    run = {"started_at": "2026-04-13T12:00:00Z"}
+
+    assert (
+        review_suite_local._reviewer_deadline_reason(
+            run=run,
+            variant=variant,
+            sqlite_path=tmp_path / "state.sqlite",
+            review_cwd=tmp_path,
+            now=datetime.fromisoformat("2026-04-13T12:31:00+00:00"),
+        )
+        == "inactivity_deadline"
+    )
+    assert (
+        review_suite_local._reviewer_deadline_reason(
+            run=run,
+            variant=variant,
+            sqlite_path=tmp_path / "state.sqlite",
+            review_cwd=tmp_path,
+            now=datetime.fromisoformat("2026-04-13T14:01:00+00:00"),
+        )
+        == "absolute_deadline"
+    )
+
+
+def test_duplicate_reviewer_references_block_every_colliding_run() -> None:
+    runs = [
+        {
+            "slot": "alpha",
+            "thread_id": "child-alpha",
+            "rollout_path": "same.jsonl",
+            "reviewer_output_ref": "rollout://child-alpha/model",
+            "review_status": "completed",
+            "grade_blocked": False,
+        },
+        {
+            "slot": "bravo",
+            "thread_id": "child-alpha",
+            "rollout_path": "same.jsonl",
+            "reviewer_output_ref": "rollout://child-alpha/model",
+            "review_status": "completed",
+            "grade_blocked": False,
+        },
+    ]
+
+    review_suite_local.reject_duplicate_review_references(runs)
+
+    assert {run["review_status"] for run in runs} == {"duplicate_output"}
+    assert {run["grade_block_reason"] for run in runs} == {"duplicate_reviewer_output"}
 
 
 def test_print_stall_warnings_flags_heartbeat_only_review(
@@ -1404,7 +1456,6 @@ def test_live_review_thread_does_not_return_parent_launcher_when_child_missing(
         },
     )
     monkeypatch.setattr("review_suite_local.find_review_child_thread", lambda **_: None)
-    monkeypatch.setattr("review_suite_local.find_thread_by_title", lambda **_: None)
 
     thread = _live_review_thread(
         run={
@@ -1421,19 +1472,18 @@ def test_live_review_thread_does_not_return_parent_launcher_when_child_missing(
     assert thread is None
 
 
-def test_live_review_thread_uses_effective_reasoning_effort(
+def test_live_review_thread_uses_launcher_parent_id(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     stderr_path = tmp_path / "stderr.txt"
-    stderr_path.write_text("", encoding="utf-8")
+    stderr_path.write_text("Session ID: launcher-thread\n", encoding="utf-8")
     observed: dict[str, object] = {}
 
     monkeypatch.setattr("review_suite_local.find_thread_by_id", lambda **_: None)
-    monkeypatch.setattr("review_suite_local.find_thread_by_title", lambda **_: None)
 
     def fake_find_review_child_thread(**kwargs: object) -> None:
-        observed.setdefault("reasoning_effort", kwargs["reasoning_effort"])
+        observed.setdefault("parent_thread_id", kwargs["parent_thread_id"])
         return None
 
     monkeypatch.setattr(
@@ -1454,10 +1504,10 @@ def test_live_review_thread_uses_effective_reasoning_effort(
     )
 
     assert thread is None
-    assert observed["reasoning_effort"] == "xhigh"
+    assert observed["parent_thread_id"] == "launcher-thread"
 
 
-def test_live_review_thread_accepts_direct_matching_review_thread_without_child(
+def test_live_review_thread_rejects_non_review_launcher_without_child(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -1478,7 +1528,6 @@ def test_live_review_thread_accepts_direct_matching_review_thread_without_child(
     }
     monkeypatch.setattr("review_suite_local.find_thread_by_id", lambda **_: candidate)
     monkeypatch.setattr("review_suite_local.find_review_child_thread", lambda **_: None)
-    monkeypatch.setattr("review_suite_local.find_thread_by_title", lambda **_: None)
 
     thread = _live_review_thread(
         run={
@@ -1492,7 +1541,7 @@ def test_live_review_thread_accepts_direct_matching_review_thread_without_child(
         review_cwd=tmp_path,
     )
 
-    assert thread == candidate
+    assert thread is None
 
 
 def test_live_review_thread_rejects_stale_direct_matching_review_thread(
@@ -1516,49 +1565,12 @@ def test_live_review_thread_rejects_stale_direct_matching_review_thread(
     }
     monkeypatch.setattr("review_suite_local.find_thread_by_id", lambda **_: candidate)
     monkeypatch.setattr("review_suite_local.find_review_child_thread", lambda **_: None)
-    monkeypatch.setattr("review_suite_local.find_thread_by_title", lambda **_: None)
 
     thread = _live_review_thread(
         run={
             "slot": "bravo",
             "title": "review-title",
             "stderr_path": str(stderr_path),
-            "started_at": "2026-04-13T12:00:00Z",
-        },
-        variant={"model": "gpt-test", "reasoning_effort": "xhigh"},
-        sqlite_path=tmp_path / "state.sqlite",
-        review_cwd=tmp_path,
-    )
-
-    assert thread is None
-
-
-def test_live_review_thread_rejects_title_only_direct_matching_thread(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    candidate = {
-        "id": "title-only-thread",
-        "source": "",
-        "cwd": str(tmp_path),
-        "title": "review-title",
-        "model": "gpt-test",
-        "reasoning_effort": "xhigh",
-        "created_at": int(
-            __import__("datetime")
-            .datetime.fromisoformat("2026-04-13T12:00:10+00:00")
-            .timestamp()
-        ),
-    }
-    monkeypatch.setattr("review_suite_local.find_review_child_thread", lambda **_: None)
-    monkeypatch.setattr(
-        "review_suite_local.find_thread_by_title", lambda **_: candidate
-    )
-
-    thread = _live_review_thread(
-        run={
-            "slot": "bravo",
-            "title": "review-title",
             "started_at": "2026-04-13T12:00:00Z",
         },
         variant={"model": "gpt-test", "reasoning_effort": "xhigh"},

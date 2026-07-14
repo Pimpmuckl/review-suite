@@ -33,6 +33,7 @@ from review_suite_local import (
     _parse_timestamp,
     _progress_status_line,
     _print_stall_warnings,
+    _reviewer_deadline_reason,
     _print_transport_events,
     _process_is_running,
     _transport_hung_after_output,
@@ -58,6 +59,7 @@ from review_suite_local import (
     read_jsonl,
     reviewer_completion_status,
     reviewer_output_heading,
+    reject_duplicate_review_references,
     state_lock,
     total_usage_tokens,
     variant_is_arena_eligible,
@@ -1701,6 +1703,23 @@ def run_gate_round(
         now = time.monotonic()
         if active and now - last_progress >= progress_interval_seconds:
             _print_transport_events(active)
+            for run in active:
+                deadline_reason = _reviewer_deadline_reason(
+                    run=run,
+                    variant=dict(run["variant"]),
+                    sqlite_path=sqlite_path,
+                    review_cwd=review_cwd,
+                )
+                if deadline_reason is None:
+                    continue
+                label = public_reviewer_label(str(run.get("slot") or "reviewer"))
+                print(
+                    f"[review-suite] {label} reached {deadline_reason}; stopping reviewer.",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                run["timed_out"] = True
+                _terminate_process_tree(run.get("pid"))
             _print_stall_warnings(
                 active_runs=active,
                 indexed=indexed,
@@ -1712,6 +1731,7 @@ def run_gate_round(
             last_progress = now
         time.sleep(1.0)
 
+    reject_duplicate_review_references(completed)
     payload, exit_code = summarize_gate_round(
         gate_task_class=gate_task_class,
         round_id=round_id,

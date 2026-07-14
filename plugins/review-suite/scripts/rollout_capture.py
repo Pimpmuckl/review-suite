@@ -14,6 +14,7 @@ REVIEW_SUBAGENT_SOURCE = json.dumps({"subagent": "review"}, separators=(",", ":"
 
 _JSONL_CACHE: dict[tuple[str, int, int], list[dict[str, Any]]] = {}
 _ROLLOUT_SUMMARY_CACHE: dict[tuple[str, int, int], dict[str, Any]] = {}
+_ROLLOUT_PARENT_CACHE: dict[tuple[str, int, int], str | None] = {}
 _THREAD_LOOKUP_CACHE: dict[
     tuple[str, int, int, str, str | None, int | None], dict[str, Any] | None
 ] = {}
@@ -84,7 +85,11 @@ def read_rollout_summary(path: Path) -> dict[str, Any]:
         payload = row.get("payload", {})
         if not isinstance(payload, dict):
             continue
-        if payload.get("type") != "message" or payload.get("role") != "assistant":
+        if (
+            payload.get("type") != "message"
+            or payload.get("role") != "assistant"
+            or payload.get("phase") != "final_answer"
+        ):
             continue
         content = payload.get("content", [])
         if not isinstance(content, list):
@@ -135,6 +140,27 @@ def rollout_final_token_usage(path: Path) -> dict[str, int] | None:
 
 def rollout_final_assistant_text(path: Path) -> str:
     return str(read_rollout_summary(path).get("reviewer_output") or "")
+
+
+def rollout_parent_thread_id(path: Path) -> str | None:
+    key = _path_cache_key(path)
+    if key in _ROLLOUT_PARENT_CACHE:
+        return _ROLLOUT_PARENT_CACHE[key]
+    parent_thread_id = None
+    with path.open("r", encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            if row.get("type") == "session_meta":
+                payload = row.get("payload", {})
+                if isinstance(payload, dict):
+                    parent_thread_id = (
+                        str(payload.get("parent_thread_id") or "") or None
+                    )
+                break
+    _ROLLOUT_PARENT_CACHE[key] = parent_thread_id
+    return parent_thread_id
 
 
 def _parse_event_timestamp(value: Any) -> datetime | None:
@@ -266,38 +292,19 @@ def find_thread_by_title(
 def find_review_child_thread(
     *,
     sqlite_path: Path,
-    cwd: str | None,
-    model: str | None,
-    reasoning_effort: str | None,
-    title: str | None = None,
-    created_at: int | None = None,
-    updated_at: int | None = None,
-    created_window_seconds: int = 5,
+    parent_thread_id: str,
 ) -> dict[str, Any] | None:
     if not sqlite_path.is_file():
         return None
-    cwd_value = str(cwd or "").strip()
-    model_value = str(model or "").strip()
-    effort_value = str(reasoning_effort or "").strip()
-    title_value = str(title or "").strip()
-    if not cwd_value or not model_value or not effort_value:
+    parent_id = str(parent_thread_id or "").strip()
+    if not parent_id:
         return None
-    created_at_value = _coerce_optional_int(created_at)
-    updated_at_value = _coerce_optional_int(updated_at)
-    window_seconds = max(int(created_window_seconds or 0), 1)
-    created_after = None
-    created_before = None
-    if created_at_value is not None:
-        created_after = max(created_at_value - 1, 0)
-        created_before = created_at_value + window_seconds
-        if updated_at_value is not None:
-            created_before = max(created_before, updated_at_value)
     stat = sqlite_path.stat()
     cache_key = (
         str(sqlite_path),
         stat.st_mtime_ns,
         stat.st_size,
-        f"review_child:{cwd_value}:{title_value or '-'}:{model_value.lower()}:{effort_value.lower()}:{created_at_value}:{updated_at_value}:{window_seconds}",
+        f"review_child_parent:{parent_id}",
         None,
         None,
     )
@@ -311,33 +318,18 @@ def find_review_child_thread(
             sql = """
                 select id, rollout_path, cwd, source, created_at, updated_at, tokens_used, model, reasoning_effort, title
                 from threads
-                where cwd = ?
-                  and source = ?
-                  and lower(coalesce(model, '')) = lower(?)
-                  and lower(coalesce(reasoning_effort, '')) = lower(?)
+                where source = ?
+                order by created_at desc, id asc
             """
-            params: list[Any] = [
-                cwd_value,
-                REVIEW_SUBAGENT_SOURCE,
-                model_value,
-                effort_value,
-            ]
-            if title_value:
-                sql += " and title = ?"
-                params.append(title_value)
-            if created_after is not None and created_before is not None:
-                sql += " and created_at between ? and ?"
-                params.extend([created_after, created_before])
-            order_parts: list[str] = []
-            if updated_at_value is not None:
-                order_parts.append("abs(updated_at - ?)")
-                params.append(updated_at_value)
-            if created_at_value is not None:
-                order_parts.append("abs(created_at - ?)")
-                params.append(created_at_value)
-            order_parts.extend(["updated_at desc", "id asc"])
-            sql += " order by " + ", ".join(order_parts) + " limit 1"
-            row = con.execute(sql, params).fetchone()
+            row = None
+            for candidate in con.execute(sql, [REVIEW_SUBAGENT_SOURCE]):
+                rollout_path = Path(str(candidate["rollout_path"] or ""))
+                if (
+                    rollout_path.is_file()
+                    and rollout_parent_thread_id(rollout_path) == parent_id
+                ):
+                    row = candidate
+                    break
         except sqlite3.OperationalError as exc:
             if not _missing_threads_table(exc):
                 raise

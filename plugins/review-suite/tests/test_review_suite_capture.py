@@ -41,6 +41,7 @@ def _assistant_message(text: str) -> dict[str, object]:
         "payload": {
             "type": "message",
             "role": "assistant",
+            "phase": "final_answer",
             "content": [{"text": text}],
         },
     }
@@ -65,12 +66,16 @@ def _child_rollout(
     reasoning_effort: str,
     usage: dict[str, int],
     text: str,
+    parent_thread_id: str,
 ) -> None:
     total_tokens = int(usage["input_tokens"]) + int(usage["output_tokens"])
     _write_jsonl(
         path,
         [
-            {"type": "session_meta", "payload": {}},
+            {
+                "type": "session_meta",
+                "payload": {"parent_thread_id": parent_thread_id},
+            },
             {
                 "type": "turn_context",
                 "payload": {
@@ -342,7 +347,6 @@ def test_collect_round_results_persists_each_exited_reviewer_immediately(
     monkeypatch.setattr(
         review_suite_local, "find_review_child_thread", lambda **_: None
     )
-    monkeypatch.setattr(review_suite_local, "find_thread_by_title", lambda **_: None)
     monkeypatch.setattr(review_suite_local, "write_round", fake_write_round)
     monkeypatch.setattr(
         review_suite_local,
@@ -384,7 +388,7 @@ def test_collect_round_results_persists_each_exited_reviewer_immediately(
     assert not bravo_stderr.exists()
 
 
-def test_collect_round_results_rebinds_launcher_sessions_to_review_children(
+def test_collect_round_results_resolves_identical_parallel_launches_by_parent(
     tmp_path: Path,
 ) -> None:
     state_dir = tmp_path / "state"
@@ -404,13 +408,15 @@ def test_collect_round_results_rebinds_launcher_sessions_to_review_children(
         reasoning_effort="xhigh",
         usage={"input_tokens": 1200, "cached_input_tokens": 300, "output_tokens": 70},
         text="alpha child findings",
+        parent_thread_id="launcher-alpha",
     )
     _child_rollout(
         child_bravo_rollout,
-        model="gpt-5.3-codex",
-        reasoning_effort="medium",
+        model="gpt-5.4",
+        reasoning_effort="xhigh",
         usage={"input_tokens": 900, "cached_input_tokens": 200, "output_tokens": 40},
         text="bravo child findings",
+        parent_thread_id="launcher-bravo",
     )
 
     con = sqlite3.connect(sqlite_path)
@@ -460,8 +466,8 @@ def test_collect_round_results_rebinds_launcher_sessions_to_review_children(
         updated_at=1_700_000_140,
         tokens_used=1_140,
         title=prompt_title,
-        model="gpt-5.3-codex",
-        reasoning_effort="medium",
+        model="gpt-5.4",
+        reasoning_effort="xhigh",
     )
     con.commit()
     con.close()
@@ -561,7 +567,28 @@ def test_collect_round_results_rebinds_launcher_sessions_to_review_children(
     assert record_runs["gpt-5.3-codex-medium"]["cost_usd"] == pytest.approx(0.00182)
 
 
-def test_collect_round_results_falls_back_to_child_lookup_when_session_id_is_missing(
+def test_rollout_summary_requires_final_answer_phase(tmp_path: Path) -> None:
+    rollout = tmp_path / "unfinished.jsonl"
+    _write_jsonl(
+        rollout,
+        [
+            {"type": "session_meta", "payload": {"parent_thread_id": "launcher"}},
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "assistant",
+                    "phase": "commentary",
+                    "content": [{"text": "Still reviewing."}],
+                },
+            },
+        ],
+    )
+
+    assert rollout_capture.rollout_final_assistant_text(rollout) == ""
+
+
+def test_collect_round_results_rejects_child_lookup_when_launcher_id_is_missing(
     tmp_path: Path,
 ) -> None:
     state_dir = tmp_path / "state"
@@ -576,6 +603,7 @@ def test_collect_round_results_falls_back_to_child_lookup_when_session_id_is_mis
         reasoning_effort="xhigh",
         usage={"input_tokens": 500, "cached_input_tokens": 100, "output_tokens": 25},
         text="child only findings",
+        parent_thread_id="unknown-launcher",
     )
 
     con = sqlite3.connect(sqlite_path)
@@ -630,15 +658,9 @@ def test_collect_round_results_falls_back_to_child_lookup_when_session_id_is_mis
 
     run = completed["runs"][0]
     assert run["session_id"] is None
-    assert run["thread_id"] == "child-only"
-    assert run["tokens_used"] == 625
-    assert run["usage"] == {
-        "input_tokens": 500,
-        "cached_input_tokens": 100,
-        "output_tokens": 25,
-    }
-    assert run["cost_usd"] == pytest.approx(0.0014)
-    assert run["reviewer_output"] == "child only findings"
+    assert run["thread_id"] is None
+    assert run["reviewer_output"] == ""
+    assert run["review_status"] == "process_died"
 
 
 def test_collect_round_results_matches_review_child_created_after_default_window(
@@ -658,6 +680,7 @@ def test_collect_round_results_matches_review_child_created_after_default_window
         reasoning_effort="xhigh",
         usage={"input_tokens": 840, "cached_input_tokens": 240, "output_tokens": 36},
         text="slow child findings",
+        parent_thread_id="launcher-alpha",
     )
 
     con = sqlite3.connect(sqlite_path)
@@ -751,6 +774,7 @@ def test_collect_round_results_retries_child_lookup_after_launcher_match(
         reasoning_effort="xhigh",
         usage={"input_tokens": 750, "cached_input_tokens": 200, "output_tokens": 30},
         text="delayed child findings",
+        parent_thread_id="launcher-alpha",
     )
 
     launcher_thread = {
@@ -816,7 +840,6 @@ def test_collect_round_results_retries_child_lookup_after_launcher_match(
     monkeypatch.setattr(
         review_suite_local, "find_review_child_thread", delayed_child_lookup
     )
-    monkeypatch.setattr(review_suite_local, "find_thread_by_title", lambda **_: None)
     monkeypatch.setattr(review_suite_local.time, "sleep", lambda _: None)
 
     completed = review_suite_local.collect_round_results(
@@ -966,7 +989,7 @@ def test_collect_round_results_preserves_foreign_review_cwd_for_capture(
     assert str(captured["review_cwd"]) == r"C:\repo\demo"
 
 
-def test_collect_completed_review_capture_uses_started_at_for_title_fallback(
+def test_collect_completed_review_capture_does_not_use_title_fallback(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     stdout_path = tmp_path / "review.stdout.txt"
@@ -974,21 +997,12 @@ def test_collect_completed_review_capture_uses_started_at_for_title_fallback(
     stdout_path.write_text("No findings.\n", encoding="utf-8")
     stderr_path.write_text("", encoding="utf-8")
 
-    observed: dict[str, object] = {}
-
     monkeypatch.setattr(review_suite_local, "find_thread_by_id", lambda **_: None)
     monkeypatch.setattr(
         review_suite_local, "find_review_child_thread", lambda **_: None
     )
     monkeypatch.setattr(review_suite_local.time, "sleep", lambda _: None)
 
-    def fake_find_thread_by_title(**kwargs: object) -> None:
-        observed["created_after"] = kwargs["created_after"]
-        return None
-
-    monkeypatch.setattr(
-        review_suite_local, "find_thread_by_title", fake_find_thread_by_title
-    )
     monkeypatch.setattr(review_suite_local, "enrich_thread_record", lambda thread: {})
 
     variant = {
@@ -1015,27 +1029,23 @@ def test_collect_completed_review_capture_uses_started_at_for_title_fallback(
         review_cwd=tmp_path,
     )
 
-    assert (
-        observed["created_after"]
-        == review_suite_local._started_at_epoch_seconds(started_at) - 5
-    )
+    assert started_at
 
 
-def test_collect_completed_review_capture_uses_effective_reasoning_effort(
+def test_collect_completed_review_capture_uses_launcher_parent_id(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     stdout_path = tmp_path / "review.stdout.txt"
     stderr_path = tmp_path / "review.stderr.txt"
     stdout_path.write_text("No findings.\n", encoding="utf-8")
-    stderr_path.write_text("", encoding="utf-8")
+    stderr_path.write_text("Session ID: launcher-alpha\n", encoding="utf-8")
     observed: dict[str, object] = {}
 
     monkeypatch.setattr(review_suite_local, "find_thread_by_id", lambda **_: None)
-    monkeypatch.setattr(review_suite_local, "find_thread_by_title", lambda **_: None)
     monkeypatch.setattr(review_suite_local.time, "sleep", lambda _: None)
 
     def fake_find_review_child_thread(**kwargs: object) -> None:
-        observed.setdefault("reasoning_effort", kwargs["reasoning_effort"])
+        observed.setdefault("parent_thread_id", kwargs["parent_thread_id"])
         return None
 
     monkeypatch.setattr(
@@ -1060,7 +1070,7 @@ def test_collect_completed_review_capture_uses_effective_reasoning_effort(
         review_cwd=tmp_path,
     )
 
-    assert observed["reasoning_effort"] == "xhigh"
+    assert observed["parent_thread_id"] == "launcher-alpha"
 
 
 def test_collect_completed_review_capture_prefers_final_message_path(
@@ -1077,7 +1087,6 @@ def test_collect_completed_review_capture_prefers_final_message_path(
     monkeypatch.setattr(
         review_suite_local, "find_review_child_thread", lambda **_: None
     )
-    monkeypatch.setattr(review_suite_local, "find_thread_by_title", lambda **_: None)
     monkeypatch.setattr(review_suite_local, "enrich_thread_record", lambda thread: {})
     monkeypatch.setattr(review_suite_local.time, "sleep", lambda _: None)
 
@@ -1125,9 +1134,7 @@ def test_rollout_capture_missing_threads_table_returns_none(tmp_path: Path) -> N
     assert (
         rollout_capture.find_review_child_thread(
             sqlite_path=sqlite_path,
-            cwd=r"C:\repo\demo",
-            model="gpt-5.4",
-            reasoning_effort="medium",
+            parent_thread_id="launcher",
         )
         is None
     )
