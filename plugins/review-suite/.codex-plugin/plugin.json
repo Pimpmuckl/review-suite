@@ -1,6 +1,6 @@
 {
   "name": "review-suite",
-  "version": "0.1.0",
+  "version": "0.1.0+codex.20260714141414",
   "description": "Stateful review workflows with a default local orchestrator and GitHub review handoff.",
   "author": {
     "name": "Jonathan",
