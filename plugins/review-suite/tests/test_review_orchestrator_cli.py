@@ -1890,11 +1890,6 @@ def test_wsl_flag_persists_to_orchestrated_steps(
     assert "--wsl" in deslop_calls[0]
     state = _cycle_payload(state_dir, public_id)
     assert state["runtime"] == {"allow_unsafe_windows_wsl_fallback": True}
-    fresh_command = review._new_review_command(
-        state, state_dir=state_dir, fresh_token="next"
-    )
-    assert "--wsl" in fresh_command
-    assert "--state-dir" not in fresh_command
 
     exit_code, _resumed = _run_review(
         monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)]
@@ -2260,7 +2255,7 @@ def test_restart_mode_supersedes_cycle_and_starts_fresh_deep_ladder(
             "--restart-mode",
             "deep",
             "--reason",
-            "github review had many suspicious notes",
+            "review round budget exhausted",
             "--state-dir",
             str(state_dir),
         ],
@@ -2282,7 +2277,8 @@ def test_restart_mode_supersedes_cycle_and_starts_fresh_deep_ladder(
         "review": new_id,
         "cycle_key": new_state["cycle_key"],
         "mode": "deep",
-        "reason": "github review had many suspicious notes",
+        "reason": "review round budget exhausted",
+        "kind": "mode-restart",
     }
     assert new_state["mode"] == {"requested": "deep", "effective": "deep"}
     assert new_state["identity"] == old_state["identity"]
@@ -2292,12 +2288,28 @@ def test_restart_mode_supersedes_cycle_and_starts_fresh_deep_ladder(
     assert new_state["restart"]["supersedes"] == old_id
     assert new_state["restart"]["supersedes_cycle_key"] == old_state["cycle_key"]
     assert new_state["restart"]["from_mode"] == "normal"
+    assert review._is_successor_cycle(new_state) is True
+    assert review._successor_needs_locked_resume(new_state) is False
     assert [step["name"] for step in new_state["review_plan"]["steps"]] == [
         "broad-discovery",
         "precision-signoff",
         "deep-discovery",
         "deep-signoff",
     ]
+
+    messages: list[str] = []
+    monkeypatch.setattr(
+        review,
+        "emit_error",
+        lambda message, **kwargs: messages.append(str(message)) or 2,
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["review.py", "--id", old_id, "--new-cycle"],
+    )
+    assert review.main() == 2
+    assert messages[-1] == "--new-cycle requires an exhausted review round budget"
 
     old_state_without_redirect = dict(old_state)
     old_state_without_redirect.pop("superseded_by")
@@ -2334,6 +2346,230 @@ def test_restart_mode_supersedes_cycle_and_starts_fresh_deep_ladder(
     assert review_calls[1]["allow_unsafe_windows_wsl_fallback"] is True
     assert review_calls[1]["step_position"] == 1
     assert review_calls[1]["step_total"] == 4
+
+
+def test_new_cycle_restarts_exhausted_review_from_idempotent_short_action(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    review_calls = _stub_review(
+        monkeypatch,
+        "fast-round-1",
+        "fast-round-2",
+        "successor-round-1",
+    )
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/new-cycle")
+    _commit_file(repo, "app.txt", "feature\n", "feature")
+
+    _, opened = _run_review(
+        monkeypatch,
+        [
+            "--mode",
+            "fast",
+            "--cd",
+            str(repo),
+            "--base",
+            "main",
+            "--state-dir",
+            str(state_dir),
+            "--wsl",
+        ],
+    )
+    old_id = str(opened["review"])
+    _run_review(
+        monkeypatch,
+        ["--id", old_id, "--decision", "findings", "--state-dir", str(state_dir)],
+    )
+    _commit_file(repo, "app.txt", "feature\nfix one\n", "fix one")
+    _run_review(monkeypatch, ["--id", old_id, "--state-dir", str(state_dir)])
+    _run_review(
+        monkeypatch,
+        ["--id", old_id, "--decision", "findings", "--state-dir", str(state_dir)],
+    )
+    final_head = _commit_file(repo, "app.txt", "feature\nfix one\nfix two\n", "fix two")
+
+    _, exhausted = _run_review(
+        monkeypatch, ["--id", old_id, "--state-dir", str(state_dir)]
+    )
+
+    action = str(exhausted["Action"]["cmd"])
+    assert f"--id {old_id} --new-cycle" in action
+    assert "--fresh-token" not in action
+    assert "--mode" not in action
+    assert "--cd" not in action
+    assert "--base" not in action
+    assert len(review_calls) == 2
+    successor_head = _commit_file(
+        repo,
+        "app.txt",
+        "feature\nfix one\nfix two\nfix after exhaustion\n",
+        "fix after exhaustion",
+    )
+    stale_source = _cycle_payload(state_dir, old_id)
+    reserve_successor = review.reserve_cycle_successor
+    resume_successor = review._resume_reserved_successor
+
+    def preserve_concurrent_source_update(
+        state_dir: Path,
+        *,
+        source: dict[str, object],
+        successor: dict[str, object],
+    ) -> tuple[dict[str, object], bool]:
+        current = _cycle_payload(state_dir, old_id)
+        current["validation"]["ci"] = "passed"
+        orchestrator_store.save_cycle(state_dir, current)
+        return reserve_successor(
+            state_dir,
+            source=source,
+            successor=successor,
+        )
+
+    monkeypatch.setattr(
+        review, "reserve_cycle_successor", preserve_concurrent_source_update
+    )
+    monkeypatch.setattr(
+        review,
+        "_resume_reserved_successor",
+        lambda state, *, state_dir: state,
+    )
+
+    exit_code, reserved = _run_review(
+        monkeypatch,
+        ["--id", old_id, "--new-cycle", "--state-dir", str(state_dir)],
+    )
+    new_id = str(reserved["review"])
+    assert exit_code == 0
+    assert new_id != old_id
+    assert len(review_calls) == 2
+    assert _cycle_payload(state_dir, new_id)["stage"] == "created"
+    assert _cycle_payload(state_dir, old_id)["validation"]["ci"] == "passed"
+
+    def report_busy(state: dict[str, object], *, state_dir: Path) -> dict[str, object]:
+        raise review.SuccessorAdvanceBusyError(state)
+
+    monkeypatch.setattr(review, "_resume_reserved_successor", report_busy)
+    _, busy = _run_review(monkeypatch, ["--id", new_id, "--state-dir", str(state_dir)])
+    assert busy["status"] == "busy"
+    assert busy["next_action"] == "wait"
+    assert "Action" not in busy
+
+    monkeypatch.setattr(review, "reserve_cycle_successor", reserve_successor)
+    monkeypatch.setattr(review, "_resume_reserved_successor", resume_successor)
+    advance_successor = review._advance_without_decision
+    nested_retries: list[str] = []
+
+    def assert_reserved_before_advance(
+        state: dict[str, object], *, state_dir: Path
+    ) -> dict[str, object]:
+        reserved_source = _cycle_payload(state_dir, old_id)
+        with pytest.raises(review.SuccessorAdvanceBusyError):
+            review._new_cycle_after_budget_exhaustion(
+                reserved_source, state_dir=state_dir
+            )
+        nested_retries.append("busy")
+        return advance_successor(state, state_dir=state_dir)
+
+    monkeypatch.setattr(
+        review, "_advance_without_decision", assert_reserved_before_advance
+    )
+
+    exit_code, restarted = _run_review(
+        monkeypatch,
+        ["--id", old_id, "--new-cycle", "--state-dir", str(state_dir)],
+    )
+
+    assert exit_code == 0
+    assert restarted["review"] == new_id
+    assert nested_retries == ["busy"]
+    assert len(review_calls) == 3
+    assert review_calls[-1]["step_name"] == "fast-signoff"
+    assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 2
+
+    old_state = _cycle_payload(state_dir, old_id)
+    new_state = _cycle_payload(state_dir, new_id)
+    assert old_state["stage"] == "aborted"
+    assert old_state["superseded_by"]["review"] == new_id
+    assert old_state["superseded_by"]["kind"] == "budget-exhausted"
+    assert old_state["identity"]["head"] == final_head
+    assert new_state["identity"]["head"] == successor_head
+    assert new_state["identity"]["cwd"] == old_state["identity"]["cwd"]
+    assert new_state["identity"]["base"] == old_state["identity"]["base"]
+    assert new_state["identity"]["branch"] == old_state["identity"]["branch"]
+    assert new_state["mode"] == old_state["mode"]
+    assert new_state["runtime"] == {"allow_unsafe_windows_wsl_fallback": True}
+    assert new_state["restart"]["supersedes"] == old_id
+    assert new_state["restart"]["from_mode"] == "fast"
+    assert new_state["restart"]["reason"] == "review round budget exhausted"
+    assert new_state["restart"]["kind"] == "budget-exhausted"
+
+    conflicting_successor = deepcopy(new_state)
+    conflicting_successor["cycle_key"] = f"{new_state['cycle_key']}-different"
+    with pytest.raises(ValueError, match="already has a different successor"):
+        orchestrator_store.reserve_cycle_successor(
+            state_dir,
+            source=stale_source,
+            successor=conflicting_successor,
+        )
+
+    stale_source["validation"]["full_suite"] = "passed"
+    orchestrator_store.save_cycle(state_dir, stale_source)
+    preserved_source = _cycle_payload(state_dir, old_id)
+    assert preserved_source["stage"] == "aborted"
+    assert preserved_source["superseded_by"]["review"] == new_id
+    assert preserved_source["validation"]["full_suite"] == "passed"
+
+    _, repeated = _run_review(
+        monkeypatch,
+        ["--id", old_id, "--new-cycle", "--state-dir", str(state_dir)],
+    )
+    assert repeated["review"] == new_id
+    assert len(review_calls) == 3
+    assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 2
+
+
+def test_new_cycle_rejects_review_before_round_budget_is_exhausted(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    review_calls = _stub_review(monkeypatch, "fast-round-1")
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/new-cycle-too-soon")
+    _commit_file(repo, "app.txt", "feature\n", "feature")
+    _, opened = _run_review(
+        monkeypatch,
+        [
+            "--mode",
+            "fast",
+            "--cd",
+            str(repo),
+            "--base",
+            "main",
+            "--state-dir",
+            str(state_dir),
+        ],
+    )
+    public_id = str(opened["review"])
+    messages: list[str] = []
+    monkeypatch.setattr(
+        review,
+        "emit_error",
+        lambda message, **kwargs: messages.append(str(message)) or 2,
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["review.py", "--id", public_id, "--new-cycle"],
+    )
+
+    assert review.main() == 2
+    assert messages[-1] == "--new-cycle requires an exhausted review round budget"
+    assert len(review_calls) == 1
+    assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 1
 
 
 def test_fast_review_can_restart_into_deep_without_becoming_a_restart_target(
@@ -3922,143 +4158,6 @@ def test_mode_rerun_after_initial_review_reset_reuses_cycle(
     assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 1
 
 
-def test_mode_rerun_with_multiple_matching_cycles_requires_id(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    _stub_deslop(monkeypatch)
-    _stub_review(monkeypatch, "phase_review-round-1")
-    repo = tmp_path / "repo"
-    state_dir = tmp_path / "state"
-    _use_compact_normal_profile(monkeypatch, state_dir)
-    _init_repo(repo)
-    _commit_file(repo, "app.txt", "base\n", "base")
-    _git(repo, "checkout", "-b", "feature/ambiguous-review")
-    _commit_file(repo, "app.txt", "feature\n", "feature")
-
-    _, first = _run_review(
-        monkeypatch,
-        [
-            "--mode",
-            "normal",
-            "--cd",
-            str(repo),
-            "--base",
-            "main",
-            "--state-dir",
-            str(state_dir),
-        ],
-    )
-    _, second = _run_review(
-        monkeypatch,
-        [
-            "--mode",
-            "normal",
-            "--cd",
-            str(repo),
-            "--base",
-            "main",
-            "--fresh-token",
-            "second-ladder",
-            "--state-dir",
-            str(state_dir),
-        ],
-    )
-    assert first["review"] != second["review"]
-
-    messages: list[str] = []
-    monkeypatch.setattr(
-        review,
-        "emit_error",
-        lambda message, **kwargs: messages.append(str(message)) or 2,
-    )
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        ["review.py", "--mode", "normal", "--cd", str(repo), "--base", "main"],
-    )
-
-    assert review.main() == 2
-    assert "multiple active review cycles match" in messages[-1]
-    assert str(first["review"]) in messages[-1]
-    assert str(second["review"]) in messages[-1]
-
-
-def test_mode_rerun_fresh_token_does_not_fallback_to_changed_cycle_after_exact_match(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    _stub_deslop(monkeypatch)
-    _stub_review(
-        monkeypatch,
-        "phase_review-round-1",
-        "phase_review-round-2",
-        "phase_review-round-3",
-    )
-    repo = tmp_path / "repo"
-    state_dir = tmp_path / "state"
-    _use_compact_normal_profile(monkeypatch, state_dir)
-    _init_repo(repo)
-    _commit_file(repo, "app.txt", "base\n", "base")
-    _git(repo, "checkout", "-b", "feature/fresh-token-exact-guard")
-    _commit_file(repo, "app.txt", "feature\n", "feature")
-
-    _, changed_cycle = _run_review(
-        monkeypatch,
-        [
-            "--mode",
-            "normal",
-            "--cd",
-            str(repo),
-            "--base",
-            "main",
-            "--state-dir",
-            str(state_dir),
-        ],
-    )
-    _, exact_cycle = _run_review(
-        monkeypatch,
-        [
-            "--mode",
-            "normal",
-            "--cd",
-            str(repo),
-            "--base",
-            "main",
-            "--fresh-token",
-            "exact-ladder",
-            "--state-dir",
-            str(state_dir),
-        ],
-    )
-    assert changed_cycle["review"] != exact_cycle["review"]
-
-    amended_head = _amend_file(repo, "app.txt", "feature\ncurrent exact cycle\n")
-    exact_state = _cycle_payload(state_dir, str(exact_cycle["review"]))
-    exact_state["identity"]["head"] = amended_head
-    exact_state["review_heads"]["last_reviewed_head"] = amended_head
-    _write_cycle_payload(state_dir, str(exact_cycle["review"]), exact_state)
-
-    _, fresh = _run_review(
-        monkeypatch,
-        [
-            "--mode",
-            "normal",
-            "--cd",
-            str(repo),
-            "--base",
-            "main",
-            "--fresh-token",
-            "third-ladder",
-            "--state-dir",
-            str(state_dir),
-        ],
-    )
-
-    assert fresh["review"] not in {changed_cycle["review"], exact_cycle["review"]}
-    assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 3
-
-
 def test_id_rerun_after_pending_decision_amend_auto_verifies_same_cycle(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -4112,82 +4211,6 @@ def test_id_rerun_after_pending_decision_amend_auto_verifies_same_cycle(
     assert state["review_heads"]["last_fix_head"] == amended_head
     assert state["rounds"][1]["reviewed_head"] == amended_head
     assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 1
-
-
-def test_mode_rerun_after_pending_decision_amend_ignores_unclaimed_fresh_token(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    deslop_calls = _stub_deslop(monkeypatch)
-    review_calls = _stub_review(
-        monkeypatch, "phase_review-round-1", "phase_review-round-2"
-    )
-    followup_calls = _stub_followup(monkeypatch)
-    repo = tmp_path / "repo"
-    state_dir = tmp_path / "state"
-    _use_compact_normal_profile(monkeypatch, state_dir, include_deep=True)
-    _init_repo(repo)
-    _commit_file(repo, "app.txt", "base\n", "base")
-    _git(repo, "checkout", "-b", "feature/deep-fresh-amend")
-    original_head = _commit_file(repo, "app.txt", "feature\n", "feature")
-
-    _, created = _run_review(
-        monkeypatch,
-        [
-            "--mode",
-            "deep",
-            "--cd",
-            str(repo),
-            "--base",
-            "main",
-            "--state-dir",
-            str(state_dir),
-        ],
-    )
-    public_id = str(created["review"])
-    _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
-    _run_review(
-        monkeypatch,
-        ["--id", public_id, "--decision", "findings", "--state-dir", str(state_dir)],
-    )
-    assert len(deslop_calls) == 1
-    assert len(review_calls) == 1
-
-    amended_head = _amend_file(repo, "app.txt", "feature\nfix pending finding\n")
-    assert amended_head != original_head
-
-    exit_code, resumed = _run_review(
-        monkeypatch,
-        [
-            "--mode",
-            "deep",
-            "--cd",
-            str(repo),
-            "--base",
-            "main",
-            "--fresh-token",
-            "codex-final-20260613-deadbee",
-            "--state-dir",
-            str(state_dir),
-        ],
-    )
-
-    assert exit_code == 0
-    assert resumed["review"] == public_id
-    assert "--decision clean" in str(resumed["Action"]["cmd"])
-    assert len(deslop_calls) == 1
-    assert len(review_calls) == 1
-    assert len(followup_calls) == 1
-    followup_scope = followup_calls[0]["review_scope"]
-    assert followup_scope["findings_reviewed_head"] == original_head
-    assert "commit" not in followup_scope
-    assert "commit_end" not in followup_scope
-    assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 1
-    state = _cycle_payload(state_dir, public_id)
-    assert state["review_heads"]["last_fix_head"] == amended_head
-    assert state["review_heads"]["last_followup_head"] == amended_head
-    assert state["rounds"][1]["lane"] == "review-followup"
-    assert state["rounds"][1]["reviewed_head"] == amended_head
 
 
 def test_id_rerun_after_pending_decision_equivalent_base_drift_updates_reviewed_head(

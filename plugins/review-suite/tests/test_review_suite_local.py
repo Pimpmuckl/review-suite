@@ -1780,6 +1780,52 @@ def test_launch_reviewer_process_writes_prompt_for_prompted_base_mode(
     Path(str(launched["final_message_path"])).unlink(missing_ok=True)
 
 
+def test_launch_round_staggers_identical_parallel_reviewers(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    events: list[str] = []
+    monkeypatch.setattr(
+        "review_suite_local._launch_reviewer_process",
+        lambda **kwargs: events.append(f"launch:{kwargs['run']['slot']}"),
+    )
+    monkeypatch.setattr(
+        "review_suite_local.time.sleep",
+        lambda seconds: events.append(f"sleep:{seconds}"),
+    )
+    monkeypatch.setattr("review_suite_local.write_round", lambda *args: None)
+
+    review_suite_local.launch_round(
+        round_payload={
+            "round_id": "round-identical",
+            "status": "sampled",
+            "runs": [
+                {"slot": "alpha", "variant_id": "same-model"},
+                {"slot": "bravo", "variant_id": "same-model"},
+            ],
+        },
+        roster={
+            "variants": [
+                {
+                    "id": "same-model",
+                    "model": "gpt-5.6-sol",
+                    "reasoning_effort": "medium",
+                }
+            ]
+        },
+        state_dir=tmp_path,
+        review_cwd=tmp_path,
+        prompt="review",
+        review_scope={},
+    )
+
+    assert events == [
+        "launch:alpha",
+        f"sleep:{review_suite_local.MULTI_REVIEW_DISPATCH_STAGGER_SECONDS}",
+        "launch:bravo",
+    ]
+
+
 def test_print_live_completed_run_includes_terminal_status(capsys) -> None:
     _print_live_completed_run(
         {
