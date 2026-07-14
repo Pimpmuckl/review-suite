@@ -57,6 +57,7 @@ from .process_runtime import (
     CapturedChildProcess,
     CapturedChildWaitResult,
     launch_captured_child_process,
+    terminate_process_tree,
     wait_for_captured_child_process,
 )
 from .workflow_state import (
@@ -130,6 +131,7 @@ __all__ = [
     "lens_model_config",
     "load_config",
     "launch_captured_child_process",
+    "terminate_process_tree",
     "merge_base",
     "merge_base_drift_scope",
     "normalize_cwd",

@@ -45,6 +45,7 @@ from review_suite_core import (
     normalize_service_tier,
     prepare_codex_review_launch,
     price_usage_tokens,
+    terminate_process_tree,
     use_unsafe_windows_wsl_fallback,
     utc_now,
     utc_now_iso,
@@ -1539,21 +1540,7 @@ def _transport_hung_after_output(
     return "output_captured_process_still_running"
 
 
-def _terminate_process_tree(pid: int | None) -> None:
-    if not pid:
-        return
-    if os.name == "nt":
-        subprocess.run(
-            ["taskkill", "/PID", str(int(pid)), "/T", "/F"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
-        )
-        return
-    try:
-        os.kill(int(pid), 15)
-    except OSError:
-        pass
+_terminate_process_tree = terminate_process_tree
 
 
 def _transport_event_lines(

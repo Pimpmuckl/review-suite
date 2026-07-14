@@ -1581,7 +1581,7 @@ def run_gate_round(
             proc = run["process"]
             assert isinstance(proc, subprocess.Popen)
             if proc.poll() is None and _timed_out(run, timeout_seconds=timeout_seconds):
-                proc.kill()
+                _terminate_process_tree(run.get("pid"))
                 run["timed_out"] = True
             if proc.poll() is None:
                 stall_reason = _transport_stalled(run)

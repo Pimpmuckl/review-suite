@@ -100,3 +100,41 @@ def test_wait_for_captured_child_process_keeps_child_stderr_captured(
     finally:
         child.stdout_path.unlink(missing_ok=True)
         child.stderr_path.unlink(missing_ok=True)
+
+
+def test_wait_timeout_terminates_process_tree(monkeypatch: pytest.MonkeyPatch) -> None:
+    terminated: list[int] = []
+
+    class FakeProcess:
+        pid = 42
+        polls = 0
+
+        def poll(self) -> int | None:
+            self.polls += 1
+            return None if self.polls == 1 else -1
+
+        def wait(self) -> int:
+            return -1
+
+    clock = iter([1.0, 1.0])
+    monkeypatch.setattr(
+        "review_suite_core.process_runtime.time.monotonic", lambda: next(clock)
+    )
+    monkeypatch.setattr(
+        "review_suite_core.process_runtime.terminate_process_tree",
+        lambda pid: terminated.append(int(pid)),
+    )
+
+    result = wait_for_captured_child_process(
+        process=FakeProcess(),
+        started_monotonic=0.0,
+        start_line=None,
+        heartbeat_line=lambda _: "heartbeat",
+        timeout_line=lambda _: "timeout",
+        progress_interval_seconds=60,
+        timeout_seconds=1,
+        poll_interval_seconds=0,
+    )
+
+    assert result.timed_out is True
+    assert terminated == [42]

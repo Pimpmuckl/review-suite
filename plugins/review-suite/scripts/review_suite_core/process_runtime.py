@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import signal
 import subprocess
 import sys
 import tempfile
@@ -53,6 +55,7 @@ def launch_captured_child_process(
             text=True,
             encoding="utf-8",
             errors="replace",
+            start_new_session=os.name != "nt",
         )
         if stdin_text and proc.stdin is not None:
             proc.stdin.write(stdin_text)
@@ -77,6 +80,26 @@ def launch_captured_child_process(
         stderr_tmp.close()
 
 
+def terminate_process_tree(pid: int | None) -> None:
+    if not pid:
+        return
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/PID", str(int(pid)), "/T", "/F"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        return
+    try:
+        os.killpg(os.getpgid(int(pid)), signal.SIGTERM)
+    except OSError:
+        try:
+            os.kill(int(pid), signal.SIGTERM)
+        except OSError:
+            pass
+
+
 def wait_for_captured_child_process(
     *,
     process: subprocess.Popen[str],
@@ -96,7 +119,7 @@ def wait_for_captured_child_process(
         now = time.monotonic()
         elapsed = int(now - started_monotonic)
         if timeout_seconds > 0 and elapsed >= timeout_seconds:
-            process.kill()
+            terminate_process_tree(process.pid)
             timed_out = True
             print(timeout_line(elapsed), file=sys.stderr, flush=True)
             break
