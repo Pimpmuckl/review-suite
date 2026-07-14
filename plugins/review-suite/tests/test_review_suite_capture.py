@@ -1143,8 +1143,10 @@ def test_rollout_capture_missing_threads_table_returns_none(tmp_path: Path) -> N
 def test_review_child_lookup_skips_malformed_rollout(tmp_path: Path) -> None:
     sqlite_path = tmp_path / "state_5.sqlite"
     malformed = tmp_path / "malformed.jsonl"
+    non_object = tmp_path / "non-object.jsonl"
     matched = tmp_path / "matched.jsonl"
     malformed.write_text("{not-json\n", encoding="utf-8")
+    non_object.write_text("null\n", encoding="utf-8")
     _write_jsonl(
         matched,
         [
@@ -1164,6 +1166,17 @@ def test_review_child_lookup_skips_malformed_rollout(tmp_path: Path) -> None:
         source='{"subagent":"review"}',
         created_at=2,
         updated_at=2,
+        tokens_used=0,
+        title="review",
+    )
+    _insert_thread(
+        con,
+        thread_id="non-object",
+        rollout_path=non_object,
+        cwd="repo",
+        source='{"subagent":"review"}',
+        created_at=3,
+        updated_at=3,
         tokens_used=0,
         title="review",
     )

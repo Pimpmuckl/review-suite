@@ -156,6 +156,8 @@ def rollout_parent_thread_id(path: Path) -> str | None:
                 if not line.strip():
                     continue
                 row = json.loads(line)
+                if not isinstance(row, dict):
+                    break
                 if row.get("type") == "session_meta":
                     payload = row.get("payload", {})
                     if isinstance(payload, dict):
