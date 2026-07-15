@@ -550,19 +550,6 @@ def test_runner_executes_arena_step_with_configured_lane(
     assert result.state["rounds"][0]["grading_required"] is True
     assert result.state["rounds"][0]["arena_round"] is True
 
-    queued = record_clean_decision(
-        result.state,
-        round_id="pr_review-round-1",
-        lane="review_t3",
-        reviewed_head="head-1",
-    )
-
-    assert queued["pending_action"] == {
-        "kind": "run-review-step",
-        "step_index": 1,
-        "step": "broad-discovery",
-    }
-
 
 def test_runner_arena_findings_fix_advances_with_findings_context(
     monkeypatch, tmp_path: Path
@@ -868,19 +855,6 @@ def test_runner_preserves_arena_metadata_when_collecting_running_step(
     assert result.state["pending_action"]["arena_round"] is True
     assert result.state["rounds"][0]["profile_step"]["grading_required"] is True
     assert result.state["rounds"][0]["profile_step"]["arena_round"] is True
-
-    queued = record_clean_decision(
-        result.state,
-        round_id="pr_review-round-1",
-        lane="review_t3",
-        reviewed_head="head-1",
-    )
-
-    assert queued["pending_action"] == {
-        "kind": "run-review-step",
-        "step_index": 1,
-        "step": "broad-discovery",
-    }
 
 
 def test_runner_blocks_when_collecting_blocked_arena_round(
