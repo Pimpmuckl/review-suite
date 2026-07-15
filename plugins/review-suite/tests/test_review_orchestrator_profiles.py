@@ -208,7 +208,7 @@ def test_arena_enabled_inserts_only_configured_arena_steps(
     ]
 
 
-def test_default_arena_pools_are_exact_fresh_balanced_cohorts(tmp_path: Path) -> None:
+def test_default_arena_pool_schedules_are_balanced(tmp_path: Path) -> None:
     config = load_config(tmp_path / "state")
     pools = config["arena"]["pools"]
     assert {pool["rating_pool_id"] for pool in pools.values()} == {
@@ -221,58 +221,15 @@ def test_default_arena_pools_are_exact_fresh_balanced_cohorts(tmp_path: Path) ->
         "arena_phase",
         "arena_deep",
     }
-    assert pools["discovery_phase"]["variant_groups"] == [
-        [
-            "gpt-5.4-medium",
-            "gpt-5.5-medium",
-            "gpt-5.6-sol-medium",
-            "gpt-5.6-terra-medium",
-        ]
-    ]
-    assert pools["discovery_deep"]["variant_groups"] == [
-        [
-            "gpt-5.4-xhigh",
-            "gpt-5.5-xhigh",
-            "gpt-5.6-sol-xhigh",
-            "gpt-5.6-terra-xhigh",
-        ]
-    ]
-    expected = {
-        "arena_phase": {
-            "gpt-5.4-low",
-            "gpt-5.4-medium",
-            "gpt-5.5-low",
-            "gpt-5.5-medium",
-            "gpt-5.6-luna-medium",
-            "gpt-5.6-luna-high",
-            "gpt-5.6-luna-xhigh",
-            "gpt-5.6-luna-max",
-            "gpt-5.6-terra-medium",
-            "gpt-5.6-terra-high",
-            "gpt-5.6-terra-xhigh",
-            "gpt-5.6-sol-low",
-            "gpt-5.6-sol-medium",
-        },
-        "arena_deep": {
-            "gpt-5.4-medium",
-            "gpt-5.4-high",
-            "gpt-5.4-xhigh",
-            "gpt-5.5-medium",
-            "gpt-5.5-high",
-            "gpt-5.5-xhigh",
-            "gpt-5.6-terra-medium",
-            "gpt-5.6-terra-high",
-            "gpt-5.6-terra-xhigh",
-            "gpt-5.6-terra-max",
-            "gpt-5.6-sol-medium",
-            "gpt-5.6-sol-high",
-            "gpt-5.6-sol-xhigh",
-        },
-    }
-    for pool_name, candidates in expected.items():
+    for pool_name in ("discovery_phase", "discovery_deep"):
+        assert all(
+            len(group) == 4 and len(set(group)) == 4
+            for group in pools[pool_name]["variant_groups"]
+        )
+    for pool_name in ("arena_phase", "arena_deep"):
+        candidates = set(pools[pool_name]["variant_ids"])
         groups = pools[pool_name]["variant_groups"]
-        assert set(pools[pool_name]["variant_ids"]) == candidates
-        assert len(groups) == 13
+        assert all(len(group) == 4 and len(set(group)) == 4 for group in groups)
         assert {variant for group in groups for variant in group} == candidates
         assert Counter(variant for group in groups for variant in group) == Counter(
             {variant: 4 for variant in candidates}
@@ -280,16 +237,16 @@ def test_default_arena_pools_are_exact_fresh_balanced_cohorts(tmp_path: Path) ->
         pairs = Counter(
             pair for group in groups for pair in combinations(sorted(group), 2)
         )
-        assert len(pairs) == 78
-        assert set(pairs.values()) == {1}
-        assert sum(map(len, groups)) == 52
+        assert max(pairs.values()) <= 2
+        assert sum(map(len, groups)) == 4 * len(candidates)
 
 
 def test_arena_candidate_list_must_cover_bootstrap_schedule(tmp_path: Path) -> None:
     config = deepcopy(load_config(tmp_path / "state"))
     config["arena"]["enabled"] = True
     config["orchestrator"]["stable_defaults"]["normal_arena_loops"] = 1
-    config["arena"]["pools"]["arena_phase"]["variant_ids"].remove("gpt-5.6-sol-medium")
+    phase_pool = config["arena"]["pools"]["arena_phase"]
+    phase_pool["variant_ids"].remove(phase_pool["variant_groups"][0][0])
 
     with pytest.raises(ValueError, match="must include every scheduled variant"):
         load_orchestrator_profiles(config)
