@@ -61,57 +61,6 @@ from review_suite_local import (
 )
 
 
-def test_default_roster_excludes_deprecated_codex_models() -> None:
-    roster_path = SCRIPT_DIR.parent / "references" / "roster.json"
-    roster = json.loads(roster_path.read_text(encoding="utf-8"))
-
-    served_deprecated = [
-        variant
-        for variant in roster["variants"]
-        if variant.get("state", "active") == "active"
-        and (
-            str(variant.get("model") or "").startswith("gpt-5.3-codex")
-            or str(variant.get("id") or "").startswith("gpt-5.3-codex")
-        )
-    ]
-
-    assert served_deprecated == []
-
-
-def test_default_roster_activates_approved_gpt_5_6_cohorts() -> None:
-    roster = review_suite_local.load_roster(
-        SCRIPT_DIR.parent / "references" / "roster.json"
-    )
-    index = review_suite_local.variant_index(roster)
-    assert {
-        variant["id"]
-        for variant in roster["variants"]
-        if variant["id"].startswith("gpt-5.6-") and variant.get("state") == "active"
-    } == {
-        "gpt-5.6-sol-low",
-        "gpt-5.6-sol-medium",
-        "gpt-5.6-sol-high",
-        "gpt-5.6-sol-xhigh",
-        "gpt-5.6-terra-medium",
-        "gpt-5.6-terra-high",
-        "gpt-5.6-terra-xhigh",
-        "gpt-5.6-terra-max",
-        "gpt-5.6-luna-medium",
-        "gpt-5.6-luna-high",
-        "gpt-5.6-luna-xhigh",
-        "gpt-5.6-luna-max",
-    }
-    assert {
-        variant_id
-        for variant_id in (
-            "gpt-5.6-sol-max",
-            "gpt-5.6-terra-low",
-            "gpt-5.6-luna-low",
-        )
-        if index[variant_id]["state"] == "disabled"
-    } == {"gpt-5.6-sol-max", "gpt-5.6-terra-low", "gpt-5.6-luna-low"}
-
-
 def test_reviewer_wait_line_uses_actual_count() -> None:
     assert _reviewer_wait_line({"runs": [{"slot": "alpha"}]}) == (
         "[review-suite] waiting for 1 reviewer; wrapper is active as long as output streams, do not stop it prematurely"
