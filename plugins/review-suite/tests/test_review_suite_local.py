@@ -2320,35 +2320,41 @@ def test_configured_selection_uses_only_its_fresh_pool_schedule() -> None:
     assert [run["variant_id"] for run in payload["runs"]] == ["b", "c", "d", "e"]
 
 
-def test_configured_selection_balances_drop_in_after_bootstrap() -> None:
-    roster = _roster(*(_variant(name) for name in "abcde"))
+def test_configured_selection_evenly_bootstraps_drop_in_candidates() -> None:
+    roster = _roster(*(_variant(name) for name in "abcdefghi"))
     records = [
         {
             "task_class": "phase_review",
             "rating_pool_id": "arena-pool",
             "runs": [{"variant_id": name} for name in "abcd"],
         }
+        for _ in range(8)
     ]
+    sampled: set[str] = set()
 
-    payload = select_pair(
-        roster=roster,
-        operational_state=_operational_state(
-            champion_ids=[], probation_ids=[], cooling={}
-        ),
-        records=records,
-        task_class="phase_review",
-        review_cwd=None,
-        seed=None,
-        rating_pool_id="arena-pool",
-        variant_groups=[["a", "b", "c", "d"]],
-        variant_ids=["a", "b", "c", "d", "e"],
-    )
+    for _ in range(3):
+        payload = select_pair(
+            roster=roster,
+            operational_state=_operational_state(
+                champion_ids=[], probation_ids=[], cooling={}
+            ),
+            records=records,
+            task_class="phase_review",
+            review_cwd=None,
+            seed=None,
+            rating_pool_id="arena-pool",
+            variant_groups=[["a", "b", "c", "d"]],
+            variant_ids=list("abcdefghi"),
+        )
+        selected = [run["variant_id"] for run in payload["runs"]]
+        assert payload["selection_pairing"] == "configured_balanced"
+        assert len(set(selected) & set("abcd")) == 2
+        assert len(set(selected) & set("efghi")) == 2
+        assert "schedule_index" not in payload
+        sampled.update(selected)
+        records.append(payload)
 
-    selected = [run["variant_id"] for run in payload["runs"]]
-    assert payload["selection_pairing"] == "configured_balanced"
-    assert "e" in selected
-    assert set(selected) & set("abcd")
-    assert "schedule_index" not in payload
+    assert set("efghi") <= sampled
 
 
 def test_balanced_configured_selection_preserves_reviewer_slot_limit() -> None:
