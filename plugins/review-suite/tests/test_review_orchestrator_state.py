@@ -424,17 +424,29 @@ def test_clean_deep_discovery_skips_remaining_deep_discovery_to_deep_signoff(
     ]
 
 
-def test_clean_arena_round_still_runs_fixed_discovery_safety_pass(
+def test_clean_arena_round_skips_remaining_arena_rounds_to_next_stage(
     tmp_path: Path,
 ) -> None:
     state = _cycle(tmp_path)
     state["review_plan"] = {
         "steps": [
             {
-                "name": "arena-discovery",
+                "name": "arena-discovery-1",
                 "kind": "arena",
                 "lane": "review_t1",
                 "task_class": "phase_review",
+            },
+            {
+                "name": "arena-discovery-2",
+                "kind": "arena",
+                "lane": "review_t1",
+                "task_class": "phase_review",
+            },
+            {
+                "name": "arena-pr-review",
+                "kind": "arena",
+                "lane": "review_t3",
+                "task_class": "pr_review",
             },
             {
                 "name": "broad-discovery",
@@ -455,7 +467,7 @@ def test_clean_arena_round_still_runs_fixed_discovery_safety_pass(
         round_id="round-1",
         lane="review_t1",
         step_index=0,
-        step_name="arena-discovery",
+        step_name="arena-discovery-1",
         reviewed_head="head-1",
         grading_required=True,
         arena_round=True,
@@ -467,10 +479,43 @@ def test_clean_arena_round_still_runs_fixed_discovery_safety_pass(
 
     assert clean["pending_action"] == {
         "kind": "run-review-step",
-        "step_index": 1,
-        "step": "broad-discovery",
+        "step_index": 2,
+        "step": "arena-pr-review",
+        "step_kind": "arena",
     }
-    assert clean["review_progress"]["next_step_index"] == 1
+    assert clean["review_progress"]["next_step_index"] == 2
+
+
+def test_clean_arena_round_skips_terminal_arena_rounds(tmp_path: Path) -> None:
+    state = _cycle(tmp_path)
+    state["review_plan"] = {
+        "steps": [
+            {
+                "name": f"arena-discovery-{index}",
+                "kind": "arena",
+                "lane": "review_t1",
+                "task_class": "phase_review",
+            }
+            for index in (1, 2)
+        ]
+    }
+    pending = mark_review_step_pending(
+        state,
+        round_id="round-1",
+        lane="review_t1",
+        step_index=0,
+        step_name="arena-discovery-1",
+        reviewed_head="head-1",
+        grading_required=True,
+        arena_round=True,
+    )
+
+    clean = record_clean_decision(
+        pending, round_id="round-1", lane="review_t1", reviewed_head="head-1"
+    )
+
+    assert clean["stage"] == STAGE_REVIEW_GREEN
+    assert clean["review_progress"]["next_step_index"] == 2
 
 
 def test_clean_gate_profile_step_records_pending_signoff_and_completes(
@@ -985,10 +1030,10 @@ def test_non_deep_arena_findings_consume_one_arena_budget(tmp_path: Path) -> Non
                 "task_class": "phase_review",
             },
             {
-                "name": "broad-discovery",
-                "count": 1,
-                "model": "gpt-5.4",
-                "reasoning_effort": "medium",
+                "name": "arena-discovery-2",
+                "kind": "arena",
+                "lane": "review_t3",
+                "task_class": "phase_review",
             },
             {
                 "name": "precision-signoff",
@@ -1018,7 +1063,8 @@ def test_non_deep_arena_findings_consume_one_arena_budget(tmp_path: Path) -> Non
     assert fixed["pending_action"] == {
         "kind": "run-review-step",
         "step_index": 1,
-        "step": "broad-discovery",
+        "step": "arena-discovery-2",
+        "step_kind": "arena",
         "fix_verification": {
             "source_round_id": "arena-1",
             "source_lane": "review_t3",

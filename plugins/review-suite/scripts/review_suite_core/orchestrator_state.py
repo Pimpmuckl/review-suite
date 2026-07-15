@@ -1015,22 +1015,41 @@ def _profile_step_is_discovery(profile_step: dict[str, Any]) -> bool:
     return "discovery" in name and not bool(profile_step.get("arena_round"))
 
 
-def _skip_remaining_discovery_to_signoff(
+def _advance_after_clean_discovery_or_arena(
     state: dict[str, Any], profile_step: dict[str, Any]
 ) -> None:
-    if not _profile_step_is_discovery(profile_step):
+    arena_round = bool(profile_step.get("arena_round"))
+    if not arena_round and not _profile_step_is_discovery(profile_step):
         return
     index = _nonnegative_int(profile_step.get("index"), field="profile_step.index")
     steps = _review_plan_steps(state)
+    arena_stage = tuple(
+        steps[index].get(key) for key in ("lane", "task_class", "rating_pool_id")
+    )
     for next_index in range(index + 1, len(steps)):
-        name = str(steps[next_index].get("name") or "").strip()
-        if "signoff" in name:
+        next_step = steps[next_index]
+        next_arena_stage = tuple(
+            next_step.get(key) for key in ("lane", "task_class", "rating_pool_id")
+        )
+        if arena_round and (
+            _profile_step_kind(next_step) != "arena" or next_arena_stage != arena_stage
+        ):
             progress = _review_progress(state)
             if int(progress["next_step_index"]) < next_index:
                 _set_review_progress(
                     state, next_step_index=next_index, current_step=None
                 )
             return
+        name = str(steps[next_index].get("name") or "").strip()
+        if not arena_round and "signoff" in name:
+            progress = _review_progress(state)
+            if int(progress["next_step_index"]) < next_index:
+                _set_review_progress(
+                    state, next_step_index=next_index, current_step=None
+                )
+            return
+    if arena_round:
+        _set_review_progress(state, next_step_index=len(steps), current_step=None)
 
 
 def _profile_step_reruns_after_findings(
@@ -1838,7 +1857,7 @@ def record_clean_decision(
                 lane=resolved_lane,
                 reviewed_head=head,
             )
-            _skip_remaining_discovery_to_signoff(next_state, profile_step)
+            _advance_after_clean_discovery_or_arena(next_state, profile_step)
     if completed_profile_step and review_profile_has_next_step(next_state):
         _set_review_green(next_state, "unknown")
         _set_stage(next_state, STAGE_CREATED, _next_profile_step_action(next_state))
