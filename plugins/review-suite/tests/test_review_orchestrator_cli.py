@@ -2115,6 +2115,34 @@ def test_id_show_status_reports_cycle_without_advancing(
     assert _cycle_payload(state_dir, public_id) == before_state
 
 
+@pytest.mark.parametrize(
+    ("reviewer_is_live", "expected_runtime"),
+    [(True, "active"), (False, "collection_pending")],
+)
+def test_review_runtime_label(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    reviewer_is_live: bool,
+    expected_runtime: str,
+) -> None:
+    monkeypatch.setattr(
+        review,
+        "_load_output_round_payload",
+        lambda *_args, **_kwargs: {"status": "running", "runs": [{"pid": 123}]},
+    )
+    monkeypatch.setattr(
+        review,
+        "round_has_live_reviewer_process",
+        lambda payload: reviewer_is_live,
+    )
+    state = {
+        "pending_action": {"kind": "collect-review-step", "round_id": "round-1"},
+        "rounds": [{"round_id": "round-1"}],
+    }
+
+    assert review._review_runtime_label(state, state_dir=tmp_path) == expected_runtime
+
+
 def test_show_status_requires_id(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

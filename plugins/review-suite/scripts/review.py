@@ -104,6 +104,7 @@ from review_suite_local import (
     load_round,
     print_reviewer_output_section,
     public_task_name,
+    round_has_live_reviewer_process,
     round_needs_caller_grade,
     terminal_review_command,
     unique_round_state_dirs,
@@ -1077,6 +1078,21 @@ def _validation_summary(state: dict[str, Any]) -> dict[str, str]:
     }
 
 
+def _review_runtime_label(state: dict[str, Any], *, state_dir: Path) -> str | None:
+    pending = dict(state.get("pending_action") or {})
+    if str(pending.get("kind") or "") != "collect-review-step":
+        return None
+    round_record = _round_record_by_id(
+        state, str(pending.get("round_id") or "").strip()
+    )
+    payload = _load_output_round_payload(state_dir, round_record)
+    if str(payload.get("status") or "") != "running" or not payload.get("runs"):
+        return None
+    return (
+        "active" if round_has_live_reviewer_process(payload) else "collection_pending"
+    )
+
+
 def _next_action_label(summary: dict[str, Any], action: dict[str, Any] | None) -> str:
     if bool(summary.get("done")):
         return "none"
@@ -1155,6 +1171,8 @@ def _show_status(state: dict[str, Any], *, state_dir: Path) -> int:
         payload["progress"] = progress
     if current := _current_label(state):
         payload["current"] = current
+    if runtime := _review_runtime_label(state, state_dir=state_dir):
+        payload["runtime"] = runtime
     payload["rounds"] = len(
         [item for item in list(state.get("rounds") or []) if isinstance(item, dict)]
     )
