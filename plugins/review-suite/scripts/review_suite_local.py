@@ -2080,6 +2080,7 @@ def _balanced_configured_variant_group(
     group_size: int,
     excluded_variant_ids: set[str],
 ) -> list[dict[str, Any]]:
+    settings = roster.get("settings", {})
     if group_size > len(PUBLIC_REVIEWER_LABELS):
         raise ValueError(
             f"configured arena group exceeds {len(PUBLIC_REVIEWER_LABELS)} reviewer slots"
@@ -2134,19 +2135,43 @@ def _balanced_configured_variant_group(
     def meetings(left: str, right: str) -> int:
         return pair_counts.get(tuple(sorted((left, right))), 0)
 
+    available_variants = [indexed[variant_id] for variant_id in available_ids]
+    under_sampled_ids = [
+        variant["id"]
+        for variant in available_variants
+        if is_under_sampled(variant, sample_counts, settings, available_variants)
+    ]
+    under_sampled_id_set = set(under_sampled_ids)
+    established_ids = [
+        variant_id
+        for variant_id in available_ids
+        if variant_id not in under_sampled_id_set
+    ]
     selected: list[str] = []
-    while len(selected) < group_size:
-        remaining = [item for item in available_ids if item not in selected]
-        selected.append(
-            min(
-                remaining,
-                key=lambda item: (
-                    sum(meetings(item, chosen) for chosen in selected),
-                    sample_counts.get(item, 0),
-                    order[item],
-                ),
+
+    def select_from(candidates: list[str], count: int) -> None:
+        for _ in range(count):
+            remaining = [item for item in candidates if item not in selected]
+            if not remaining:
+                return
+            selected.append(
+                min(
+                    remaining,
+                    key=lambda item: (
+                        sum(meetings(item, chosen) for chosen in selected),
+                        sample_counts.get(item, 0),
+                        order[item],
+                    ),
+                )
             )
-        )
+
+    established_slots = min(len(established_ids), group_size // 2)
+    select_from(
+        under_sampled_ids,
+        min(len(under_sampled_ids), group_size - established_slots),
+    )
+    select_from(established_ids, min(len(established_ids), group_size - len(selected)))
+    select_from(available_ids, group_size - len(selected))
     return [indexed[variant_id] for variant_id in selected]
 
 
