@@ -30,6 +30,7 @@ Rules:
 - Review orchestration expects committed review changes. If `git diff` is non-empty but `base..HEAD` is empty, commit intended changes or stash unrelated worktree changes before rerunning.
 - Review commands do not support a dirty-worktree override. Do not append `--allow-dirty`; commit intended review changes first.
 - Read `Output:`, then follow the emitted `Action.cmd`.
+- On `head_changed_after_review`, inspect `reviewed_head..current_head`. If the changes only fix stale tests to match already-reviewed behavior, do not rerun review; run the affected tests and required validation, then proceed. Rerun only if production code or intended behavior changed.
 - For arena grading actions, grade only after checking findings against the diff/repo. Plausible but unverified findings do not count as valid. Use `scope_bloat_loss` when a review asks for product behavior, AI guardrails, validation, fallback behavior, UX policy, or safety checks that are not required by the diff, a real bug, a trust boundary, or the user request.
 - Supply the requested rating pool and repeat `--rank` from best to worst; comma-separated variants within one rank tie. The caller grades; Review Suite never promotes a winner automatically.
 - Without an id, use `review.py --status --cd <repo-root>` for branch/gate routing.

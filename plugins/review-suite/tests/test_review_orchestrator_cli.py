@@ -3411,7 +3411,9 @@ def test_github_result_clean_and_waived_are_terminal_for_existing_cycle(
     assert stale["reviewed_head"] == reviewed_head
     assert stale["current_head"] == stale_head
     assert stale["changed_since_review"] == ["app.txt"]
-    assert "stale-test or validation alignment" in stale["note"]
+    assert "review remains green after test-only fixes" in stale["note"]
+    assert "do not rerun the review" in stale["note"]
+    assert "production code or intended behavior changed" in stale["note"]
     assert stale["github_review"] == "waived"
     assert stale["Action"]["blocked_by"] == ["full_suite:unknown", "ci:unknown"]
     assert "--full-suite passed --ci passed" in str(stale["Action"]["cmd"])
@@ -3437,6 +3439,7 @@ def test_github_result_clean_and_waived_are_terminal_for_existing_cycle(
     assert stale["head_changed_after_review"] is True
     assert stale["current_head"] == stale_head
     assert stale["changed_since_review"] == ["app.txt"]
+    assert "review remains green after test-only fixes" in stale["note"]
     assert "Action" not in stale
 
     state = _cycle_payload(state_dir, public_id)

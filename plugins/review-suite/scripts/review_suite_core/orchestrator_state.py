@@ -70,9 +70,10 @@ VALIDATION_STATUSES = {"unknown", "pending", "passed", "failed", "waived", "clas
 VALIDATION_READY_STATUSES = {"passed", "waived", "classified"}
 HEAD_CHANGED_AFTER_GREEN_REVIEW_LADDER = "head_changed_after_review"
 HEAD_CHANGED_AFTER_GREEN_REVIEW_NOTE = (
-    "Review was green before the current HEAD. If the changes since review are only stale-test "
-    "or validation alignment, keep this review green and finish validation. Rerun review only "
-    "if runtime/source behavior changed."
+    "The review remains green after test-only fixes. If the changes since the reviewed HEAD "
+    "only correct stale tests to match behavior that was already reviewed, do not rerun the "
+    "review. Run the affected tests and required validation, then proceed. Rerun the review "
+    "only if production code or intended behavior changed."
 )
 CHANGED_SINCE_REVIEW_PATH_LIMIT = 20
 
