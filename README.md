@@ -122,4 +122,6 @@ After source changes, sync the installed plugin cache and marketplace source:
 
 Installed launchers create content-addressed runtime copies under
 `~/.codex/plugin-runtimes/review-suite/`. Run commands through the installed
-plugin cache, not the temporary marketplace clone.
+plugin cache by default. When reviewing Review Suite itself, use the current
+source checkout only if the user explicitly requests dogfooding unsynced source
+changes. Never use the temporary marketplace clone.

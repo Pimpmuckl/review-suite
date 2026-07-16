@@ -13,6 +13,7 @@ Use for local code review.
 
 Path rules:
 - `<review-suite-plugin-root>` is the installed Codex plugin cache root, such as `%USERPROFILE%\.codex\plugins\cache\review-suite\review-suite\0.1.0` for the git marketplace install.
+- When reviewing Review Suite itself, use the current source checkout only if the user explicitly requests dogfooding unsynced source changes.
 - Do not run scripts from `%USERPROFILE%\.codex\.tmp\marketplaces\review-suite`; that is Codex's marketplace source clone.
 - Follow emitted `Action.cmd`; runtime-backed runs should emit installed-launcher paths for follow-up commands.
 

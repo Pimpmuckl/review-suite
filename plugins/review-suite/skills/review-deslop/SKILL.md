@@ -13,7 +13,7 @@ Use only for an explicit cleanup pass. Normal `review` runs manage their own des
 <python> <review-suite-plugin-root>/scripts/review_deslop.py --commit <from-sha> <to-sha> --cd <repo-root>
 ```
 
-`<review-suite-plugin-root>` is the installed Codex plugin cache root, not `%USERPROFILE%\.codex\.tmp\marketplaces\review-suite`.
+Use the installed Codex plugin cache root by default. When reviewing Review Suite itself, use the current source checkout only if the user explicitly requests dogfooding unsynced source changes. Never use `%USERPROFILE%\.codex\.tmp\marketplaces\review-suite`.
 
 Rules:
 - Simplification lane, not correctness signoff.

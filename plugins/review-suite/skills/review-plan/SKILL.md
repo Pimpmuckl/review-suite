@@ -14,7 +14,7 @@ Use before implementation when the plan should be reviewed.
 Get-Content <plan-path> | <python> <review-suite-plugin-root>/scripts/review_plan.py
 ```
 
-`<review-suite-plugin-root>` is the installed Codex plugin cache root, not `%USERPROFILE%\.codex\.tmp\marketplaces\review-suite`.
+Use the installed Codex plugin cache root by default. When reviewing Review Suite itself, use the current source checkout only if the user explicitly requests dogfooding unsynced source changes. Never use `%USERPROFILE%\.codex\.tmp\marketplaces\review-suite`.
 
 Rules:
 - Prefer `--input-file`.
