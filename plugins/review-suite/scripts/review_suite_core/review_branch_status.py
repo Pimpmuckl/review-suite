@@ -337,16 +337,14 @@ def _orchestrator_validation_blockers(state: dict[str, object]) -> list[str]:
     return blockers
 
 
-def _orchestrator_validation_status_command(
-    public_id: str, blockers: list[str], status: str
-) -> str:
+def _orchestrator_validation_status_command(public_id: str, blockers: list[str]) -> str:
     args: list[str] = []
     for blocker in blockers:
         key = blocker.split(":", 1)[0]
         if key == "full_suite":
-            args.extend(["--full-suite", status])
+            args.extend(["--full-suite", "FULL_SUITE_STATUS"])
         if key == "ci":
-            args.extend(["--ci", status])
+            args.extend(["--ci", "CI_STATUS"])
     return _review_command(public_id, extra=tuple(args))
 
 
@@ -354,8 +352,7 @@ def _orchestrator_validation_blocker_action(
     public_id: str, blockers: list[str]
 ) -> dict[str, object]:
     return {
-        "cmd": _orchestrator_validation_status_command(public_id, blockers, "passed"),
-        "alt": _orchestrator_validation_status_command(public_id, blockers, "waived"),
+        "cmd": _orchestrator_validation_status_command(public_id, blockers),
         "blocked_by": blockers,
         "note": "GitHub result is recorded; record full-suite/CI before PR-final or merge-ready.",
     }

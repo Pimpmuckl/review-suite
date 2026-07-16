@@ -743,7 +743,8 @@ def test_orchestrator_action_routes_terminal_github_result_to_validation(
 
     assert action is not None
     assert action["blocked_by"] == ["full_suite:unknown", "ci:unknown"]
-    assert "--full-suite passed --ci passed" in str(action["cmd"])
+    assert "--full-suite FULL_SUITE_STATUS --ci CI_STATUS" in str(action["cmd"])
+    assert "alt" not in action
     assert "--github-review" not in str(action["cmd"])
 
 

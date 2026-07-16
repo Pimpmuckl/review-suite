@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
+import shutil
 import subprocess
 import sys
 from copy import deepcopy
@@ -3333,8 +3335,26 @@ def test_github_result_clean_and_waived_are_terminal_for_existing_cycle(
     assert clean["review_ladder"] == "pending"
     assert clean["next_action"] == "validation"
     assert clean["Action"]["blocked_by"] == ["full_suite:unknown", "ci:unknown"]
-    assert "--full-suite passed --ci passed" in str(clean["Action"]["cmd"])
-    assert "--full-suite waived --ci waived" in str(clean["Action"]["alt"])
+    assert "--full-suite FULL_SUITE_STATUS --ci CI_STATUS" in str(
+        clean["Action"]["cmd"]
+    )
+    assert "alt" not in clean["Action"]
+
+    fake_home = tmp_path / "home"
+    default_state_dir = fake_home / ".codex" / "state" / "review-suite"
+    shutil.copytree(state_dir, default_state_dir)
+    before = _cycle_payload(default_state_dir, public_id)
+    command = str(clean["Action"]["cmd"])
+    invalid = subprocess.run(
+        command if os.name == "nt" else shlex.split(command),
+        capture_output=True,
+        text=True,
+        check=False,
+        env=os.environ | {"HOME": str(fake_home), "USERPROFILE": str(fake_home)},
+    )
+    assert invalid.returncode == 2
+    assert "invalid choice" in invalid.stdout
+    assert _cycle_payload(default_state_dir, public_id) == before
 
     exit_code, clean = _run_review(
         monkeypatch,
@@ -3343,6 +3363,22 @@ def test_github_result_clean_and_waived_are_terminal_for_existing_cycle(
             public_id,
             "--full-suite",
             "classified",
+            "--state-dir",
+            str(state_dir),
+        ],
+    )
+
+    assert exit_code == 0
+    assert clean["next_action"] == "validation"
+    assert clean["Action"]["blocked_by"] == ["ci:unknown"]
+    assert "--full-suite" not in str(clean["Action"]["cmd"])
+    assert "--ci CI_STATUS" in str(clean["Action"]["cmd"])
+
+    exit_code, clean = _run_review(
+        monkeypatch,
+        [
+            "--id",
+            public_id,
             "--ci",
             "classified",
             "--state-dir",
@@ -3416,7 +3452,9 @@ def test_github_result_clean_and_waived_are_terminal_for_existing_cycle(
     assert "production code or intended behavior changed" in stale["note"]
     assert stale["github_review"] == "waived"
     assert stale["Action"]["blocked_by"] == ["full_suite:unknown", "ci:unknown"]
-    assert "--full-suite passed --ci passed" in str(stale["Action"]["cmd"])
+    assert "--full-suite FULL_SUITE_STATUS --ci CI_STATUS" in str(
+        stale["Action"]["cmd"]
+    )
 
     exit_code, stale = _run_review(
         monkeypatch,
@@ -4779,7 +4817,9 @@ def test_fast_mode_skips_deslop_and_runs_review(
     assert exit_code == 0
     assert github_clean["github_review"] == "clean"
     assert github_clean["Action"]["blocked_by"] == ["full_suite:unknown", "ci:unknown"]
-    assert "--full-suite passed --ci passed" in str(github_clean["Action"]["cmd"])
+    assert "--full-suite FULL_SUITE_STATUS --ci CI_STATUS" in str(
+        github_clean["Action"]["cmd"]
+    )
 
 
 def test_fast_manual_github_findings_keeps_re_review_action(
