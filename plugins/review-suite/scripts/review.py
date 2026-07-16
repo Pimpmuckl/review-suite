@@ -2361,15 +2361,15 @@ def _github_handoff_action(state: dict[str, Any], *, state_dir: Path) -> dict[st
 
 
 def _validation_status_command(
-    public_id: str, blockers: list[str], status: str, *, state_dir: Path
+    public_id: str, blockers: list[str], *, state_dir: Path
 ) -> str:
     args: list[str] = []
     for blocker in blockers:
         key = blocker.split(":", 1)[0]
         if key == "full_suite":
-            args.extend(["--full-suite", status])
+            args.extend(["--full-suite", "FULL_SUITE_STATUS"])
         if key == "ci":
-            args.extend(["--ci", status])
+            args.extend(["--ci", "CI_STATUS"])
     return _review_command(public_id, *args, state_dir=state_dir)
 
 
@@ -2377,12 +2377,7 @@ def _validation_blocker_action(
     public_id: str, blockers: list[str], *, state_dir: Path
 ) -> dict[str, Any]:
     return {
-        "cmd": _validation_status_command(
-            public_id, blockers, "passed", state_dir=state_dir
-        ),
-        "alt": _validation_status_command(
-            public_id, blockers, "waived", state_dir=state_dir
-        ),
+        "cmd": _validation_status_command(public_id, blockers, state_dir=state_dir),
         "blocked_by": blockers,
         "note": "GitHub result is recorded; record full-suite/CI before PR-final or merge-ready.",
     }
