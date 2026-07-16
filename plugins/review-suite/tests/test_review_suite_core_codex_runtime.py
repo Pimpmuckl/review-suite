@@ -21,6 +21,7 @@ from review_suite_core.lens_runtime import (
     codex_exec_command,
     codex_exec_review_command,
     codex_review_prompt_instructions,
+    emit_result,
     isolated_runtime_user_config_overrides,
     prepare_codex_review_launch,
     progress_heartbeat_line,
@@ -821,6 +822,54 @@ def test_record_wrapper_session_writes_timestamped_entry(
     assert payload["branch"] == "feature/test"
     assert payload["elapsed_seconds"] == 12.346
     assert payload["recorded_at"].endswith("Z")
+
+
+@pytest.mark.parametrize(
+    ("stderr", "timed_out", "final_message", "retryable"),
+    [
+        (
+            "The process cannot access the file because it is being used by another process.",
+            False,
+            "",
+            True,
+        ),
+        ("[WinError 32] file is in use", False, "", True),
+        ("ERROR_SHARING_VIOLATION", False, "", True),
+        ("process cannot access the file", False, "", False),
+        ("model capacity exhausted", False, "", False),
+        ("startup failed (os error 5)", False, "", False),
+        ("startup failed (WinError 32)", True, "", False),
+        ("startup failed (WinError 32)", False, "completed", False),
+    ],
+)
+def test_emit_result_classifies_only_non_timeout_windows_sharing_violations(
+    capsys: pytest.CaptureFixture[str],
+    stderr: str,
+    timed_out: bool,
+    final_message: str,
+    retryable: bool,
+) -> None:
+    assert (
+        emit_result(
+            tool_name="review-plan",
+            result={
+                "returncode": 1,
+                "stdout": "",
+                "stderr": stderr,
+                "final_message": final_message,
+                "session_id": None,
+                "elapsed_seconds": 1,
+                "timed_out": timed_out,
+            },
+        )
+        == 1
+    )
+
+    output = capsys.readouterr().out
+    assert stderr in output
+    assert ("retryable: true" in output) is retryable
+    assert ("error_code: codex_startup_file_locked" in output) is retryable
+    assert ("Retry the review" in output) is retryable
 
 
 def test_unsafe_windows_wsl_fallback_requested_honors_env(

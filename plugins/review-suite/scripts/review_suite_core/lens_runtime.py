@@ -520,6 +520,14 @@ def truncate(text: str | None, *, limit: int = 1200) -> str:
     return value[:limit].rstrip() + "\n...[truncated]..."
 
 
+def _is_windows_sharing_violation(stderr_text: str) -> bool:
+    normalized = stderr_text.lower()
+    return (
+        "process cannot access the file" in normalized
+        and "being used by another process" in normalized
+    ) or bool(re.search(r"\bwinerror\s*32\b|\berror_sharing_violation\b", normalized))
+
+
 def _run_captured_codex_command(
     *,
     tool_name: str,
@@ -687,6 +695,11 @@ def emit_result(
     result: dict[str, str | int | None],
 ) -> int:
     if int(result["returncode"]) != 0:
+        retryable_file_lock = (
+            not result.get("timed_out")
+            and not str(result.get("final_message") or "").strip()
+            and _is_windows_sharing_violation(str(result["stderr"]))
+        )
         payload = {
             "status": "timeout" if result.get("timed_out") else "error",
             "error": f"{tool_name} run timed out"
@@ -697,6 +710,16 @@ def emit_result(
             "stderr": truncate(str(result["stderr"])),
             "stdout": truncate(str(result["stdout"])),
         }
+        if retryable_file_lock:
+            payload.update(
+                {
+                    "error_code": "codex_startup_file_locked",
+                    "retryable": True,
+                    "help": [
+                        "Retry the review after the concurrent Codex startup finishes."
+                    ],
+                }
+            )
         emit_toon(
             {key: value for key, value in payload.items() if value not in (None, "")}
         )
