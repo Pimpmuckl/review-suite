@@ -57,6 +57,7 @@ from review_suite_core.orchestrator_state import (
     GITHUB_RESULT_FINDINGS,
     GITHUB_RESULT_WAIVED,
     GITHUB_RESULT_COMMANDS,
+    CLI_VALIDATION_STATUSES,
     STAGE_BLOCKED,
     STAGE_CRASHED,
     STAGE_CREATED,
@@ -83,6 +84,7 @@ from review_suite_core.orchestrator_state import (
     record_followup_findings,
     record_github_result,
     record_validation_statuses,
+    validation_blockers,
     review_ladder_summary,
     green_review_head_change_summary,
     HEAD_CHANGED_AFTER_GREEN_REVIEW_LADDER,
@@ -113,8 +115,6 @@ from review_suite_local import (
 
 FOLLOWUP_LANE = "review-followup"
 GATE_LANES = {"review_t2", "review_t4"}
-CLI_VALIDATION_STATUSES = ("passed", "failed", "pending", "waived", "classified")
-VALIDATION_READY_STATUSES = {"passed", "waived", "classified"}
 ARENA_REROLL_SLOTS = set(PUBLIC_REVIEWER_LABELS)
 DECISION_COMMANDS = {DECISION_CLEAN, DECISION_FINDINGS}
 NO_DECISION_PENDING_MESSAGE = "no decision is pending for this review cycle"
@@ -155,6 +155,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--focused-validation", choices=CLI_VALIDATION_STATUSES)
     parser.add_argument("--full-suite", choices=CLI_VALIDATION_STATUSES)
     parser.add_argument("--ci", choices=CLI_VALIDATION_STATUSES)
+    parser.add_argument("--validation-note")
     parser.add_argument("--deslop-done", action="store_true")
     parser.add_argument(
         "--status",
@@ -1073,7 +1074,7 @@ def _validation_summary(state: dict[str, Any]) -> dict[str, str]:
     validation = dict(state.get("validation") or {})
     return {
         key: value
-        for key in ("focused", "full_suite", "ci", "review_green")
+        for key in ("focused", "full_suite", "ci", "review_green", "note")
         if (value := str(validation.get(key) or "").strip()) and value != "unknown"
     }
 
@@ -2263,6 +2264,7 @@ def _record_validation_status(
         focused=args.focused_validation,
         full_suite=args.full_suite,
         ci=args.ci,
+        validation_note=args.validation_note,
     )
 
 
@@ -2274,16 +2276,6 @@ def _record_github_result(
         result=str(args.github_result),
         note=args.github_note,
     )
-
-
-def _validation_blockers(state: dict[str, Any]) -> list[str]:
-    validation = dict(state.get("validation") or {})
-    blockers: list[str] = []
-    for key in ("full_suite", "ci"):
-        value = str(validation.get(key) or "unknown").strip() or "unknown"
-        if value not in VALIDATION_READY_STATUSES:
-            blockers.append(f"{key}:{value}")
-    return blockers
 
 
 def _last_decision_is_clean_followup(state: dict[str, Any]) -> bool:
@@ -2354,7 +2346,7 @@ def _github_handoff_action(state: dict[str, Any], *, state_dir: Path) -> dict[st
         action["note"] = (
             "GitHub findings were fixed and locally signed off; request GitHub review again."
         )
-    blockers = _validation_blockers(state)
+    blockers = validation_blockers(state)
     if blockers:
         action["blocked_by"] = blockers
     return action
@@ -2365,11 +2357,20 @@ def _validation_status_command(
 ) -> str:
     args: list[str] = []
     for blocker in blockers:
-        key = blocker.split(":", 1)[0]
+        key, value = blocker.split(":", 1)
         if key == "full_suite":
-            args.extend(["--full-suite", "FULL_SUITE_STATUS"])
+            args.extend(
+                [
+                    "--full-suite",
+                    "waived" if value == "waived_without_note" else "FULL_SUITE_STATUS",
+                ]
+            )
         if key == "ci":
-            args.extend(["--ci", "CI_STATUS"])
+            args.extend(
+                ["--ci", "waived" if value == "waived_without_note" else "CI_STATUS"]
+            )
+    if any(blocker.endswith(":waived_without_note") for blocker in blockers):
+        args.extend(["--validation-note", "WAIVER_REASON"])
     return _review_command(public_id, *args, state_dir=state_dir)
 
 
@@ -2379,7 +2380,7 @@ def _validation_blocker_action(
     return {
         "cmd": _validation_status_command(public_id, blockers, state_dir=state_dir),
         "blocked_by": blockers,
-        "note": "GitHub result is recorded; record full-suite/CI before PR-final or merge-ready.",
+        "note": 'GitHub result is recorded; replace status placeholders with passed, or waived and append --validation-note "reason", before PR-final or merge-ready.',
     }
 
 
@@ -2451,7 +2452,7 @@ def _github_pending_head_change_identity(
 def _github_terminal_action(
     state: dict[str, Any], public_id: str, *, state_dir: Path
 ) -> dict[str, Any] | None:
-    blockers = _validation_blockers(state)
+    blockers = validation_blockers(state)
     if blockers:
         return _validation_blocker_action(public_id, blockers, state_dir=state_dir)
     return None
@@ -2613,6 +2614,8 @@ def _render(state: dict[str, Any], *, state_dir: Path) -> None:
     github_status = str(github_review.get("status") or "").strip()
     if github_status and github_status != "unknown":
         payload["github_review"] = github_status
+    if validation := _validation_summary(state):
+        payload["validation"] = validation
     emit_toon(payload)
 
 
@@ -2676,6 +2679,10 @@ def main() -> int:
         has_validation_status = _has_validation_status(args)
         if args.verbose and not args.status:
             raise ValueError("--verbose requires --status")
+        if args.validation_note and not has_validation_status:
+            raise ValueError(
+                "--validation-note requires --full-suite waived or --ci waived"
+            )
         if args.status:
             if args.id:
                 raise ValueError(
@@ -2694,6 +2701,7 @@ def main() -> int:
                 or args.focused_validation
                 or args.full_suite
                 or args.ci
+                or args.validation_note
                 or args.deslop_done
                 or args.skip_deslop
                 or args.show_findings
@@ -2860,6 +2868,8 @@ def main() -> int:
                 _render(saved, state_dir=state_dir)
                 return 0
             if args.decision:
+                if has_validation_status:
+                    state = _record_validation_status(state, args)
                 try:
                     state = _apply_decision(
                         state, str(args.decision), state_dir=state_dir
@@ -2876,7 +2886,7 @@ def main() -> int:
                         recovery_state, state_dir=state_dir, decision=str(args.decision)
                     )
                     return 0
-            if has_validation_status:
+            if has_validation_status and not args.decision:
                 state = _record_validation_status(state, args)
             elif not args.decision:
                 state = (

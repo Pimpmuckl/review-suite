@@ -87,7 +87,7 @@ GATE_SIGNOFF_SCOPE_CHECK = (
     "or unclear product decision. Code only valid findings; if advice conflicts with explicit user/product direction, "
     "pause and escalate the tradeoff to the user or parent agent. Focused seam validation can be sufficient to launch "
     "the next review round before slow full-suite/CI completes; full-suite/CI is merge-readiness, not review-launch. "
-    "Record full-suite/CI as pending, passed, failed, or intentionally waived/classified; do not call PR final/merge-ready "
+    "Record full-suite/CI as pending, passed, failed, or explicitly waived with a reason; do not call PR final/merge-ready "
     "while it is pending or unknown, and investigate/fix relevant failures first."
 )
 GATE_SIGNOFF_NOTE = "clean only if all reviewer output is effectively green"
@@ -95,7 +95,7 @@ GATE_FINDINGS_SCOPE_CHECK = (
     "Findings recorded; no workflow anchor. Classify each item before fixing: valid finding, "
     "non-finding suggestion/product preference, or unclear product decision. Code only valid findings. Focused seam "
     "validation can launch the next review round while full-suite/CI continues as a merge-readiness check; record "
-    "full-suite/CI as pending, passed, failed, or intentionally waived/classified; do not call PR final/merge-ready "
+    "full-suite/CI as pending, passed, failed, or explicitly waived with a reason; do not call PR final/merge-ready "
     "while it is pending or unknown, and investigate/fix relevant failures first."
 )
 INLINE_GATE_FALLBACK_MAX_ATTEMPTS_PER_SLOT = 1

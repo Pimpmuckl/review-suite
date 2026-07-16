@@ -19,6 +19,7 @@ from review_suite_core.orchestrator_state import (
     HEAD_CHANGED_AFTER_GREEN_REVIEW_LADDER,
     green_review_head_change_summary,
     review_ladder_summary,
+    validation_blockers,
 )
 from review_gate import (
     gate_signoff_action_payload,
@@ -48,7 +49,6 @@ GATE_FINDINGS_RERUN_REASON = {
 }
 ORCHESTRATOR_HIDDEN_STAGES = {"aborted", "dismissed"}
 ORCHESTRATOR_HEAD_CURRENT_STAGES = {"review-green", "local-green-handoff"}
-VALIDATION_READY_STATUSES = {"passed", "waived", "classified"}
 DECISION_COMMANDS = {"clean", "findings"}
 
 
@@ -327,24 +327,23 @@ def _review_command(public_id: str, *, extra: tuple[str, ...] = ()) -> str:
     )
 
 
-def _orchestrator_validation_blockers(state: dict[str, object]) -> list[str]:
-    validation = dict(state.get("validation") or {})
-    blockers: list[str] = []
-    for key in ("full_suite", "ci"):
-        value = str(validation.get(key) or "unknown").strip() or "unknown"
-        if value not in VALIDATION_READY_STATUSES:
-            blockers.append(f"{key}:{value}")
-    return blockers
-
-
 def _orchestrator_validation_status_command(public_id: str, blockers: list[str]) -> str:
     args: list[str] = []
     for blocker in blockers:
-        key = blocker.split(":", 1)[0]
+        key, value = blocker.split(":", 1)
         if key == "full_suite":
-            args.extend(["--full-suite", "FULL_SUITE_STATUS"])
+            args.extend(
+                [
+                    "--full-suite",
+                    "waived" if value == "waived_without_note" else "FULL_SUITE_STATUS",
+                ]
+            )
         if key == "ci":
-            args.extend(["--ci", "CI_STATUS"])
+            args.extend(
+                ["--ci", "waived" if value == "waived_without_note" else "CI_STATUS"]
+            )
+    if any(blocker.endswith(":waived_without_note") for blocker in blockers):
+        args.extend(["--validation-note", "WAIVER_REASON"])
     return _review_command(public_id, extra=tuple(args))
 
 
@@ -354,7 +353,7 @@ def _orchestrator_validation_blocker_action(
     return {
         "cmd": _orchestrator_validation_status_command(public_id, blockers),
         "blocked_by": blockers,
-        "note": "GitHub result is recorded; record full-suite/CI before PR-final or merge-ready.",
+        "note": 'GitHub result is recorded; replace status placeholders with passed, or waived and append --validation-note "reason", before PR-final or merge-ready.',
     }
 
 
@@ -731,14 +730,14 @@ def _orchestrator_action(
                 is None
             ):
                 return None
-            blockers = _orchestrator_validation_blockers(state)
+            blockers = validation_blockers(state)
             return (
                 _orchestrator_validation_blocker_action(public_id, blockers)
                 if blockers
                 else None
             )
         if _orchestrator_github_review_is_terminal(state, current_head=current_head):
-            blockers = _orchestrator_validation_blockers(state)
+            blockers = validation_blockers(state)
             if not blockers:
                 return None
             action = _orchestrator_validation_blocker_action(public_id, blockers)
@@ -752,7 +751,7 @@ def _orchestrator_action(
                 "cmd": _review_command(public_id, extra=("--github-review",)),
                 "after": "PR create/update",
             }
-            blockers = _orchestrator_validation_blockers(state)
+            blockers = validation_blockers(state)
             if blockers:
                 action["blocked_by"] = blockers
     else:
