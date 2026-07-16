@@ -31,6 +31,7 @@ from review_suite_core.orchestrator_state import (
     mark_followup_review_pending,
     mark_gate_step_pending,
     mark_local_green_handoff,
+    mark_latest_profile_step_rerun_needed,
     mark_retry_requested,
     mark_running,
     mark_review_step_pending,
@@ -40,6 +41,8 @@ from review_suite_core.orchestrator_state import (
     record_followup_clean,
     record_followup_findings,
     record_github_result,
+    record_validation_statuses,
+    validation_blockers,
 )
 
 
@@ -1516,13 +1519,30 @@ def test_gate_findings_require_fix_followup_clean_and_same_gate_rerun(
     ]
     assert can_advance_or_anchor(rerun_clean)
 
+    with pytest.raises(ValueError, match="--validation-note is required"):
+        mark_local_green_handoff(rerun_clean, full_suite="waived")
+    with pytest.raises(ValueError, match="must be one of"):
+        record_validation_statuses(rerun_clean, full_suite="classified")
+
     handoff = mark_local_green_handoff(
-        rerun_clean, focused="passed", full_suite="classified", ci="classified"
+        rerun_clean,
+        focused="passed",
+        full_suite="passed",
+        ci="waived",
+        validation_note="CI unavailable for this docs-only change",
     )
     assert handoff["stage"] == STAGE_LOCAL_GREEN_HANDOFF
     assert handoff["validation"]["focused"] == "passed"
-    assert handoff["validation"]["full_suite"] == "classified"
-    assert handoff["validation"]["ci"] == "classified"
+    assert handoff["validation"]["full_suite"] == "passed"
+    assert handoff["validation"]["ci"] == "waived"
+    assert handoff["validation"]["note"] == "CI unavailable for this docs-only change"
+    reasonless = {
+        **handoff,
+        "validation": {**handoff["validation"], "note": ""},
+    }
+    assert validation_blockers(reasonless) == ["ci:waived_without_note"]
+    rerun = mark_latest_profile_step_rerun_needed(handoff, head="head-3")
+    assert "note" not in rerun["validation"]
 
 
 def test_non_deep_gate_findings_rerun_same_gate_without_followup(

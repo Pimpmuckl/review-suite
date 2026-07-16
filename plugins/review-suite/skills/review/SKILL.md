@@ -43,4 +43,4 @@ Rules:
 - Fix valid findings, then run emitted `review.py --id <id>`.
 - After GitHub review returns, record the result on the owning review id: `--github-result clean`, `--github-result findings`, or `--github-result waived --github-note "why"`. Do not start a new ladder for GitHub findings.
 - After an id exists, do not repeat creation flags.
-- Do not call PR-final/merge-ready until full-suite/CI is passed or waived/classified.
+- Do not call PR-final/merge-ready until full-suite/CI is passed or explicitly waived with a reason.

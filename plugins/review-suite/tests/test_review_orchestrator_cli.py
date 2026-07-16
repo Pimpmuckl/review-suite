@@ -1347,7 +1347,9 @@ def test_create_resume_and_id_reprint_use_one_pending_action(
             "--full-suite",
             "passed",
             "--ci",
-            "classified",
+            "waived",
+            "--validation-note",
+            "CI unavailable for this docs-only change",
             "--state-dir",
             str(state_dir),
         ],
@@ -1361,7 +1363,8 @@ def test_create_resume_and_id_reprint_use_one_pending_action(
     )
     state = _cycle_payload(state_dir, public_id)
     assert state["validation"]["full_suite"] == "passed"
-    assert state["validation"]["ci"] == "classified"
+    assert state["validation"]["ci"] == "waived"
+    assert state["validation"]["note"] == "CI unavailable for this docs-only change"
     assert len(deslop_calls) == 1
     assert len(review_calls) == 2
 
@@ -3338,7 +3341,12 @@ def test_github_result_clean_and_waived_are_terminal_for_existing_cycle(
     assert "--full-suite FULL_SUITE_STATUS --ci CI_STATUS" in str(
         clean["Action"]["cmd"]
     )
+    assert '--validation-note "reason"' in clean["Action"]["note"]
     assert "alt" not in clean["Action"]
+    repair_command = review._validation_status_command(
+        public_id, ["ci:waived_without_note"], state_dir=state_dir
+    )
+    assert "--ci waived --validation-note WAIVER_REASON" in repair_command
 
     fake_home = tmp_path / "home"
     default_state_dir = fake_home / ".codex" / "state" / "review-suite"
@@ -3356,31 +3364,52 @@ def test_github_result_clean_and_waived_are_terminal_for_existing_cycle(
     assert "invalid choice" in invalid.stdout
     assert _cycle_payload(default_state_dir, public_id) == before
 
+    before_validation = _cycle_payload(state_dir, public_id)
+    with pytest.raises(ValueError, match="invalid choice.*classified"):
+        review.build_parser().parse_args(
+            ["--id", public_id, "--full-suite", "classified"]
+        )
+    assert _cycle_payload(state_dir, public_id) == before_validation
+
+    errors: list[str] = []
+    monkeypatch.setattr(
+        review,
+        "emit_error",
+        lambda message, **kwargs: errors.append(str(message)) or 2,
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "review.py",
+            "--id",
+            public_id,
+            "--full-suite",
+            "passed",
+            "--ci",
+            "waived",
+        ],
+    )
+    monkeypatch.setattr(review, "default_state_dir", lambda: state_dir)
+    exit_code = review.main()
+
+    assert exit_code == 2
+    assert errors == [
+        "--validation-note is required when --full-suite or --ci is waived"
+    ]
+    assert _cycle_payload(state_dir, public_id) == before_validation
+
     exit_code, clean = _run_review(
         monkeypatch,
         [
             "--id",
             public_id,
             "--full-suite",
-            "classified",
-            "--state-dir",
-            str(state_dir),
-        ],
-    )
-
-    assert exit_code == 0
-    assert clean["next_action"] == "validation"
-    assert clean["Action"]["blocked_by"] == ["ci:unknown"]
-    assert "--full-suite" not in str(clean["Action"]["cmd"])
-    assert "--ci CI_STATUS" in str(clean["Action"]["cmd"])
-
-    exit_code, clean = _run_review(
-        monkeypatch,
-        [
-            "--id",
-            public_id,
+            "passed",
             "--ci",
-            "classified",
+            "waived",
+            "--validation-note",
+            "CI unavailable for this docs-only change",
             "--state-dir",
             str(state_dir),
         ],
@@ -3392,6 +3421,7 @@ def test_github_result_clean_and_waived_are_terminal_for_existing_cycle(
     assert clean["review_ladder"] == "complete"
     assert clean["next_action"] == "none"
     assert clean["github_review"] == "clean"
+    assert clean["validation"]["note"] == "CI unavailable for this docs-only change"
     assert "Action" not in clean
 
     state = _cycle_payload(state_dir, public_id)
@@ -3462,9 +3492,11 @@ def test_github_result_clean_and_waived_are_terminal_for_existing_cycle(
             "--id",
             public_id,
             "--full-suite",
-            "classified",
+            "waived",
             "--ci",
-            "classified",
+            "waived",
+            "--validation-note",
+            "Full suite and CI waived for this test-only head change",
             "--state-dir",
             str(state_dir),
         ],
@@ -3600,9 +3632,9 @@ def test_pending_github_review_after_amend_reuses_same_id_for_signoff(
             "--id",
             public_id,
             "--full-suite",
-            "classified",
+            "passed",
             "--ci",
-            "classified",
+            "passed",
             "--state-dir",
             str(state_dir),
         ],
@@ -4549,6 +4581,35 @@ def test_id_rerun_after_gate_pending_amend_records_gate_findings(
     assert state["stage"] == "decision-pending"
     assert state["pending_action"]["round_id"] == "phase_gate-round-1"
     assert state["rounds"][2]["reviewed_head"] == original_head
+    assert _gate_signoff_decisions(state_dir) == []
+
+    before_invalid_waiver = state
+    errors: list[str] = []
+    monkeypatch.setattr(
+        review,
+        "emit_error",
+        lambda message, **kwargs: errors.append(str(message)) or 2,
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "review.py",
+            "--id",
+            public_id,
+            "--decision",
+            "clean",
+            "--ci",
+            "waived",
+        ],
+    )
+    monkeypatch.setattr(review, "default_state_dir", lambda: state_dir)
+
+    assert review.main() == 2
+    assert errors == [
+        "--validation-note is required when --full-suite or --ci is waived"
+    ]
+    assert _cycle_payload(state_dir, public_id) == before_invalid_waiver
     assert _gate_signoff_decisions(state_dir) == []
 
     amended_head = _amend_file(repo, "app.txt", "feature\nfix gate finding\n")

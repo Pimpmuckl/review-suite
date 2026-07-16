@@ -66,8 +66,9 @@ NO_WORK_STAGES = {
     STAGE_CRASHED,
     STAGE_RUNNING,
 }
-VALIDATION_STATUSES = {"unknown", "pending", "passed", "failed", "waived", "classified"}
-VALIDATION_READY_STATUSES = {"passed", "waived", "classified"}
+CLI_VALIDATION_STATUSES = ("passed", "failed", "pending", "waived")
+VALIDATION_STATUSES = {"unknown", *CLI_VALIDATION_STATUSES}
+VALIDATION_READY_STATUSES = {"passed", "waived"}
 HEAD_CHANGED_AFTER_GREEN_REVIEW_LADDER = "head_changed_after_review"
 HEAD_CHANGED_AFTER_GREEN_REVIEW_NOTE = (
     "The review remains green after test-only fixes. If the changes since the reviewed HEAD "
@@ -152,12 +153,20 @@ def _github_review_matches_head(state: dict[str, Any], comparison_head: str) -> 
 
 
 def _validation_ready(state: dict[str, Any]) -> bool:
+    return not validation_blockers(state)
+
+
+def validation_blockers(state: dict[str, Any]) -> list[str]:
     validation = dict(state.get("validation") or {})
+    note = _optional_text(validation.get("note"))
+    blockers: list[str] = []
     for key in ("full_suite", "ci"):
         value = str(validation.get(key) or "unknown").strip() or "unknown"
         if value not in VALIDATION_READY_STATUSES:
-            return False
-    return True
+            blockers.append(f"{key}:{value}")
+        elif value == "waived" and not note:
+            blockers.append(f"{key}:waived_without_note")
+    return blockers
 
 
 def _deslop_closed_or_untracked(state: dict[str, Any]) -> bool:
@@ -1231,6 +1240,7 @@ def mark_latest_profile_step_rerun_needed(
     validation = next_state.setdefault("validation", {})
     for key in ("focused", "full_suite", "ci"):
         validation[key] = "unknown"
+    validation.pop("note", None)
     action = _rewind_profile_step_action(next_state, profile_step)
     _set_review_green(next_state, "unknown")
     _set_stage(next_state, STAGE_CREATED, action)
@@ -2102,11 +2112,26 @@ def record_validation_statuses(
     focused: str | None = None,
     full_suite: str | None = None,
     ci: str | None = None,
+    validation_note: str | None = None,
 ) -> dict[str, Any]:
+    note = _optional_text(validation_note)
+    if "waived" in (full_suite, ci) and not note:
+        raise ValueError(
+            "--validation-note is required when --full-suite or --ci is waived"
+        )
+    if note and "waived" not in (full_suite, ci):
+        raise ValueError(
+            "--validation-note requires --full-suite waived or --ci waived"
+        )
     next_state = _copy_state(state)
     _set_validation_status(next_state, "focused", focused)
     _set_validation_status(next_state, "full_suite", full_suite)
     _set_validation_status(next_state, "ci", ci)
+    validation = next_state.setdefault("validation", {})
+    if note:
+        validation["note"] = note
+    elif not any(validation.get(key) == "waived" for key in ("full_suite", "ci")):
+        validation.pop("note", None)
     return next_state
 
 
@@ -2116,13 +2141,18 @@ def mark_local_green_handoff(
     focused: str | None = None,
     full_suite: str | None = None,
     ci: str | None = None,
+    validation_note: str | None = None,
 ) -> dict[str, Any]:
     if not can_advance_or_anchor(state):
         raise ValueError(
             "local-green handoff requires review_green without unresolved findings or gate rerun"
         )
     next_state = record_validation_statuses(
-        state, focused=focused, full_suite=full_suite, ci=ci
+        state,
+        focused=focused,
+        full_suite=full_suite,
+        ci=ci,
+        validation_note=validation_note,
     )
     _set_stage(next_state, STAGE_LOCAL_GREEN_HANDOFF)
     return next_state

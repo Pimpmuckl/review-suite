@@ -119,7 +119,7 @@ def test_standard_review_contract_includes_current_codex_review_dimensions() -> 
         in prompt
     )
     assert "full-suite/CI remains a merge-readiness requirement" in prompt
-    assert "pending, passed, failed, or intentionally waived/classified" in prompt
+    assert "pending, passed, failed, or explicitly waived with a reason" in prompt
     assert (
         "do not call a PR final or merge-ready while that status is unknown" in prompt
     )

@@ -19,4 +19,4 @@ Rules:
 - Code only valid findings.
 - Record the GitHub result on the owning local review id: `review.py --id <id> --github-result clean|findings`, or `--github-result waived --github-note "why"` when GitHub cannot run or no-GitHub is approved.
 - After `--github-result findings`, fix the issue and follow the emitted `review.py --id <id>` actions; the same id reruns final local signoff before GitHub is requested again.
-- Do not call the PR final/merge-ready until full-suite/CI is passed or waived/classified.
+- Do not call the PR final/merge-ready until full-suite/CI is passed or explicitly waived with a reason.

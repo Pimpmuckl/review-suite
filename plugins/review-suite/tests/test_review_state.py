@@ -446,7 +446,7 @@ def test_review_state_status_surfaces_orchestrator_progress(
     assert "review_t1.py" not in str(emitted[0]["Action"])
 
 
-def test_review_state_status_marks_terminal_orchestrator_cycle_done(
+def test_review_state_status_keeps_persisted_classified_blocked(
     monkeypatch, tmp_path: Path
 ) -> None:
     emitted: list[dict[str, object]] = []
@@ -496,11 +496,11 @@ def test_review_state_status_marks_terminal_orchestrator_cycle_done(
     assert review.main() == 0
 
     assert emitted[0]["review"] == "rvw_done"
-    assert emitted[0]["status"] == "done"
-    assert emitted[0]["done"] is True
-    assert emitted[0]["review_ladder"] == "complete"
-    assert emitted[0]["next_action"] == "none"
-    assert "Action" not in emitted[0]
+    assert "status" not in emitted[0]
+    assert emitted[0]["done"] is False
+    assert emitted[0]["review_ladder"] == "pending"
+    assert emitted[0]["next_action"] == "validation"
+    assert emitted[0]["Action"]["blocked_by"] == ["ci:classified"]
 
 
 def test_review_state_status_keeps_patch_equivalent_base_drift_done(
@@ -527,7 +527,11 @@ def test_review_state_status_keeps_patch_equivalent_base_drift_done(
             },
             "review_heads": {"last_reviewed_head": old_head},
             "github_review": {"status": "clean", "reviewed_head": old_head},
-            "validation": {"full_suite": "passed", "ci": "classified"},
+            "validation": {
+                "full_suite": "passed",
+                "ci": "waived",
+                "note": "CI unavailable for this docs-only change",
+            },
             "deslop": {"tracked": False},
             "base_drift": {
                 "patch_equivalent": True,
@@ -744,8 +748,13 @@ def test_orchestrator_action_routes_terminal_github_result_to_validation(
     assert action is not None
     assert action["blocked_by"] == ["full_suite:unknown", "ci:unknown"]
     assert "--full-suite FULL_SUITE_STATUS --ci CI_STATUS" in str(action["cmd"])
+    assert '--validation-note "reason"' in str(action["note"])
     assert "alt" not in action
     assert "--github-review" not in str(action["cmd"])
+    repair = review_state._orchestrator_validation_blocker_action(
+        "rvw_fast", ["ci:waived_without_note"]
+    )
+    assert "--ci waived --validation-note WAIVER_REASON" in str(repair["cmd"])
 
 
 def test_orchestrator_action_suppresses_stale_terminal_github_result(

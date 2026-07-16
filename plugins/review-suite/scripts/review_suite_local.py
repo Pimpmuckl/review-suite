@@ -229,7 +229,7 @@ def build_correctness_review_contract() -> str:
         "If a concern depends on ambiguous product scope or conflicts with explicit user/product direction, report it under `Scope questions / suggestions (non-findings)` with the tradeoff to escalate instead of assigning severity.\n"
         "Do not recommend code changes that reverse explicit product intent.\n"
         "When discussing validation, distinguish focused seam validation from full-suite/CI validation: focused review-relevant checks can be enough to launch the next review round before slow full-suite/CI completes; full-suite/CI remains a merge-readiness requirement.\n"
-        "Record full-suite/CI validation status when relevant as pending, passed, failed, or intentionally waived/classified; do not call a PR final or merge-ready while that status is unknown, and investigate/fix relevant failures first.\n"
+        "Record full-suite/CI validation status when relevant as pending, passed, failed, or explicitly waived with a reason; do not call a PR final or merge-ready while that status is unknown, and investigate/fix relevant failures first.\n"
         "When applicable, flag correctness-relevant risks from oversized or hard-to-stage diffs, external integration surface breaks, missing regression or integration coverage, and unbounded agent-context injection.\n"
         "Skip style-only comments. If there are no issues, say 'No findings.'\n"
         "Do not suggest localized guards when the evidence points to broader ownership, fallback, retry, lifecycle, concurrency, or persistence issues.\n"
