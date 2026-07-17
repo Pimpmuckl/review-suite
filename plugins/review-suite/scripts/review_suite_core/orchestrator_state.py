@@ -1140,6 +1140,7 @@ def _mark_profile_review_budget_exhausted_inplace(
     profile_step: dict[str, Any],
     *,
     max_review_rounds: int,
+    fix_verification: dict[str, Any] | None,
 ) -> None:
     active["status"] = "review-round-budget-exhausted"
     action = {
@@ -1149,8 +1150,9 @@ def _mark_profile_review_budget_exhausted_inplace(
         "step_index": profile_step.get("index"),
         "step": profile_step.get("name"),
         "max_review_rounds": max_review_rounds,
-        "fix_verification": _findings_fix_context(active),
     }
+    if fix_verification:
+        action["fix_verification"] = _compact(deepcopy(fix_verification))
     _set_review_green(state, "failed")
     _set_stage(state, STAGE_FIX_PENDING, action)
 
@@ -1186,6 +1188,7 @@ def _mark_profile_fix_review_needed_inplace(
             active,
             profile_step,
             max_review_rounds=max_review_rounds,
+            fix_verification=_findings_fix_context(active),
         )
         return True
     state["active_findings"] = None
@@ -2030,6 +2033,22 @@ def mark_review_step_retry(
     index = _nonnegative_int(step_index, field="step_index")
     name = _required_text(step_name, field="step_name")
     next_state = mark_recovery_resolved(state)
+    profile_step = {"index": index, "name": name}
+    max_review_rounds = _profile_step_max_review_rounds(next_state, profile_step)
+    if (
+        max_review_rounds is not None
+        and _profile_step_review_round_count(next_state, profile_step)
+        >= max_review_rounds
+    ):
+        pending = dict(next_state.get("pending_action") or {})
+        _mark_profile_review_budget_exhausted_inplace(
+            next_state,
+            {"round_id": pending.get("round_id"), "lane": pending.get("lane")},
+            profile_step,
+            max_review_rounds=max_review_rounds,
+            fix_verification=fix_verification,
+        )
+        return next_state
     _set_review_progress(next_state, next_step_index=index, current_step=None)
     action = {"kind": "run-review-step", "step_index": index, "step": name}
     if post_findings_rerun:

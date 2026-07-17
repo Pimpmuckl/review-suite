@@ -1509,6 +1509,11 @@ def _resume_progress(
     state: dict[str, Any], *, state_dir: Path | None = None
 ) -> dict[str, Any]:
     stage = state.get("stage")
+    if (
+        dict(state.get("pending_action") or {}).get("kind")
+        == "review-round-budget-exhausted"
+    ):
+        return state
     if stage in {STAGE_CREATED, STAGE_FOLLOWUP_PENDING}:
         return state
     if stage == STAGE_DECISION_PENDING:

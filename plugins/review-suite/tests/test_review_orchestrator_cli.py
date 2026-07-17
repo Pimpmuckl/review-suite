@@ -2605,6 +2605,28 @@ def test_new_cycle_rejects_review_before_round_budget_is_exhausted(
     assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 1
 
 
+def test_resume_preserves_review_round_budget_exhaustion(tmp_path: Path) -> None:
+    state = {
+        "public_id": "rvw_example",
+        "stage": "fix-pending",
+        "pending_action": {
+            "kind": "review-round-budget-exhausted",
+            "round_id": "fast-round-2",
+            "lane": "review_t1",
+            "step_index": 0,
+            "step": "fast-signoff",
+            "max_review_rounds": 2,
+        },
+    }
+
+    resumed = review._resume_progress(state, state_dir=tmp_path)
+
+    assert resumed == state
+    action = review._action_payload(resumed, state_dir=tmp_path)
+    assert action is not None
+    assert "--id rvw_example --new-cycle" in str(action["cmd"])
+
+
 def test_fast_review_can_restart_into_deep_without_becoming_a_restart_target(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

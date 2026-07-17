@@ -35,6 +35,7 @@ from review_suite_core.orchestrator_state import (
     mark_retry_requested,
     mark_running,
     mark_review_step_pending,
+    mark_review_step_retry,
     no_work_stage_is_idle,
     record_clean_decision,
     record_findings_decision,
@@ -892,6 +893,59 @@ def test_fast_terminal_findings_stop_after_round_budget(tmp_path: Path) -> None:
     }
     assert exhausted["active_findings"]["status"] == "review-round-budget-exhausted"
     assert exhausted["active_findings"]["fix_head"] == "head-3"
+    assert [item["round_id"] for item in exhausted["rounds"]] == [
+        "signoff-1",
+        "signoff-2",
+    ]
+
+
+def test_fast_blocked_retries_stop_after_round_budget(tmp_path: Path) -> None:
+    state = _cycle(tmp_path, mode="fast")
+    state["review_plan"] = {
+        "steps": [
+            {
+                "name": "fast-signoff",
+                "count": 2,
+                "model": "gpt-5.6-sol",
+                "reasoning_effort": "medium",
+                "max_review_rounds": 2,
+            },
+        ]
+    }
+    first_pending = mark_review_step_pending(
+        state,
+        round_id="signoff-1",
+        lane="review_t1",
+        step_index=0,
+        step_name="fast-signoff",
+        reviewed_head="head-1",
+    )
+    first_retry = mark_review_step_retry(
+        first_pending, step_index=0, step_name="fast-signoff"
+    )
+    second_pending = mark_review_step_pending(
+        first_retry,
+        round_id="signoff-2",
+        lane="review_t1",
+        step_index=0,
+        step_name="fast-signoff",
+        reviewed_head="head-1",
+    )
+
+    exhausted = mark_review_step_retry(
+        second_pending, step_index=0, step_name="fast-signoff"
+    )
+
+    assert exhausted["stage"] == STAGE_FIX_PENDING
+    assert exhausted["validation"]["review_green"] == "failed"
+    assert exhausted["pending_action"] == {
+        "kind": "review-round-budget-exhausted",
+        "round_id": "signoff-2",
+        "lane": "review_t1",
+        "step_index": 0,
+        "step": "fast-signoff",
+        "max_review_rounds": 2,
+    }
     assert [item["round_id"] for item in exhausted["rounds"]] == [
         "signoff-1",
         "signoff-2",
