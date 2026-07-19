@@ -6,7 +6,7 @@ validation tracking, and optional GitHub review.
 ## Install
 
 ```powershell
-codex plugin marketplace add https://github.com/Pimpmuckl/review-suite --ref main
+codex plugin marketplace add Pimpmuckl/review-suite
 codex plugin add review-suite@review-suite
 ```
 
