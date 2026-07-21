@@ -714,14 +714,11 @@ def _print_round_banner(*, task_name: str, round_id: str) -> None:
 
 
 def _orchestrator_banner_task_name(
-    lane: str,
     *,
     step_name: str | None = None,
     step_position: int | None = None,
     step_total: int | None = None,
 ) -> str:
-    if lane != "review_t1":
-        return lane
     name = str(step_name or "").strip()
     if step_position and step_total and step_position > 0 and step_total > 0 and name:
         return f"review {step_position}/{step_total} {name}"
@@ -1145,7 +1142,6 @@ def run_orchestrated_arena_round(
         )
     _print_round_banner(
         task_name=_orchestrator_banner_task_name(
-            lane,
             step_name=step_name,
             step_position=step_position,
             step_total=step_total,
@@ -1273,7 +1269,6 @@ def _run_orchestrator_manual_review_step(
         )
     _print_round_banner(
         task_name=_orchestrator_banner_task_name(
-            lane,
             step_name=step_name,
             step_position=step_position,
             step_total=step_total,
@@ -2464,7 +2459,6 @@ def cmd_grade(args: argparse.Namespace) -> int:
         caller_id=caller_id,
         caller_id_source=caller_id_source,
     )
-    result["task"] = _public_local_task_name(str(round_payload["task_class"]))
     if not _output_isatty():
         emit_toon(result)
     return 0

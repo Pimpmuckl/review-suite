@@ -105,7 +105,6 @@ from review_suite_local import (
     latest_rerolled_round_payload,
     load_round,
     print_reviewer_output_section,
-    public_task_name,
     round_has_live_reviewer_process,
     round_needs_caller_grade,
     terminal_review_command,
@@ -976,18 +975,7 @@ def _show_findings(state: dict[str, Any], *, state_dir: Path) -> int:
             selected = candidate
             payload = candidate_payload
             break
-    round_id = str(payload.get("round_id") or selected.get("round_id") or "").strip()
-    lane = str(selected.get("lane") or payload.get("public_task") or "").strip()
-    task = public_task_name(str(payload.get("task_class") or ""))
     write_text(f"review: {public_id}")
-    write_text(f"round_id: {round_id}")
-    if lane:
-        write_text(f"lane: {lane}")
-    if task:
-        write_text(f"task: {task}")
-    status = str(payload.get("status") or selected.get("status") or "").strip()
-    if status:
-        write_text(f"status: {status}")
     write_text("")
     if not print_reviewer_output_section(
         [run for run in list(payload.get("runs") or []) if isinstance(run, dict)]

@@ -1991,12 +1991,10 @@ def test_id_show_findings_reads_orchestrator_round_payload_without_running(
     round_id = str(state["rounds"][0]["round_id"])
     round_state_dir = state_dir / "orchestrator" / "review-rounds"
     state["rounds"][0]["round_state_dir"] = str(round_state_dir)
-    state["rounds"][0]["status"] = "selected-round-status"
     state["rounds"].append(
         {
             "round_id": "empty-later-round",
             "lane": "review_t2",
-            "status": "decision-pending",
             "round_state_dir": str(round_state_dir),
             "runs": [],
         }
@@ -2049,9 +2047,10 @@ def test_id_show_findings_reads_orchestrator_round_payload_without_running(
     captured = capsys.readouterr()
     assert exit_code == 0
     assert f"review: {public_id}" in captured.out
-    assert f"round_id: {round_id}" in captured.out
-    assert "status: selected-round-status" in captured.out
-    assert "status: decision-pending" not in captured.out
+    assert "round_id:" not in captured.out
+    assert "lane:" not in captured.out
+    assert "task:" not in captured.out
+    assert "status:" not in captured.out
     assert "Alpha recovered finding" in captured.out
     assert len(review_calls) == before_calls
 
