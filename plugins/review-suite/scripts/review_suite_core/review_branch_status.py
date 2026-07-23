@@ -315,6 +315,16 @@ def _public_status_payload(payload: dict[str, object]) -> dict[str, object]:
     return public or payload
 
 
+def _json_status_payload(payload: dict[str, object]) -> dict[str, object]:
+    public = _public_status_payload(payload)
+    public.pop("Action", None)
+    for key in ("base", "branch", "head", "mode"):
+        value = payload.get(key)
+        if value not in (None, "", [], {}):
+            public[key] = value
+    return public
+
+
 def _review_command(public_id: str, *, extra: tuple[str, ...] = ()) -> str:
     return format_command(
         [
@@ -838,7 +848,13 @@ def _orchestrator_status_override(
         ),
     )[-1]
     public_id = str(state.get("public_id") or "").strip()
-    payload: dict[str, object] = {"review": public_id}
+    payload: dict[str, object] = {
+        "review": public_id,
+        "base": current_payload.get("base"),
+        "branch": current_payload.get("branch"),
+        "head": current_payload.get("head"),
+        "mode": _orchestrator_mode_label(state),
+    }
     current_head = str(current_payload.get("head") or "").strip()
     action = _orchestrator_action(
         state, public_id, state_dir=state_dir, current_head=current_head
@@ -1028,5 +1044,8 @@ def cmd_status(args: argparse.Namespace) -> int:
     )
     if action is not None:
         payload["Action"] = action
-    emit_toon(payload if bool(args.verbose) else _public_status_payload(payload))
+    if bool(args.json):
+        print(json.dumps(_json_status_payload(payload), sort_keys=True))
+    else:
+        emit_toon(payload if bool(args.verbose) else _public_status_payload(payload))
     return 0

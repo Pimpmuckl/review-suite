@@ -371,6 +371,141 @@ def test_review_state_status_verbose_keeps_router_details(
     assert emitted[0]["Action"]["round_id"] == "gate-findings-1"
 
 
+def test_review_state_status_json_emits_sanitized_running_review(
+    monkeypatch, tmp_path: Path, capsys
+) -> None:
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    repo.mkdir()
+    _write_orchestrator_cycle(
+        state_dir,
+        "running.json",
+        {
+            "public_id": "rvw_running",
+            "stage": "decision-pending",
+            "mode": {"requested": "normal", "effective": "normal"},
+            "identity": {
+                "cwd": str(review_state.normalize_review_cwd_value(repo)),
+                "base": "main",
+                "branch": "feature/json",
+            },
+            "pending_action": {
+                "kind": "decision",
+                "lane": "review_t1",
+                "round_id": "round-private",
+                "step": "broad-discovery",
+                "step_index": 0,
+            },
+            "review_plan": {"steps": [{"name": "broad-discovery", "kind": "review"}]},
+        },
+    )
+    monkeypatch.setattr(review_state, "resolve_repo_root", lambda cd: repo)
+    monkeypatch.setattr(
+        review_state,
+        "inspect_workflow_status",
+        lambda **kwargs: {
+            "status": "ok",
+            "base": "main",
+            "branch": "feature/json",
+            "head": "head-1",
+        },
+    )
+    _use_default_state_dir(monkeypatch, state_dir)
+    monkeypatch.setattr(
+        sys, "argv", ["review.py", "--status", "--json", "--base", "main"]
+    )
+
+    assert review.main() == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload == {
+        "base": "main",
+        "branch": "feature/json",
+        "done": False,
+        "head": "head-1",
+        "mode": "normal",
+        "next_action": "continue",
+        "progress": "review 1/1 broad-discovery",
+        "review": "rvw_running",
+        "review_ladder": "pending",
+    }
+
+
+def test_review_state_status_json_without_current_review(
+    monkeypatch, tmp_path: Path, capsys
+) -> None:
+    monkeypatch.setattr(review_state, "resolve_repo_root", lambda cd: tmp_path)
+    monkeypatch.setattr(
+        review_state,
+        "inspect_workflow_status",
+        lambda **kwargs: {
+            "status": "ok",
+            "base": "main",
+            "branch": "feature/json",
+            "head": "head-1",
+            "recommendation": "full-review",
+            "reason": "no_review_anchor",
+        },
+    )
+    _use_default_state_dir(monkeypatch, tmp_path / "state")
+    monkeypatch.setattr(
+        sys, "argv", ["review.py", "--status", "--json", "--base", "main"]
+    )
+
+    assert review.main() == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "ok"
+    assert payload["head"] == "head-1"
+    assert payload["reason"] == "no_review_anchor"
+    assert "review" not in payload
+    assert "Action" not in payload
+
+
+def test_review_state_status_json_preserves_ambiguous_match_failure(
+    monkeypatch, capsys
+) -> None:
+    monkeypatch.setattr(
+        review_state,
+        "resolve_repo_root",
+        lambda cd: (_ for _ in ()).throw(
+            ValueError("multiple active review cycles match this repo")
+        ),
+    )
+    monkeypatch.setattr(sys, "argv", ["review.py", "--status", "--json"])
+
+    assert review.main() == 2
+    assert "multiple active review cycles match this repo" in capsys.readouterr().out
+
+
+def test_review_state_status_default_output_is_unchanged(
+    monkeypatch, tmp_path: Path
+) -> None:
+    emitted: list[dict[str, object]] = []
+    monkeypatch.setattr(review_state, "resolve_repo_root", lambda cd: tmp_path)
+    monkeypatch.setattr(
+        review_state,
+        "inspect_workflow_status",
+        lambda **kwargs: {
+            "status": "ok",
+            "base": "main",
+            "branch": "feature/json",
+            "head": "head-1",
+            "recommendation": "full-review",
+            "reason": "no_review_anchor",
+        },
+    )
+    _use_default_state_dir(monkeypatch, tmp_path / "state")
+    monkeypatch.setattr(review_state, "emit_toon", emitted.append)
+    monkeypatch.setattr(sys, "argv", ["review.py", "--status", "--base", "main"])
+
+    assert review.main() == 0
+    assert list(emitted[0]) == ["status", "recommendation", "reason", "Action"]
+    assert "base" not in emitted[0]
+    assert "branch" not in emitted[0]
+    assert "head" not in emitted[0]
+
+
 def test_review_state_status_surfaces_orchestrator_progress(
     monkeypatch, tmp_path: Path
 ) -> None:
