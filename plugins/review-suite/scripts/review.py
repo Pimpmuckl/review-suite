@@ -171,6 +171,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print the full branch/gate routing snapshot for --status.",
     )
     parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print sanitized JSON for --status.",
+    )
+    parser.add_argument(
         "--skip-deslop",
         "--no-deslop",
         dest="skip_deslop",
@@ -2674,6 +2679,10 @@ def main() -> int:
         args = parser.parse_args()
         state_dir = Path(default_state_dir()).resolve(strict=False)
         has_validation_status = _has_validation_status(args)
+        if args.json and not args.status:
+            raise ValueError("--json requires --status")
+        if args.json and args.verbose:
+            raise ValueError("--json cannot be combined with --verbose")
         if args.verbose and not args.status:
             raise ValueError("--verbose requires --status")
         if args.validation_note and not has_validation_status:
