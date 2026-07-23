@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 from typing import Sequence
@@ -31,6 +33,20 @@ class ExecCalled(Exception):
     pass
 
 
+LAUNCHER_ENTRYPOINTS = (
+    "review.py",
+    "review_deslop.py",
+    "review_followup.py",
+    "review_github.py",
+    "review_plan.py",
+    "review_suite_arena.py",
+    "review_t1.py",
+    "review_t2.py",
+    "review_t3.py",
+    "review_t4.py",
+)
+
+
 def _write(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
@@ -50,6 +66,41 @@ def _make_cache_plugin(codex_home: Path, *, version: str = "1.2.3") -> Path:
     _write(plugin_root / "references" / "default_config.json", "{}\n")
     _write(plugin_root / "assets" / "logo.txt", "asset\n")
     return plugin_root
+
+
+@pytest.mark.parametrize("entrypoint", LAUNCHER_ENTRYPOINTS)
+def test_installed_cache_launcher_does_not_write_source_bytecode(
+    tmp_path: Path, entrypoint: str
+) -> None:
+    codex_home = tmp_path / "codex"
+    source_root = SCRIPT_DIR.parent
+    plugin_root = (
+        codex_home / "plugins" / "cache" / "review-suite" / "review-suite" / "local"
+    )
+    shutil.copytree(
+        source_root,
+        plugin_root,
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+    )
+    env = os.environ.copy()
+    env["CODEX_HOME"] = str(codex_home)
+    env.pop(runtime_bootstrap.DISABLE_ENV, None)
+    env.pop(runtime_bootstrap.LAUNCHER_SCRIPT_ENV, None)
+    env.pop("PYTHONDONTWRITEBYTECODE", None)
+
+    result = subprocess.run(
+        [sys.executable, str(plugin_root / "scripts" / entrypoint), "--help"],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode in {0, 2}, result.stderr
+    assert not list(plugin_root.rglob("__pycache__"))
+    assert not list(plugin_root.rglob("*.pyc"))
+    assert list((codex_home / "plugin-runtimes" / "review-suite").rglob("*.pyc"))
 
 
 def test_cache_launcher_reexecs_to_runtime_and_preserves_argv(
