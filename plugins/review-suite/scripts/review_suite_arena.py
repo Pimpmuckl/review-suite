@@ -10,12 +10,16 @@ import sys
 from pathlib import Path
 from typing import Callable
 
+_previous_dont_write_bytecode = sys.dont_write_bytecode
+sys.dont_write_bytecode = True
+
 from review_suite_runtime_bootstrap import (
     bootstrap_from_installed_cache,
     launcher_script_path,
 )
 
 bootstrap_from_installed_cache(__file__)
+sys.dont_write_bytecode = _previous_dont_write_bytecode
 
 from review_suite_core import (
     AxiArgumentParser,
