@@ -913,16 +913,16 @@ def test_default_roster_includes_gpt_5_6_pricing() -> None:
             "output_per_million_usd": 30.0,
         },
         "gpt-5.6-terra": {
-            "input_per_million_usd": 2.5,
-            "cached_input_per_million_usd": 0.25,
-            "cache_write_input_per_million_usd": 3.125,
-            "output_per_million_usd": 15.0,
+            "input_per_million_usd": 2.0,
+            "cached_input_per_million_usd": 0.2,
+            "cache_write_input_per_million_usd": 2.5,
+            "output_per_million_usd": 12.0,
         },
         "gpt-5.6-luna": {
-            "input_per_million_usd": 1.0,
-            "cached_input_per_million_usd": 0.1,
-            "cache_write_input_per_million_usd": 1.25,
-            "output_per_million_usd": 6.0,
+            "input_per_million_usd": 0.2,
+            "cached_input_per_million_usd": 0.02,
+            "cache_write_input_per_million_usd": 0.25,
+            "output_per_million_usd": 1.2,
         },
     }
     for variant in index.values():
