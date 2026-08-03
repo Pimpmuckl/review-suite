@@ -34,6 +34,7 @@ from review_suite_core import (
     validate_codex_runtime,
     write_text,
 )
+from review_suite_core.orchestrator_store import orchestrator_store_lock
 from review_suite_local import (
     OPERATIONAL_STATE_FILENAME,
     RUN_LOG_FILENAME,
@@ -104,8 +105,11 @@ from review_gate import (
 )
 from review_costs import (
     DEFAULT_COST_REPORT_FILENAME,
+    REVIEW_COSTS_LOCK_NAME,
+    REVIEW_COSTS_LOCK_TIMEOUT_SECONDS,
+    apply_review_cost_delta_best_effort,
     collect_review_cost_rows,
-    launch_review_cost_report_refresh_best_effort,
+    read_review_cost_row_for_cwd,
     read_review_cost_row_cache,
     update_review_cost_row_cache,
     write_review_cost_report,
@@ -272,7 +276,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     costs = sub.add_parser("costs")
     costs.add_argument("--cd")
-    costs.add_argument("--all", action="store_true")
+    costs.add_argument(
+        "--all",
+        action="store_true",
+        help="rebuild all cached rows from canonical history, including implementation estimates",
+    )
     costs.add_argument("--state-dir", default=str(default_state_dir()))
     costs.add_argument("--codex-home")
     costs.add_argument("--output")
@@ -927,8 +935,8 @@ def _completed_orchestrator_review_result(
     write_round(round_state_dir, completed)
     result = public_round_result(completed)
     _print_findings(completed)
-    launch_review_cost_report_refresh_best_effort(
-        state_dir=state_dir, review_cwd=review_cwd
+    apply_review_cost_delta_best_effort(
+        state_dir=state_dir, review_cwd=review_cwd, record=completed
     )
     output_refs = _review_output_refs(
         [run for run in list(completed.get("runs") or []) if isinstance(run, dict)]
@@ -1553,8 +1561,8 @@ def run_benchmarked_round(
     completed["roster_path"] = str(roster_path)
     completed["rubric_path"] = str(rubric_path)
     write_round(state_dir, completed)
-    launch_review_cost_report_refresh_best_effort(
-        state_dir=state_dir, review_cwd=review_cwd
+    apply_review_cost_delta_best_effort(
+        state_dir=state_dir, review_cwd=review_cwd, record=completed
     )
     if not bool(round_result.get("blocked")):
         _record_standalone_review_anchor_for_round(
@@ -1679,11 +1687,6 @@ def _record_grade_result(
     round_payload["graded_at"] = str(record["recorded_at"])
     round_payload.pop("grade_refresh_pending", None)
     write_round(state_dir, round_payload)
-    round_review_cwd = str(round_payload.get("review_cwd") or "").strip()
-    launch_review_cost_report_refresh_best_effort(
-        state_dir=state_dir,
-        review_cwd=Path(round_review_cwd) if round_review_cwd else None,
-    )
     return result
 
 
@@ -1787,8 +1790,8 @@ def cmd_run_round(args: argparse.Namespace) -> int:
         payload["round_id"]
     )
     write_round(state_dir, completed)
-    launch_review_cost_report_refresh_best_effort(
-        state_dir=state_dir, review_cwd=review_cwd
+    apply_review_cost_delta_best_effort(
+        state_dir=state_dir, review_cwd=review_cwd, record=completed
     )
     result = public_round_result(
         completed,
@@ -1937,8 +1940,8 @@ def cmd_reroll_slot(args: argparse.Namespace) -> int:
             task_id=str(completed["task_id_hint"]),
         )
     write_round(state_dir, completed)
-    launch_review_cost_report_refresh_best_effort(
-        state_dir=state_dir, review_cwd=review_cwd
+    apply_review_cost_delta_best_effort(
+        state_dir=state_dir, review_cwd=review_cwd, record=completed
     )
     if not _output_isatty():
         emit_toon(
@@ -2001,6 +2004,9 @@ def cmd_resume_round(args: argparse.Namespace) -> int:
     _print_findings(completed)
     completed["task_id_hint"] = _current_branch_name(review_cwd) or str(
         payload["round_id"]
+    )
+    apply_review_cost_delta_best_effort(
+        state_dir=state_dir, review_cwd=review_cwd, record=completed
     )
     if not bool(result.get("blocked")):
         review_scope = dict(
@@ -2313,10 +2319,6 @@ def cmd_close_gate(args: argparse.Namespace) -> int:
         note=str(args.note or "").strip() or None,
         workflow_anchor_recorded=workflow_anchor_recorded,
     )
-    launch_review_cost_report_refresh_best_effort(
-        state_dir=state_dir,
-        review_cwd=Path(review_cwd_text) if review_cwd_text else None,
-    )
     output = {
         "status": "ok",
         "closed": True,
@@ -2358,7 +2360,11 @@ def _cost_row_payload(row) -> dict[str, object]:
 
 def cmd_costs(args: argparse.Namespace) -> int:
     state_dir = Path(args.state_dir)
-    with state_lock(state_dir, "cost-reports", timeout_seconds=10 * 60):
+    with orchestrator_store_lock(
+        state_dir=state_dir,
+        name=REVIEW_COSTS_LOCK_NAME,
+        timeout_seconds=REVIEW_COSTS_LOCK_TIMEOUT_SECONDS,
+    ):
         return _cmd_costs(args, state_dir=state_dir)
 
 
@@ -2371,18 +2377,32 @@ def _cmd_costs(args: argparse.Namespace, *, state_dir: Path) -> int:
     )
     if review_cwd is None and not include_all:
         review_cwd = resolve_repo_root(None)
-    rows = collect_review_cost_rows(
-        state_dir=state_dir,
-        review_cwd=review_cwd,
-        include_all=include_all,
-        codex_home=Path(args.codex_home) if getattr(args, "codex_home", None) else None,
-    )
+    if include_all:
+        rows = collect_review_cost_rows(
+            state_dir=state_dir,
+            review_cwd=None,
+            include_all=True,
+            codex_home=Path(args.codex_home)
+            if getattr(args, "codex_home", None)
+            else None,
+        )
+        update_review_cost_row_cache(state_dir=state_dir, rows=rows)
+    else:
+        row = read_review_cost_row_for_cwd(state_dir=state_dir, review_cwd=review_cwd)
+        if row is None:
+            raise ValueError(
+                f"no cached cost row for {review_cwd}; run costs --all to rebuild it"
+            )
+        if not row.implementation_costs_refreshed:
+            raise ValueError(
+                f"cached implementation costs are stale for {review_cwd}; run costs --all to rebuild them"
+            )
+        rows = [row]
     output_path = (
         Path(args.output)
         if getattr(args, "output", None)
         else state_dir / DEFAULT_COST_REPORT_FILENAME
     )
-    update_review_cost_row_cache(state_dir=state_dir, rows=rows)
     report_rows = read_review_cost_row_cache(state_dir) or rows
     write_review_cost_report(rows=report_rows, output_path=output_path)
     scoped_totals = {

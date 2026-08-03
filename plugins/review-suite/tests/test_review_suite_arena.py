@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -421,43 +421,47 @@ def test_cmd_close_gate_findings_does_not_record_workflow_anchor(
     assert "full-suite/CI continues as a merge-readiness check" in captured.out
 
 
-def test_cmd_costs_writes_markdown_report(monkeypatch, tmp_path: Path, capsys) -> None:
+def test_cmd_costs_uses_cache_and_ignores_stale_legacy_lock(
+    monkeypatch, tmp_path: Path, capsys
+) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     state_dir = tmp_path / "state"
     output = tmp_path / "costs.md"
-    rows = []
-    locks: list[tuple[str, dict[str, object]]] = []
-
-    class Lock:
-        def __enter__(self):
-            return None
-
-        def __exit__(self, *args):
-            return None
-
-    class Row:
-        repo = "repo"
-        folder = "repo"
-        branch = "feat/costs"
-        pr_number = "42"
-        worker_model = "gpt-5.5 medium"
-        implementation_tokens = 1000
-        implementation_cost_usd = 0.004
-        caller_threads = ()
-        latest_review = "2026-04-27T10:00:00Z"
-        lane_sessions = {"review_t1": 2, "review_t2": 2, "review_t3": 0, "review_t4": 0}
-        review_seconds = 123.0
-        tokens = 456
-        cost_usd = 0.012345
+    row = ReviewCostRow(
+        repo="repo",
+        folder="repo",
+        branch="feat/costs",
+        pr_number="42",
+        worker_model="gpt-5.5 medium",
+        implementation_tokens=1000,
+        implementation_cost_usd=0.004,
+        caller_threads=(),
+        latest_review="2026-04-27T10:00:00Z",
+        lane_sessions={
+            "review_t1": 2,
+            "review_t2": 2,
+            "review_t3": 0,
+            "review_t4": 0,
+            "review_followup": 0,
+        },
+        review_seconds=123.0,
+        tokens=456,
+        cost_usd=0.012345,
+        review_cwd_normalized=str(repo),
+    )
+    update_review_cost_row_cache(state_dir=state_dir, rows=[row])
+    (state_dir / ".locks" / "cost-reports.lock").mkdir(parents=True)
 
     monkeypatch.setattr("review_suite_arena.resolve_repo_root", lambda cd: repo)
     monkeypatch.setattr(
-        "review_suite_arena.state_lock",
-        lambda state_dir, name, **kwargs: locks.append((name, kwargs)) or Lock(),
-    )
-    monkeypatch.setattr(
-        "review_suite_arena.collect_review_cost_rows", lambda **kwargs: rows or [Row()]
+        "review_costs._cached_metadata_for_cwd",
+        lambda value: {
+            "repo": "repo",
+            "folder": "repo",
+            "branch": "feat/costs",
+            "pr_number": "42",
+        },
     )
 
     result = cmd_costs(
@@ -479,10 +483,10 @@ def test_cmd_costs_writes_markdown_report(monkeypatch, tmp_path: Path, capsys) -
     assert "total_cost_usd: 0.012345" in captured.out
     assert "total_implementation_tokens: 1000" in captured.out
     assert "total_implementation_cost_usd: 0.004" in captured.out
-    assert locks == [("cost-reports", {"timeout_seconds": 600})]
+    assert (state_dir / ".locks" / "review-cost-accounting.lock").is_file()
 
 
-def test_cmd_costs_renders_cached_rows_after_scoped_refresh(
+def test_cmd_costs_renders_all_cached_rows_for_scoped_report(
     monkeypatch, tmp_path: Path, capsys
 ) -> None:
     repo = tmp_path / "repo"
@@ -530,11 +534,18 @@ def test_cmd_costs_renders_cached_rows_after_scoped_refresh(
         review_seconds=123.0,
         tokens=456,
         cost_usd=0.012345,
+        review_cwd_normalized=str(repo),
     )
-    update_review_cost_row_cache(state_dir=state_dir, rows=[cached_row])
+    update_review_cost_row_cache(state_dir=state_dir, rows=[cached_row, current_row])
     monkeypatch.setattr("review_suite_arena.resolve_repo_root", lambda cd: repo)
     monkeypatch.setattr(
-        "review_suite_arena.collect_review_cost_rows", lambda **kwargs: [current_row]
+        "review_costs._cached_metadata_for_cwd",
+        lambda value: {
+            "repo": "repo",
+            "folder": "repo",
+            "branch": "feat/costs",
+            "pr_number": "42",
+        },
     )
 
     result = cmd_costs(
@@ -556,6 +567,87 @@ def test_cmd_costs_renders_cached_rows_after_scoped_refresh(
     assert "report_rows: 2" in captured.out
     assert "total_tokens: 456" in captured.out
     assert "report_total_tokens: 756" in captured.out
+
+
+def test_cmd_costs_scoped_missing_cache_points_to_full_rebuild(
+    monkeypatch, tmp_path: Path
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.setattr("review_suite_arena.resolve_repo_root", lambda cd: repo)
+    monkeypatch.setattr(
+        "review_costs._cached_metadata_for_cwd",
+        lambda value: {
+            "repo": "repo",
+            "folder": "repo",
+            "branch": "feat/costs",
+            "pr_number": "-",
+        },
+    )
+
+    with pytest.raises(ValueError, match=r"run costs --all to rebuild it"):
+        cmd_costs(
+            Namespace(
+                cd=str(repo),
+                all=False,
+                state_dir=str(tmp_path / "state"),
+                output=None,
+                json=False,
+            )
+        )
+
+
+def test_cmd_costs_scoped_stale_implementation_points_to_full_rebuild(
+    monkeypatch, tmp_path: Path
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    state_dir = tmp_path / "state"
+    row = ReviewCostRow(
+        repo="repo",
+        folder="repo",
+        branch="feat/costs",
+        pr_number="-",
+        worker_model="-",
+        implementation_tokens=0,
+        implementation_cost_usd=0.0,
+        caller_threads=(),
+        latest_review="2026-04-27T10:00:00Z",
+        lane_sessions={
+            "review_t1": 1,
+            "review_t2": 0,
+            "review_t3": 0,
+            "review_t4": 0,
+            "review_followup": 0,
+        },
+        review_seconds=1,
+        tokens=100,
+        cost_usd=0.01,
+        review_cwd_normalized=str(repo),
+        implementation_costs_refreshed=False,
+    )
+    update_review_cost_row_cache(state_dir=state_dir, rows=[row])
+    monkeypatch.setattr("review_suite_arena.resolve_repo_root", lambda cd: repo)
+    monkeypatch.setattr(
+        "review_costs._cached_metadata_for_cwd",
+        lambda value: {
+            "repo": "repo",
+            "folder": "repo",
+            "branch": "feat/costs",
+            "pr_number": "-",
+        },
+    )
+
+    with pytest.raises(ValueError, match=r"implementation costs are stale.*--all"):
+        cmd_costs(
+            Namespace(
+                cd=str(repo),
+                all=False,
+                state_dir=str(state_dir),
+                output=None,
+                json=False,
+            )
+        )
 
 
 def test_cmd_costs_all_ignores_cd_filter(monkeypatch, tmp_path: Path) -> None:
@@ -739,8 +831,8 @@ def test_cmd_show_last_filters_orchestrator_review_rounds_by_repo(
     assert "Nested latest" in captured.out
 
 
-def _touch_old(path: Path, *, days: int = 30) -> None:
-    timestamp = (datetime.now(timezone.utc) - timedelta(days=days)).timestamp()
+def _touch_old(path: Path) -> None:
+    timestamp = datetime(2026, 6, 1, tzinfo=timezone.utc).timestamp()
     os.utime(path, (timestamp, timestamp))
 
 
@@ -1040,7 +1132,7 @@ def test_has_direct_grade_inputs_requires_complete_tuple() -> None:
     )
 
 
-def test_record_grade_refreshes_state_before_queueing_costs(
+def test_record_grade_refreshes_arena_state_without_cost_work(
     monkeypatch, tmp_path: Path
 ) -> None:
     events: list[tuple[str, object]] = []
@@ -1081,11 +1173,6 @@ def test_record_grade_refreshes_state_before_queueing_costs(
         "review_suite_arena._refresh_state_and_reports_locked",
         lambda **kwargs: events.append(("state", kwargs)),
     )
-    monkeypatch.setattr(
-        "review_suite_arena.launch_review_cost_report_refresh_best_effort",
-        lambda **kwargs: events.append(("costs", kwargs)) or True,
-    )
-
     result = _record_grade_result(
         roster={},
         rubric={},
@@ -1113,7 +1200,6 @@ def test_record_grade_refreshes_state_before_queueing_costs(
         "reports",
         "state",
         "write",
-        "costs",
     ]
     assert events[0][1]["grade_refresh_pending"] is True
     assert events[5][1]["grade_recorded"] is True
@@ -1335,7 +1421,7 @@ def test_run_benchmarked_round_noninteractive_uses_toon_actions_without_stderr_n
         "review_suite_arena._current_branch_name", lambda review_cwd: "branch-1"
     )
     monkeypatch.setattr(
-        "review_suite_arena.launch_review_cost_report_refresh_best_effort",
+        "review_suite_arena.apply_review_cost_delta_best_effort",
         lambda **kwargs: None,
     )
     monkeypatch.setattr(
@@ -2490,7 +2576,7 @@ def test_resume_orchestrator_review_step_collects_existing_running_round(
         "review_suite_arena.collect_round_results", fake_collect_round_results
     )
     monkeypatch.setattr(
-        "review_suite_arena.launch_review_cost_report_refresh_best_effort",
+        "review_suite_arena.apply_review_cost_delta_best_effort",
         lambda **kwargs: None,
     )
     monkeypatch.setattr("review_suite_arena._print_findings", lambda result: False)
