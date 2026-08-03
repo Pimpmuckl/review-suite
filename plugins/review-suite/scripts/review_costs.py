@@ -5,21 +5,21 @@ import json
 import os
 import sqlite3
 import subprocess
-import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from hashlib import blake2s
 from pathlib import Path
 from typing import Any
 
-from review_suite_runtime_bootstrap import launcher_script_path
 from review_suite_core import (
     SUPPORTED_REASONING_EFFORTS,
     SUPPORTED_SERVICE_TIERS,
     cwd_path_from_normalized,
+    load_config,
     normalize_usage_tokens,
     price_usage_tokens,
 )
+from review_suite_core.orchestrator_store import orchestrator_store_lock
 from review_suite_local import (
     _run_is_finalized,
     read_jsonl,
@@ -27,6 +27,7 @@ from review_suite_local import (
     normalize_record_review_cwd_value,
     normalize_review_cwd_value,
     total_usage_tokens,
+    write_json,
 )
 
 LANES = ("review_t1", "review_t2", "review_t3", "review_t4", "review_followup")
@@ -46,6 +47,9 @@ PUBLIC_TASK_TO_LANE = {
 }
 DEFAULT_COST_REPORT_FILENAME = "review_cost_ledger.md"
 DEFAULT_COST_CACHE_DIRNAME = "review_cost_rows"
+REVIEW_COSTS_LOCK_NAME = "review-cost-accounting"
+REVIEW_COSTS_LOCK_TIMEOUT_SECONDS = 10 * 60
+AUTOMATIC_COST_DELTA_LOCK_TIMEOUT_SECONDS = 0
 WRAPPER_SESSION_LOG_FILENAME = "wrapper_sessions.jsonl"
 ORCHESTRATOR_REVIEW_STATE_DIR = Path("orchestrator") / "review-rounds"
 FOLDER_REPO_OVERRIDES = {
@@ -125,6 +129,10 @@ class ReviewCostRow:
     review_seconds: float
     tokens: int
     cost_usd: float
+    review_cwd_normalized: str = ""
+    accounted_run_ids: tuple[str, ...] = ()
+    review_cost_cutover_at: str = ""
+    implementation_costs_refreshed: bool = True
 
 
 def _parse_iso(value: str | None) -> datetime | None:
@@ -739,7 +747,9 @@ def _current_pr_number(review_cwd: Path) -> str:
     return proc.stdout.strip()
 
 
-def _metadata_for_cwd(normalized_cwd: str) -> dict[str, str]:
+def _metadata_for_cwd_impl(
+    normalized_cwd: str, *, include_pr_number: bool
+) -> dict[str, str]:
     review_cwd = cwd_path_from_normalized(normalized_cwd)
     review_cwd_text = str(review_cwd)
     folder = review_cwd.name
@@ -768,8 +778,16 @@ def _metadata_for_cwd(normalized_cwd: str) -> dict[str, str]:
         _repo_from_remote(_git_text(review_cwd, ["remote", "get-url", "origin"]))
         or fallback_repo
     )
-    pr_number = _current_pr_number(review_cwd) or "-"
+    pr_number = (_current_pr_number(review_cwd) or "-") if include_pr_number else "-"
     return {"repo": repo, "folder": folder, "branch": branch, "pr_number": pr_number}
+
+
+def _metadata_for_cwd(normalized_cwd: str) -> dict[str, str]:
+    return _metadata_for_cwd_impl(normalized_cwd, include_pr_number=True)
+
+
+def _cached_metadata_for_cwd(normalized_cwd: str) -> dict[str, str]:
+    return _metadata_for_cwd_impl(normalized_cwd, include_pr_number=False)
 
 
 def _record_task_id(record: dict[str, Any]) -> str:
@@ -788,6 +806,72 @@ def _record_lane(record: dict[str, Any]) -> str | None:
     return TASK_TO_LANE.get(str(record.get("task_class") or ""))
 
 
+def _record_timestamp(record: dict[str, Any]) -> str:
+    return str(
+        record.get("review_completed_at")
+        or record.get("recorded_at")
+        or record.get("sampled_at")
+        or ""
+    )
+
+
+def _run_contribution_id(
+    run: dict[str, Any], *, record: dict[str, Any], run_index: int
+) -> str:
+    for key in ("thread_id", "reviewer_output_ref", "rollout_path", "session_id"):
+        value = str(run.get(key) or "").strip()
+        if value:
+            return f"{key}:{value}"
+    stable = {
+        key: run.get(key)
+        for key in (
+            "slot",
+            "variant_id",
+            "model",
+            "reasoning_effort",
+            "service_tier",
+            "usage",
+            "tokens_used",
+            "cost_usd",
+            "elapsed_seconds",
+            "reviewer_output",
+        )
+        if run.get(key) is not None
+    }
+    stable["record_id"] = str(
+        record.get("round_id") or _record_timestamp(record) or "unknown-record"
+    )
+    stable["run_index"] = run_index
+    raw = json.dumps(stable, sort_keys=True, separators=(",", ":"), default=str)
+    return f"fallback:{blake2s(raw.encode('utf-8'), digest_size=16).hexdigest()}"
+
+
+def _record_cost_runs(record: dict[str, Any]) -> list[dict[str, Any]]:
+    if _record_lane(record) in {"review_t2", "review_t4"}:
+        runs = [
+            run
+            for run in [
+                *list(record.get("retry_runs") or []),
+                *list(record.get("runs") or []),
+            ]
+            if isinstance(run, dict)
+        ]
+    else:
+        runs = [
+            run
+            for run in list(record.get("runs") or [])
+            if isinstance(run, dict) and _run_is_finalized(run)
+        ]
+    if record.get("rerolled_from_round_id"):
+        parent_round_id = str(record["rerolled_from_round_id"])
+        runs = [
+            run
+            for run in runs
+            if str(run.get("rerolled_from_round_id") or "") == parent_round_id
+        ]
+    return runs
+
+
 def _iter_review_round_payloads(state_dir: Path) -> list[dict[str, Any]]:
     return [
         *iter_round_payloads(state_dir),
@@ -803,6 +887,7 @@ def _new_bucket() -> dict[str, Any]:
         "cost_usd": 0.0,
         "latest_review": "",
         "caller_threads": set(),
+        "accounted_run_ids": set(),
     }
 
 
@@ -813,16 +898,21 @@ def _add_record(
     record: dict[str, Any],
     runs: list[dict[str, Any]],
 ) -> None:
-    bucket["lane_sessions"][lane] += len(runs)
-    bucket["review_seconds"] += _run_seconds(record, runs)
-    bucket["tokens"] += sum(_run_tokens(run) for run in runs)
-    bucket["cost_usd"] += sum(_run_cost(run) for run in runs)
-    timestamp = str(
-        record.get("review_completed_at")
-        or record.get("recorded_at")
-        or record.get("sampled_at")
-        or ""
-    )
+    seen = bucket["accounted_run_ids"]
+    identified = [
+        (_run_contribution_id(run, record=record, run_index=index), run)
+        for index, run in enumerate(runs)
+    ]
+    new_items = [(run_id, run) for run_id, run in identified if run_id not in seen]
+    if not new_items:
+        return
+    seen.update(run_id for run_id, _run in new_items)
+    new_runs = [run for _run_id, run in new_items]
+    bucket["lane_sessions"][lane] += len(new_runs)
+    bucket["review_seconds"] += _run_seconds(record, new_runs)
+    bucket["tokens"] += sum(_run_tokens(run) for run in new_runs)
+    bucket["cost_usd"] += sum(_run_cost(run) for run in new_runs)
+    timestamp = _record_timestamp(record)
     if timestamp and timestamp > str(bucket.get("latest_review") or ""):
         bucket["latest_review"] = timestamp
     _add_caller_thread(bucket, record.get("caller_id"))
@@ -890,11 +980,7 @@ def collect_review_cost_rows(
             continue
         if not record_matches_current_branch(normalized_cwd, dict(payload)):
             continue
-        runs = [
-            run
-            for run in list(payload.get("runs") or [])
-            if isinstance(run, dict) and _run_is_finalized(run)
-        ]
+        runs = _record_cost_runs(payload)
         if not runs:
             continue
         bucket = buckets.setdefault(normalized_cwd, _new_bucket())
@@ -912,14 +998,7 @@ def collect_review_cost_rows(
             continue
         if not record_matches_current_branch(normalized_cwd, dict(record)):
             continue
-        runs = [
-            run
-            for run in [
-                *list(record.get("retry_runs") or []),
-                *list(record.get("runs") or []),
-            ]
-            if isinstance(run, dict)
-        ]
+        runs = _record_cost_runs(record)
         if not runs:
             continue
         bucket = buckets.setdefault(normalized_cwd, _new_bucket())
@@ -1001,6 +1080,10 @@ def collect_review_cost_rows(
                 review_seconds=float(bucket["review_seconds"]),
                 tokens=int(bucket["tokens"]),
                 cost_usd=round(float(bucket["cost_usd"]), 6),
+                review_cwd_normalized=normalized_cwd,
+                accounted_run_ids=tuple(sorted(bucket["accounted_run_ids"])),
+                review_cost_cutover_at="",
+                implementation_costs_refreshed=True,
             )
         )
     return sorted(
@@ -1113,7 +1196,9 @@ def _cost_row_cache_dir(state_dir: Path) -> Path:
     return state_dir / DEFAULT_COST_CACHE_DIRNAME
 
 
-def _cost_row_identity(row: ReviewCostRow) -> tuple[str, str, str]:
+def _cost_row_identity(row: ReviewCostRow) -> tuple[str, ...]:
+    if row.review_cwd_normalized:
+        return (row.review_cwd_normalized, row.branch)
     return (row.repo, row.folder, row.branch)
 
 
@@ -1137,6 +1222,10 @@ def _cost_row_payload(row: ReviewCostRow) -> dict[str, Any]:
         "review_seconds": row.review_seconds,
         "tokens": row.tokens,
         "cost_usd": row.cost_usd,
+        "review_cwd_normalized": row.review_cwd_normalized,
+        "accounted_run_ids": list(row.accounted_run_ids),
+        "review_cost_cutover_at": row.review_cost_cutover_at,
+        "implementation_costs_refreshed": row.implementation_costs_refreshed,
     }
 
 
@@ -1164,6 +1253,16 @@ def _cost_row_from_payload(payload: dict[str, Any]) -> ReviewCostRow | None:
             review_seconds=float(payload["review_seconds"]),
             tokens=int(payload["tokens"]),
             cost_usd=float(payload["cost_usd"]),
+            review_cwd_normalized=str(payload.get("review_cwd_normalized") or ""),
+            accounted_run_ids=tuple(
+                str(item)
+                for item in list(payload.get("accounted_run_ids") or [])
+                if str(item).strip()
+            ),
+            review_cost_cutover_at=str(payload.get("review_cost_cutover_at") or ""),
+            implementation_costs_refreshed=bool(
+                payload.get("implementation_costs_refreshed", True)
+            ),
         )
     except KeyError, TypeError, ValueError:
         return None
@@ -1188,6 +1287,10 @@ def update_review_cost_row_cache(*, state_dir: Path, rows: list[ReviewCostRow]) 
     next_keys_by_identity = {
         _cost_row_identity(row): f"{_cost_row_cache_key(row)}.json" for row in rows
     }
+    next_keys_by_legacy_identity = {
+        (row.repo, row.folder, row.branch): f"{_cost_row_cache_key(row)}.json"
+        for row in rows
+    }
     for path in sorted(cache_dir.glob("*.json")):
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
@@ -1196,73 +1299,159 @@ def update_review_cost_row_cache(*, state_dir: Path, rows: list[ReviewCostRow]) 
         row = _cost_row_from_payload(payload) if isinstance(payload, dict) else None
         if row is None:
             continue
-        expected_name = next_keys_by_identity.get(_cost_row_identity(row))
+        expected_name = next_keys_by_identity.get(
+            _cost_row_identity(row)
+        ) or next_keys_by_legacy_identity.get((row.repo, row.folder, row.branch))
         if expected_name and path.name != expected_name:
             path.unlink(missing_ok=True)
     for row in rows:
-        (cache_dir / f"{_cost_row_cache_key(row)}.json").write_text(
-            json.dumps(_cost_row_payload(row), sort_keys=True, indent=2),
-            encoding="utf-8",
+        write_json(
+            cache_dir / f"{_cost_row_cache_key(row)}.json", _cost_row_payload(row)
         )
 
 
-def refresh_review_cost_report_best_effort(
-    *,
-    state_dir: Path,
-    review_cwd: Path | None = None,
-    include_all: bool = False,
-    codex_home: Path | None = None,
-) -> Path | None:
-    try:
-        rows = collect_review_cost_rows(
-            state_dir=state_dir,
-            review_cwd=None if include_all else review_cwd,
-            include_all=include_all,
-            codex_home=codex_home,
-        )
-        update_review_cost_row_cache(state_dir=state_dir, rows=rows)
-        cached_rows = read_review_cost_row_cache(state_dir)
-        return write_review_cost_report(
-            rows=cached_rows or rows,
-            output_path=state_dir / DEFAULT_COST_REPORT_FILENAME,
-        )
-    except Exception:
-        return None
-
-
-def launch_review_cost_report_refresh_best_effort(
-    *, state_dir: Path, review_cwd: Path | None = None
-) -> bool:
-    script_path = launcher_script_path(__file__, "review_suite_arena.py")
-    resolved_state_dir = state_dir.resolve(strict=False)
-    command = [
-        sys.executable,
-        str(script_path),
-        "costs",
-        "--state-dir",
-        str(resolved_state_dir),
-    ]
-    if review_cwd is not None:
-        review_cwd = review_cwd.resolve(strict=False)
-        command.extend(["--cd", str(review_cwd)])
-
-    cwd = (
-        review_cwd
-        if review_cwd is not None and review_cwd.exists()
-        else resolved_state_dir
+def _cached_review_cost_row(
+    *, state_dir: Path, review_cwd: Path
+) -> tuple[ReviewCostRow | None, Path, Path, dict[str, str], str, bool]:
+    normalized_cwd = str(normalize_review_cwd_value(review_cwd) or "")
+    metadata = _cached_metadata_for_cwd(normalized_cwd)
+    empty = ReviewCostRow(
+        repo=metadata["repo"],
+        folder=metadata["folder"],
+        branch=metadata["branch"],
+        pr_number=metadata["pr_number"],
+        worker_model="-",
+        implementation_tokens=0,
+        implementation_cost_usd=0.0,
+        caller_threads=(),
+        latest_review="-",
+        lane_sessions={lane: 0 for lane in LANES},
+        review_seconds=0.0,
+        tokens=0,
+        cost_usd=0.0,
+        review_cwd_normalized=normalized_cwd,
+        implementation_costs_refreshed=False,
     )
-    popen_kwargs: dict[str, Any] = {
-        "cwd": str(cwd if cwd.exists() else script_path.parent),
-        "stdin": subprocess.DEVNULL,
-        "stdout": subprocess.DEVNULL,
-        "stderr": subprocess.DEVNULL,
-    }
-    if os.name == "nt":
-        popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-    else:
-        popen_kwargs["start_new_session"] = True
+    cache_dir = _cost_row_cache_dir(state_dir)
+    target_path = cache_dir / f"{_cost_row_cache_key(empty)}.json"
+    legacy = replace(empty, review_cwd_normalized="")
+    legacy_path = cache_dir / f"{_cost_row_cache_key(legacy)}.json"
+    for path in (target_path, legacy_path):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            continue
+        except OSError, json.JSONDecodeError:
+            return None, target_path, legacy_path, metadata, normalized_cwd, False
+        row = _cost_row_from_payload(payload) if isinstance(payload, dict) else None
+        return (
+            row,
+            target_path,
+            legacy_path,
+            metadata,
+            normalized_cwd,
+            isinstance(payload, dict) and "accounted_run_ids" not in payload,
+        )
+    return None, target_path, legacy_path, metadata, normalized_cwd, False
+
+
+def read_review_cost_row_for_cwd(
+    *, state_dir: Path, review_cwd: Path
+) -> ReviewCostRow | None:
+    row, _target, _legacy, _metadata, _cwd, _is_legacy = _cached_review_cost_row(
+        state_dir=state_dir, review_cwd=review_cwd
+    )
+    return row
+
+
+def apply_review_cost_delta_best_effort(
+    *, state_dir: Path, review_cwd: Path, record: dict[str, Any]
+) -> bool:
     try:
-        subprocess.Popen(command, **popen_kwargs)
+        if not bool(dict(load_config(state_dir).get("arena") or {}).get("enabled")):
+            return False
+        lane = _record_lane(record)
+        if lane not in LANES:
+            return False
+        with orchestrator_store_lock(
+            state_dir=state_dir,
+            name=REVIEW_COSTS_LOCK_NAME,
+            timeout_seconds=AUTOMATIC_COST_DELTA_LOCK_TIMEOUT_SECONDS,
+        ):
+            (
+                row,
+                target_path,
+                legacy_path,
+                metadata,
+                normalized_cwd,
+                is_legacy,
+            ) = _cached_review_cost_row(state_dir=state_dir, review_cwd=review_cwd)
+            task_id = _record_task_id(record)
+            if task_id and metadata["branch"] != "-" and task_id != metadata["branch"]:
+                return False
+            if row is None:
+                row = ReviewCostRow(
+                    repo=metadata["repo"],
+                    folder=metadata["folder"],
+                    branch=metadata["branch"],
+                    pr_number=metadata["pr_number"],
+                    worker_model="-",
+                    implementation_tokens=0,
+                    implementation_cost_usd=0.0,
+                    caller_threads=(),
+                    latest_review="-",
+                    lane_sessions={item: 0 for item in LANES},
+                    review_seconds=0.0,
+                    tokens=0,
+                    cost_usd=0.0,
+                    review_cwd_normalized=normalized_cwd,
+                    implementation_costs_refreshed=False,
+                )
+            cutover = row.review_cost_cutover_at
+            if is_legacy:
+                cutover = row.latest_review if row.latest_review != "-" else ""
+            timestamp = _record_timestamp(record)
+            if cutover and timestamp and timestamp <= cutover:
+                return False
+            runs = _record_cost_runs(record)
+            seen = set(row.accounted_run_ids)
+            identified = [
+                (_run_contribution_id(run, record=record, run_index=index), run)
+                for index, run in enumerate(runs)
+            ]
+            new_items = [
+                (run_id, run) for run_id, run in identified if run_id not in seen
+            ]
+            if not new_items:
+                return False
+            seen.update(run_id for run_id, _run in new_items)
+            new_runs = [run for _run_id, run in new_items]
+            lane_sessions = dict(row.lane_sessions)
+            lane_sessions[lane] = lane_sessions.get(lane, 0) + len(new_runs)
+            updated = replace(
+                row,
+                repo=metadata["repo"],
+                folder=metadata["folder"],
+                branch=metadata["branch"],
+                pr_number=row.pr_number,
+                latest_review=max(
+                    row.latest_review if row.latest_review != "-" else "", timestamp
+                )
+                or "-",
+                lane_sessions=lane_sessions,
+                review_seconds=row.review_seconds + _run_seconds(record, new_runs),
+                tokens=row.tokens + sum(_run_tokens(run) for run in new_runs),
+                cost_usd=round(
+                    row.cost_usd + sum(_run_cost(run) for run in new_runs), 6
+                ),
+                review_cwd_normalized=normalized_cwd,
+                accounted_run_ids=tuple(sorted(seen)),
+                review_cost_cutover_at=cutover,
+                implementation_costs_refreshed=False,
+            )
+            write_json(target_path, _cost_row_payload(updated))
+            if legacy_path != target_path:
+                legacy_path.unlink(missing_ok=True)
+            return True
     except Exception:
         return False
-    return True

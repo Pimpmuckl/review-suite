@@ -605,7 +605,7 @@ def test_orchestrator_review_helper_uses_phase_prompt_without_predecision_anchor
     )
     monkeypatch.setattr(
         review_suite_arena,
-        "launch_review_cost_report_refresh_best_effort",
+        "apply_review_cost_delta_best_effort",
         lambda **kwargs: (
             completion_events.append("cost") or refresh_calls.append(kwargs) or True
         ),
@@ -642,7 +642,10 @@ def test_orchestrator_review_helper_uses_phase_prompt_without_predecision_anchor
         {"task_name": "review 1/2 precision", "round_id": result["round_id"]}
     ]
     assert anchor_calls == []
-    assert refresh_calls == [{"state_dir": state_dir, "review_cwd": repo}]
+    assert len(refresh_calls) == 1
+    assert refresh_calls[0]["state_dir"] == state_dir
+    assert refresh_calls[0]["review_cwd"] == repo
+    assert refresh_calls[0]["record"]["status"] == "completed"
     assert completion_events == ["findings", "cost"]
 
 
@@ -731,7 +734,7 @@ def test_orchestrator_arena_helper_uses_pr_prompt_for_pr_review(
     )
     monkeypatch.setattr(
         review_suite_arena,
-        "launch_review_cost_report_refresh_best_effort",
+        "apply_review_cost_delta_best_effort",
         lambda **kwargs: True,
     )
 

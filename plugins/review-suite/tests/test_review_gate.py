@@ -1548,7 +1548,7 @@ def test_run_gate_round_retries_operational_block_once(
     monkeypatch.setattr("review_gate._print_live_gate_completed_run", lambda run: None)
     cost_refreshes: list[dict[str, object]] = []
     monkeypatch.setattr(
-        "review_gate.launch_review_cost_report_refresh_best_effort",
+        "review_gate.apply_review_cost_delta_best_effort",
         lambda **kwargs: cost_refreshes.append(kwargs) or None,
     )
 
@@ -1585,7 +1585,10 @@ def test_run_gate_round_retries_operational_block_once(
     assert stored[0]["signoff_status"] == "pending"
     assert len(stored[0]["retry_runs"]) == 1
     assert stored[0]["retry_runs"][0]["grade_block_reason"] == "review_interrupted"
-    assert cost_refreshes == [{"state_dir": state_dir, "review_cwd": review_cwd}]
+    assert len(cost_refreshes) == 1
+    assert cost_refreshes[0]["state_dir"] == state_dir
+    assert cost_refreshes[0]["review_cwd"] == review_cwd
+    assert cost_refreshes[0]["record"]["round_id"] == stored[0]["round_id"]
     captured = capsys.readouterr()
     assert "Output:" in captured.out
     assert "I did not find any actionable bugs in this diff." in captured.out
@@ -1731,7 +1734,7 @@ def test_run_gate_round_replaces_exhausted_gate_reviewer_with_inline_fallback(
     )
     monkeypatch.setattr("review_gate._print_live_gate_completed_run", lambda run: None)
     monkeypatch.setattr(
-        "review_gate.launch_review_cost_report_refresh_best_effort",
+        "review_gate.apply_review_cost_delta_best_effort",
         lambda **kwargs: None,
     )
 
@@ -1919,7 +1922,7 @@ def test_run_gate_round_inline_fallback_skips_cooling_backup(
     )
     monkeypatch.setattr("review_gate._print_live_gate_completed_run", lambda run: None)
     monkeypatch.setattr(
-        "review_gate.launch_review_cost_report_refresh_best_effort",
+        "review_gate.apply_review_cost_delta_best_effort",
         lambda **kwargs: None,
     )
 

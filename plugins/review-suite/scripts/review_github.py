@@ -35,7 +35,6 @@ from review_suite_core import (
     resolve_ref,
     resolve_repo_root,
 )
-from review_costs import launch_review_cost_report_refresh_best_effort
 from review_suite_local import default_state_dir
 
 DEFAULT_BOT_LOGIN = "chatgpt-codex-connector[bot]"
@@ -1054,14 +1053,6 @@ def cmd_run(args: argparse.Namespace) -> int:
         except Exception as exc:  # pragma: no cover - warning path only
             if review_root is not None:
                 _record_anchor_warning(exc)
-    if review_root is not None and payload["status"] in {
-        "response_found",
-        "acknowledged_without_body",
-        "existing_completed_cycle",
-    }:
-        launch_review_cost_report_refresh_best_effort(
-            state_dir=Path(args.state_dir), review_cwd=review_root
-        )
     emit_toon(public_cycle_payload(payload))
     return (
         0

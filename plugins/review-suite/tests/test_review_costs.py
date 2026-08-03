@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import subprocess
 import sys
 from pathlib import Path
 
@@ -27,11 +26,11 @@ from review_costs import (
     _record_lane,
     _repo_from_worktree_folder,
     _thread_rows,
+    apply_review_cost_delta_best_effort,
     collect_review_cost_rows,
     format_compact_number,
-    launch_review_cost_report_refresh_best_effort,
+    read_review_cost_row_for_cwd,
     read_review_cost_row_cache,
-    refresh_review_cost_report_best_effort,
     render_review_cost_markdown,
     update_review_cost_row_cache,
 )
@@ -503,6 +502,7 @@ def test_collect_review_cost_rows_groups_t1_to_t4_by_worktree(
     assert row.review_seconds == 570
     assert row.tokens == 2456
     assert row.cost_usd == 0.0281
+    assert row.review_cost_cutover_at == ""
 
 
 def test_collect_review_cost_rows_includes_completed_ungraded_local_rounds(
@@ -701,14 +701,212 @@ def test_format_compact_number_keeps_cells_short() -> None:
     assert format_compact_number(100_000_000) == "100m"
 
 
-def test_refresh_review_cost_report_best_effort_writes_default_ledger(
+def test_automatic_cost_delta_does_zero_cost_work_when_arena_is_disabled(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        "review_costs.load_config", lambda state_dir: {"arena": {"enabled": False}}
+    )
+    monkeypatch.setattr(
+        "review_costs.orchestrator_store_lock",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("lock acquired")),
+    )
+    monkeypatch.setattr(
+        "review_costs._cached_metadata_for_cwd",
+        lambda value: (_ for _ in ()).throw(AssertionError("metadata read")),
+    )
+
+    assert not apply_review_cost_delta_best_effort(
+        state_dir=tmp_path / "state",
+        review_cwd=tmp_path / "repo",
+        record={"task_class": "phase_review", "runs": []},
+    )
+    assert not (tmp_path / "state").exists()
+
+
+def test_automatic_cost_delta_updates_only_target_row_once(
     monkeypatch, tmp_path: Path
 ) -> None:
     state_dir = tmp_path / "state"
     repo = tmp_path / "repo"
     repo.mkdir()
     monkeypatch.setattr(
-        "review_costs._metadata_for_cwd",
+        "review_costs.load_config", lambda state_dir: {"arena": {"enabled": True}}
+    )
+    monkeypatch.setattr(
+        "review_costs._cached_metadata_for_cwd",
+        lambda value: {
+            "repo": "repo",
+            "folder": "repo",
+            "branch": "feat/costs",
+            "pr_number": "42",
+        },
+    )
+    lock_timeouts: list[int] = []
+    real_lock = review_costs.orchestrator_store_lock
+
+    def recording_lock(**kwargs):
+        lock_timeouts.append(kwargs["timeout_seconds"])
+        return real_lock(**kwargs)
+
+    monkeypatch.setattr("review_costs.orchestrator_store_lock", recording_lock)
+    unrelated = ReviewCostRow(
+        repo="other",
+        folder="other",
+        branch="main",
+        pr_number="-",
+        worker_model="-",
+        implementation_tokens=0,
+        implementation_cost_usd=0.0,
+        caller_threads=(),
+        latest_review="2026-04-27T09:00:00Z",
+        lane_sessions={lane: 0 for lane in review_costs.LANES},
+        review_seconds=0,
+        tokens=1,
+        cost_usd=0.01,
+        review_cwd_normalized=str(tmp_path / "other"),
+    )
+    update_review_cost_row_cache(state_dir=state_dir, rows=[unrelated])
+    unrelated_path = next((state_dir / "review_cost_rows").glob("*.json"))
+    unrelated_text = unrelated_path.read_text(encoding="utf-8")
+    record = {
+        "round_id": "round-1",
+        "task_class": "phase_review",
+        "status": "completed",
+        "sampled_at": "2026-04-27T10:00:00Z",
+        "review_completed_at": "2026-04-27T10:01:00Z",
+        "runs": [
+            {
+                "slot": "alpha",
+                "thread_id": "thread-a",
+                "tokens_used": 100,
+                "cost_usd": 0.01,
+                "elapsed_seconds": 20,
+                "review_status": "completed",
+            },
+            {
+                "slot": "bravo",
+                "thread_id": "thread-b",
+                "tokens_used": 200,
+                "cost_usd": 0.02,
+                "elapsed_seconds": 30,
+                "review_status": "completed",
+            },
+        ],
+    }
+
+    assert apply_review_cost_delta_best_effort(
+        state_dir=state_dir, review_cwd=repo, record=record
+    )
+    assert not apply_review_cost_delta_best_effort(
+        state_dir=state_dir, review_cwd=repo, record=record
+    )
+    same_second_record = {
+        **record,
+        "round_id": "round-2",
+        "runs": [
+            {
+                "slot": "alpha",
+                "thread_id": "thread-c",
+                "tokens_used": 50,
+                "cost_usd": 0.005,
+                "elapsed_seconds": 10,
+                "review_status": "completed",
+            }
+        ],
+    }
+    assert apply_review_cost_delta_best_effort(
+        state_dir=state_dir, review_cwd=repo, record=same_second_record
+    )
+
+    row = read_review_cost_row_for_cwd(state_dir=state_dir, review_cwd=repo)
+    assert row is not None
+    assert row.lane_sessions["review_t1"] == 3
+    assert row.tokens == 350
+    assert row.cost_usd == pytest.approx(0.035)
+    assert len(row.accounted_run_ids) == 3
+    assert row.implementation_costs_refreshed is False
+    assert lock_timeouts == [0, 0, 0]
+    assert unrelated_path.read_text(encoding="utf-8") == unrelated_text
+
+
+def test_automatic_cost_delta_skips_immediately_when_manual_lock_is_busy(
+    monkeypatch, tmp_path: Path
+) -> None:
+    seen: list[int] = []
+    monkeypatch.setattr(
+        "review_costs.load_config", lambda state_dir: {"arena": {"enabled": True}}
+    )
+
+    def busy_lock(**kwargs):
+        seen.append(kwargs["timeout_seconds"])
+        raise TimeoutError("busy")
+
+    monkeypatch.setattr("review_costs.orchestrator_store_lock", busy_lock)
+    monkeypatch.setattr(
+        "review_costs._cached_metadata_for_cwd",
+        lambda value: (_ for _ in ()).throw(AssertionError("metadata read")),
+    )
+
+    assert not apply_review_cost_delta_best_effort(
+        state_dir=tmp_path / "state",
+        review_cwd=tmp_path / "repo",
+        record={"task_class": "phase_review", "runs": []},
+    )
+    assert seen == [0]
+    assert not (tmp_path / "state").exists()
+
+
+def test_automatic_cost_delta_rejects_record_from_another_branch(
+    monkeypatch, tmp_path: Path
+) -> None:
+    state_dir = tmp_path / "state"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.setattr(
+        "review_costs.load_config", lambda state_dir: {"arena": {"enabled": True}}
+    )
+    monkeypatch.setattr(
+        "review_costs._cached_metadata_for_cwd",
+        lambda value: {
+            "repo": "repo",
+            "folder": "repo",
+            "branch": "branch-b",
+            "pr_number": "-",
+        },
+    )
+
+    assert not apply_review_cost_delta_best_effort(
+        state_dir=state_dir,
+        review_cwd=repo,
+        record={
+            "round_id": "round-a",
+            "task_class": "phase_review",
+            "task_id_hint": "branch-a",
+            "review_completed_at": "2026-04-27T10:00:00Z",
+            "runs": [
+                {
+                    "thread_id": "thread-a",
+                    "tokens_used": 100,
+                    "review_status": "completed",
+                }
+            ],
+        },
+    )
+    assert read_review_cost_row_for_cwd(state_dir=state_dir, review_cwd=repo) is None
+
+
+def test_fallback_run_identity_distinguishes_identical_independent_runs(
+    monkeypatch, tmp_path: Path
+) -> None:
+    state_dir = tmp_path / "state"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.setattr(
+        "review_costs.load_config", lambda state_dir: {"arena": {"enabled": True}}
+    )
+    monkeypatch.setattr(
+        "review_costs._cached_metadata_for_cwd",
         lambda value: {
             "repo": "repo",
             "folder": "repo",
@@ -716,33 +914,115 @@ def test_refresh_review_cost_report_best_effort_writes_default_ledger(
             "pr_number": "-",
         },
     )
-    _write_round(
-        state_dir,
+    shared_run = {
+        "slot": "alpha",
+        "variant_id": "model-medium",
+        "tokens_used": 100,
+        "cost_usd": 0.01,
+        "elapsed_seconds": 1,
+        "review_status": "completed",
+    }
+    records = [
         {
-            "round_id": "t1-round",
+            "round_id": f"round-{index}",
             "task_class": "phase_review",
-            "graded_task_id": "feat/costs",
-            "status": "completed",
-            "sampled_at": "2026-04-27T10:00:00Z",
-            "review_completed_at": "2026-04-27T10:01:00Z",
-            "review_cwd_normalized": str(repo),
-            "runs": [
-                {
-                    "slot": "alpha",
-                    "usage": {"input_tokens": 100, "output_tokens": 20},
-                    "cost_usd": 0.001,
-                }
-            ],
+            "review_completed_at": f"2026-04-27T10:0{index}:00Z",
+            "runs": [dict(shared_run)],
+        }
+        for index in (1, 2)
+    ]
+
+    assert all(
+        apply_review_cost_delta_best_effort(
+            state_dir=state_dir, review_cwd=repo, record=record
+        )
+        for record in records
+    )
+    row = read_review_cost_row_for_cwd(state_dir=state_dir, review_cwd=repo)
+    assert row is not None
+    assert row.lane_sessions["review_t1"] == 2
+    assert row.tokens == 200
+    assert len(row.accounted_run_ids) == 2
+
+
+def test_legacy_cutover_and_reroll_charge_only_the_new_run(
+    monkeypatch, tmp_path: Path
+) -> None:
+    state_dir = tmp_path / "state"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.setattr(
+        "review_costs.load_config", lambda state_dir: {"arena": {"enabled": True}}
+    )
+    monkeypatch.setattr(
+        "review_costs._cached_metadata_for_cwd",
+        lambda value: {
+            "repo": "repo",
+            "folder": "repo",
+            "branch": "feat/costs",
+            "pr_number": "-",
         },
     )
-
-    output = refresh_review_cost_report_best_effort(
-        state_dir=state_dir, review_cwd=repo
+    legacy = ReviewCostRow(
+        repo="repo",
+        folder="repo",
+        branch="feat/costs",
+        pr_number="-",
+        worker_model="legacy-model",
+        implementation_tokens=500,
+        implementation_cost_usd=0.5,
+        caller_threads=("legacy-caller",),
+        latest_review="2026-04-27T10:00:00Z",
+        lane_sessions={**{lane: 0 for lane in review_costs.LANES}, "review_t1": 1},
+        review_seconds=60,
+        tokens=100,
+        cost_usd=0.01,
     )
+    update_review_cost_row_cache(state_dir=state_dir, rows=[legacy])
+    legacy_path = next((state_dir / "review_cost_rows").glob("*.json"))
+    payload = json.loads(legacy_path.read_text(encoding="utf-8"))
+    payload.pop("accounted_run_ids")
+    payload.pop("review_cost_cutover_at")
+    legacy_path.write_text(json.dumps(payload), encoding="utf-8")
+    reroll = {
+        "round_id": "round-2",
+        "rerolled_from_round_id": "round-1",
+        "task_class": "phase_review",
+        "status": "completed",
+        "sampled_at": "2026-04-27T10:04:00Z",
+        "review_completed_at": "2026-04-27T10:05:00Z",
+        "runs": [
+            {
+                "slot": "alpha",
+                "thread_id": "legacy-survivor",
+                "tokens_used": 100,
+                "cost_usd": 0.01,
+                "review_status": "completed",
+            },
+            {
+                "slot": "bravo",
+                "thread_id": "new-run",
+                "rerolled_from_round_id": "round-1",
+                "tokens_used": 50,
+                "cost_usd": 0.005,
+                "review_status": "completed",
+            },
+        ],
+    }
 
-    assert output == state_dir / "review_cost_ledger.md"
-    assert "# repo" in output.read_text(encoding="utf-8")
-    assert list((state_dir / "review_cost_rows").glob("*.json"))
+    assert apply_review_cost_delta_best_effort(
+        state_dir=state_dir, review_cwd=repo, record=reroll
+    )
+    row = read_review_cost_row_for_cwd(state_dir=state_dir, review_cwd=repo)
+    assert row is not None
+    assert row.tokens == 150
+    assert row.cost_usd == pytest.approx(0.015)
+    assert row.lane_sessions["review_t1"] == 2
+    assert row.implementation_tokens == 500
+    assert row.implementation_costs_refreshed is False
+    assert row.review_cost_cutover_at == "2026-04-27T10:00:00Z"
+    assert row.accounted_run_ids == ("thread_id:new-run",)
+    assert not legacy_path.exists()
 
 
 def test_update_review_cost_row_cache_replaces_pr_number_changes(
@@ -820,40 +1100,28 @@ def test_current_pr_number_can_skip_gh_for_background_refresh(
     assert _current_pr_number(tmp_path) == ""
 
 
-def test_wrapper_cost_refresh_launcher_detaches_costs_command(
+def test_cached_cost_metadata_never_looks_up_github_pr(
     monkeypatch, tmp_path: Path
 ) -> None:
-    calls: list[tuple[list[str], dict[str, object]]] = []
-
-    def fake_popen(command: list[str], **kwargs: object) -> object:
-        calls.append((command, kwargs))
-        return object()
-
-    monkeypatch.setattr("review_costs.subprocess.Popen", fake_popen)
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / "repo").mkdir()
-
-    assert (
-        launch_review_cost_report_refresh_best_effort(
-            state_dir=Path("state"), review_cwd=Path("repo")
-        )
-        is True
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.setattr(
+        "review_costs._git_text",
+        lambda review_cwd, args: (
+            "feat/costs"
+            if args == ["branch", "--show-current"]
+            else "https://github.com/example/repo.git"
+        ),
     )
-    command, kwargs = calls[0]
-    assert command[:3] == [
-        sys.executable,
-        str(SCRIPT_DIR / "review_suite_arena.py"),
-        "costs",
-    ]
-    assert command[3:] == [
-        "--state-dir",
-        str(tmp_path / "state"),
-        "--cd",
-        str(tmp_path / "repo"),
-    ]
-    assert kwargs["stdin"] is subprocess.DEVNULL
-    assert kwargs["stdout"] is subprocess.DEVNULL
-    assert kwargs["stderr"] is subprocess.DEVNULL
+    monkeypatch.setattr(
+        "review_costs._current_pr_number",
+        lambda review_cwd: (_ for _ in ()).throw(AssertionError("gh pr view called")),
+    )
+
+    metadata = review_costs._cached_metadata_for_cwd(str(repo))
+
+    assert metadata["branch"] == "feat/costs"
+    assert metadata["pr_number"] == "-"
 
 
 def test_collect_review_cost_rows_includes_implementation_only_worktree(
