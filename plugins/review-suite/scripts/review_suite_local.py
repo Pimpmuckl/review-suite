@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ctypes
 import html
 import json
 import math
@@ -127,6 +128,22 @@ CALLER_ID_ENV_KEYS = (
     ("PWF_SUBAGENT_ID", "pwf_subagent_id"),
     ("CODEX_THREAD_ID", "codex_thread_id"),
 )
+
+_PROCESS_SYNCHRONIZE = 0x00100000
+_WAIT_TIMEOUT = 0x00000102
+_ERROR_ACCESS_DENIED = 5
+
+if os.name == "nt":
+    _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    _open_process = _kernel32.OpenProcess
+    _open_process.argtypes = (ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong)
+    _open_process.restype = ctypes.c_void_p
+    _wait_for_single_object = _kernel32.WaitForSingleObject
+    _wait_for_single_object.argtypes = (ctypes.c_void_p, ctypes.c_ulong)
+    _wait_for_single_object.restype = ctypes.c_ulong
+    _close_handle = _kernel32.CloseHandle
+    _close_handle.argtypes = (ctypes.c_void_p,)
+    _close_handle.restype = ctypes.c_int
 
 
 @dataclass(frozen=True)
@@ -3817,26 +3834,23 @@ def launch_round(
 
 
 def _process_is_running(pid: int | None) -> bool:
-    if not pid:
+    try:
+        normalized_pid = int(pid) if pid is not None else 0
+    except TypeError, ValueError, OverflowError:
+        return False
+    if normalized_pid <= 0 or normalized_pid > 0xFFFFFFFF:
         return False
     if os.name == "nt":
-        proc = subprocess.run(
-            ["tasklist", "/FI", f"PID eq {int(pid)}", "/FO", "CSV", "/NH"],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            check=False,
-        )
-        if proc.returncode != 0:
-            return False
-        output = (proc.stdout or "").strip()
-        if not output or output.startswith("INFO:"):
-            return False
-        return f'"{int(pid)}"' in output or f",{int(pid)}," in output
+        handle = _open_process(_PROCESS_SYNCHRONIZE, False, normalized_pid)
+        if not handle:
+            return ctypes.get_last_error() == _ERROR_ACCESS_DENIED
+        try:
+            return _wait_for_single_object(handle, 0) == _WAIT_TIMEOUT
+        finally:
+            _close_handle(handle)
     try:
         with open(
-            f"/proc/{int(pid)}/status", encoding="utf-8", errors="replace"
+            f"/proc/{normalized_pid}/status", encoding="utf-8", errors="replace"
         ) as handle:
             for line in handle:
                 if not line.startswith("State:"):
@@ -3849,7 +3863,7 @@ def _process_is_running(pid: int | None) -> bool:
     except OSError:
         pass
     try:
-        os.kill(int(pid), 0)
+        os.kill(normalized_pid, 0)
     except ProcessLookupError:
         return False
     except OSError:
