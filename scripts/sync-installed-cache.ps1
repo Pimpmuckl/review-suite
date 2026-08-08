@@ -18,7 +18,7 @@ $marketplaceRootArtifactFileNames = @(".coverage", ".env", ".DS_Store", "Thumbs.
 $marketplaceRecursiveArtifactDirs = @("__pycache__", ".pytest_cache", ".ruff_cache")
 $marketplaceRecursiveArtifactFileGlobs = @("*.pyc")
 $marketplacePreservedDirs = @(".git")
-$marketplacePreservedFiles = @(".codex-marketplace-install.json")
+$marketplacePreservedFiles = @(".git", ".codex-marketplace-install.json")
 
 function Test-ReviewSuiteRoot {
     param([Parameter(Mandatory = $true)][string]$Path)
