@@ -230,9 +230,8 @@ def _run_deslop_once(state: dict[str, Any]) -> OrchestratorRunnerResult:
             ran_step=True,
             step="deslop",
         )
-    if int(proc.returncode) == 0:
-        output = str(proc.stdout or "")
-        _print_step_output(label="review-deslop", body=output)
+    output = _process_output(proc)
+    if output:
         has_brief = bool(str(state.get("review_brief") or "").strip())
         allowed = (
             {"CONFORMS", "MATERIALLY_DRIFTED"} if has_brief else {"NOT_APPLICABLE"}
@@ -244,24 +243,35 @@ def _run_deslop_once(state: dict[str, Any]) -> OrchestratorRunnerResult:
             if line.startswith("Conformance: ")
         ]
         verdict = verdicts[0] if verdicts else ""
-        clean = bool(lines) and lines[-1] == "Review decision: clean"
-        if len(verdicts) != 1 or verdict not in allowed or not clean:
+        decision = lines[-1] if lines else ""
+        if (
+            len(verdicts) == 1
+            and verdict in allowed
+            and decision
+            in {
+                "Review decision: clean",
+                "Review decision: findings",
+            }
+        ):
+            _print_step_output(label="review-deslop", body=output)
             return OrchestratorRunnerResult(
-                mark_deslop_failed(
+                mark_deslop_done(
                     state,
                     command=command_text,
-                    returncode=0,
-                    reason="deslop did not report valid conformance and a clean terminal decision",
+                    conformance=verdict,
+                    reviewed_head=actual_head,
                 ),
                 ran_step=True,
                 step="deslop",
             )
+    if int(proc.returncode) == 0:
+        _print_step_output(label="review-deslop", body=output)
         return OrchestratorRunnerResult(
-            mark_deslop_done(
+            mark_deslop_failed(
                 state,
                 command=command_text,
-                conformance=verdict,
-                reviewed_head=actual_head,
+                returncode=0,
+                reason="deslop did not report valid conformance and a terminal decision",
             ),
             ran_step=True,
             step="deslop",
@@ -269,8 +279,7 @@ def _run_deslop_once(state: dict[str, Any]) -> OrchestratorRunnerResult:
     _print_step_output(
         label="review-deslop",
         status="failed",
-        body=_process_output(proc)
-        or f"review-deslop failed with exit {int(proc.returncode)}",
+        body=output or f"review-deslop failed with exit {int(proc.returncode)}",
     )
     return OrchestratorRunnerResult(
         mark_deslop_failed(

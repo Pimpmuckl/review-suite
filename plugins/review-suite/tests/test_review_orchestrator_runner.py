@@ -1270,8 +1270,8 @@ def test_runner_retry_completes_closure_with_conformance(
         subprocess.CompletedProcess([], 0, body, "")
         for body in (
             "Conformance: NOT_APPLICABLE\nConformance: NOT_APPLICABLE\nReview decision: clean",
-            "Conformance: NOT_APPLICABLE\nReview decision: clean\nReview decision: findings",
-            "Conformance: NOT_APPLICABLE\nReview decision: clean",
+            "Conformance: NOT_APPLICABLE\nReview decision: clean-ish",
+            "Conformance: NOT_APPLICABLE\nReview decision: findings",
         )
     )
     monkeypatch.setattr(
