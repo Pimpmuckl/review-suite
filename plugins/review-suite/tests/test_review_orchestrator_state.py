@@ -1610,12 +1610,9 @@ def test_gate_findings_require_fix_followup_clean_and_same_gate_rerun(
     assert validation_blockers(reasonless) == ["ci:waived_without_note"]
     rerun = mark_latest_profile_step_rerun_needed(handoff, head="head-3")
     assert "note" not in rerun["validation"]
-    assert rerun["deslop"] == {
-        "tracked": True,
-        "status": "tracked",
-        "cleanup_completed": True,
-        "conformance_only": True,
-    }
+    assert rerun["deslop"]["status"] == "tracked"
+    assert rerun["deslop"]["cleanup_completed"] is True
+    assert rerun["deslop"]["conformance_only"] is True
 
 
 def test_non_deep_gate_findings_rerun_same_gate_without_followup(

@@ -285,9 +285,7 @@ def test_runner_blocks_stale_exact_head_before_closure(
         orchestrator_runner, "merge_base", lambda cwd, base, head: "base-1"
     )
 
-    blocked = orchestrator_runner.run_one_expensive_step(green)
-
-    assert blocked.state["stage"] == "blocked"
+    assert orchestrator_runner.run_one_expensive_step(green).state["stage"] == "blocked"
 
 
 def test_deslop_subprocess_emits_parent_progress_without_leaking_child_stderr(

@@ -2877,6 +2877,9 @@ def test_deslop_done_closes_completed_closure_without_rerunning_deslop(
 
     assert "--deslop-done" in str(completed["Action"]["deslop_done"])
     assert len(deslop_calls) == 1
+    drifted = _cycle_payload(state_dir, public_id)
+    drifted["deslop"]["conformance"] = "MATERIALLY_DRIFTED"
+    assert "Revise" in review._action_payload(drifted, state_dir=state_dir)["note"]
 
     exit_code, closed = _run_review(monkeypatch, ["--id", public_id, "--deslop-done"])
 

@@ -2626,6 +2626,11 @@ def _action_payload(state: dict[str, Any], *, state_dir: Path) -> dict[str, Any]
         return _with_deslop_done_action(state, action, public_id, state_dir=state_dir)
     if stage in {STAGE_REVIEW_GREEN, STAGE_LOCAL_GREEN_HANDOFF}:
         deslop = dict(state.get("deslop") or {})
+        if deslop.get("conformance") == "MATERIALLY_DRIFTED":
+            return {
+                "cmd": _review_command(public_id, state_dir=state_dir),
+                "note": "Revise the materially drifted implementation, then rerun this review id.",
+            }
         if bool(deslop.get("tracked")) and str(deslop.get("status") or "") in {
             "tracked",
             "failed",
