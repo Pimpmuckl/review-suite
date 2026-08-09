@@ -248,7 +248,7 @@ def test_static_cleanup_output_prefixes_successful_deslop_result() -> None:
 
     assert (
         updated["final_message"]
-        == "Static cleanup suggestions:\n- Low - app.py:1 - unused import 'os'. Fix: Remove the unused import.\n\nDeslop Results:\nNo reviewer findings."
+        == "Static cleanup suggestions:\n- Low - app.py:1 - unused import 'os'. Fix: Remove the unused import.\n\nDeslop Results:\nNo reviewer findings.\nReview decision: findings"
     )
 
 

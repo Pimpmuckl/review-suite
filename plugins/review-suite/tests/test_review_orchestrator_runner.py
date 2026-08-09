@@ -1231,7 +1231,7 @@ def test_runner_fast_mode_uses_same_post_clean_closure(
     def fake_run(*, command, cwd):
         deslop_calls.append(command)
         return subprocess.CompletedProcess(
-            command, 0, "Conformance: NOT_APPLICABLE\nReview decision: clean", ""
+            command, 1, "Conformance: NOT_APPLICABLE\nReview decision: findings", ""
         )
 
     monkeypatch.setattr(orchestrator_runner, "run_deslop_subprocess", fake_run)
@@ -1258,7 +1258,7 @@ def test_runner_fast_mode_uses_same_post_clean_closure(
     assert green["pending_action"] is None
 
     closure = orchestrator_runner.run_one_expensive_step(green)
-    assert closure.state["deslop"]["status"] == "done"
+    assert closure.state["deslop"]["status"] == "failed"
     assert len(deslop_calls) == 1
 
 

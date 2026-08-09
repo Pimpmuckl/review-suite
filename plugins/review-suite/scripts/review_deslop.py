@@ -421,7 +421,9 @@ def _with_static_cleanup_output(
         return result
     if _deslop_output_clean(result) and "conformance:" not in body.lower():
         body = "No reviewer findings."
-    return {**result, "final_message": f"{section}\n\nDeslop Results:\n{body}"}
+    body = body.rpartition("\n")[0] if terminal_review_command(body) else body
+    body = f"{section}\n\nDeslop Results:\n{body}\nReview decision: findings"
+    return {**result, "final_message": body}
 
 
 def _review_output_text(result: dict[str, object]) -> str:
