@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -24,6 +25,7 @@ from review_suite_local import (
     _print_live_completed_run,
     _print_stall_warnings,
     _print_transport_events,
+    _process_is_running,
     _reviewer_wait_line,
     _reroll_candidate_variants,
     _running_status_line,
@@ -59,6 +61,60 @@ from review_suite_local import (
     write_reports,
     write_round,
 )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows-native process check")
+def test_process_is_running_uses_no_subprocess(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        review_suite_local.subprocess,
+        "run",
+        lambda *_args, **_kwargs: pytest.fail("process check started a subprocess"),
+    )
+
+    assert _process_is_running(os.getpid()) is True
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows-native process check")
+def test_process_is_running_tracks_child_exit() -> None:
+    child = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+    )
+    try:
+        assert _process_is_running(child.pid) is True
+        child.terminate()
+        child.wait(timeout=10)
+        assert _process_is_running(child.pid) is False
+    finally:
+        if child.poll() is None:
+            child.kill()
+            child.wait(timeout=10)
+
+
+@pytest.mark.parametrize("pid", [None, 0, -1, "not-a-pid"])
+def test_process_is_running_rejects_invalid_pid(pid: object) -> None:
+    assert _process_is_running(pid) is False  # type: ignore[arg-type]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows-native process check")
+def test_process_is_running_handles_missing_and_native_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert _process_is_running(0xFFFFFFFC) is False
+
+    monkeypatch.setattr(review_suite_local, "_open_process", lambda *_args: None)
+    monkeypatch.setattr(review_suite_local.ctypes, "get_last_error", lambda: 5)
+    assert _process_is_running(123) is True
+
+    closed: list[int] = []
+    monkeypatch.setattr(review_suite_local, "_open_process", lambda *_args: 123)
+    monkeypatch.setattr(
+        review_suite_local, "_wait_for_single_object", lambda *_args: 0xFFFFFFFF
+    )
+    monkeypatch.setattr(review_suite_local, "_close_handle", closed.append)
+    assert _process_is_running(123) is False
+    assert closed == [123]
 
 
 def test_reviewer_wait_line_uses_actual_count() -> None:
