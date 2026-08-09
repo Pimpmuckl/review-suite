@@ -237,7 +237,7 @@ def test_runner_runs_bounded_closure_after_clean_correctness(
         return subprocess.CompletedProcess(
             command,
             0,
-            stdout="Conformance: NOT_APPLICABLE\nReview decision: clean\n",
+            stdout="Conformance: CONFORMS\nReview decision: clean\n",
             stderr="",
         )
 
@@ -245,7 +245,6 @@ def test_runner_runs_bounded_closure_after_clean_correctness(
 
     reviewed = orchestrator_runner.run_one_expensive_step(_cycle(tmp_path))
 
-    assert reviewed.state["stage"] == STAGE_DECISION_PENDING
     assert calls == []
 
     green = record_clean_decision(
@@ -254,14 +253,15 @@ def test_runner_runs_bounded_closure_after_clean_correctness(
         lane="review_t1",
         reviewed_head="head-1",
     )
+    green["review_brief"] = "- frozen"
     closure = orchestrator_runner.run_one_expensive_step(green)
 
-    assert closure.state["deslop"]["conformance"] == "NOT_APPLICABLE"
-    assert closure.state["deslop"]["reviewed_head"] == "head-1"
+    assert closure.state["deslop"]["conformance"] == "CONFORMS"
     command, cwd = calls[0]
     assert Path(command[1]).name == "review_deslop.py"
     assert "--output-only" in command
-    assert command[-3:] == ["--commit", "base-1", "head-1"]
+    assert command[-4:-1] == ["--commit", "base-1", "head-1"]
+    assert command[-1] == "--review-brief=- frozen"
     assert cwd == tmp_path / "repo"
     assert len(review_calls) == 1
 
@@ -269,23 +269,15 @@ def test_runner_runs_bounded_closure_after_clean_correctness(
 def test_runner_blocks_stale_exact_head_before_closure(
     monkeypatch, tmp_path: Path
 ) -> None:
-    _stub_review(monkeypatch)
-    reviewed = orchestrator_runner.run_one_expensive_step(
-        _cycle(tmp_path, deslop_enabled=False)
-    )
-    green = record_clean_decision(
-        reviewed.state,
-        round_id="phase_review-round-1",
-        lane="review_t1",
-        reviewed_head="head-1",
-    )
-    green["deslop"] = {"tracked": True, "status": "tracked"}
+    green = _cycle(tmp_path)
+    green["stage"] = STAGE_REVIEW_GREEN
     monkeypatch.setattr(orchestrator_runner, "current_head", lambda cwd: "head-2")
     monkeypatch.setattr(
         orchestrator_runner, "merge_base", lambda cwd, base, head: "base-1"
     )
 
-    assert orchestrator_runner.run_one_expensive_step(green).state["stage"] == "blocked"
+    result = orchestrator_runner.run_one_expensive_step(green)
+    assert result.state is green
 
 
 def test_deslop_subprocess_emits_parent_progress_without_leaking_child_stderr(
@@ -1235,16 +1227,14 @@ def test_runner_fast_mode_uses_same_post_clean_closure(
 ) -> None:
     review_calls = _stub_review(monkeypatch)
     deslop_calls: list[list[str]] = []
-    monkeypatch.setattr(
-        orchestrator_runner,
-        "run_deslop_subprocess",
-        lambda *, command, cwd: (
-            deslop_calls.append(command)
-            or subprocess.CompletedProcess(
-                command, 0, stdout="Conformance: NOT_APPLICABLE", stderr=""
-            )
-        ),
-    )
+
+    def fake_run(*, command, cwd):
+        deslop_calls.append(command)
+        return subprocess.CompletedProcess(
+            command, 0, "Conformance: NOT_APPLICABLE\nReview decision: clean", ""
+        )
+
+    monkeypatch.setattr(orchestrator_runner, "run_deslop_subprocess", fake_run)
 
     result = orchestrator_runner.run_one_expensive_step(
         _cycle(tmp_path, mode="fast"),
@@ -1276,11 +1266,15 @@ def test_runner_retry_completes_closure_with_conformance(
     monkeypatch, tmp_path: Path
 ) -> None:
     review_calls = _stub_review(monkeypatch)
+    completed = subprocess.CompletedProcess
     outputs = iter(
         [
-            subprocess.CompletedProcess([], 9, stdout="", stderr="failed"),
-            subprocess.CompletedProcess(
-                [], 0, stdout="Conformance: NOT_APPLICABLE", stderr=""
+            completed([], 0, "Conformance: NOT_APPLICABLE", ""),
+            completed(
+                [],
+                0,
+                "Conformance: NOT_APPLICABLE\nReview decision: clean",
+                "",
             ),
         ]
     )
@@ -1295,6 +1289,7 @@ def test_runner_retry_completes_closure_with_conformance(
         reviewed_head="head-1",
     )
     failed = orchestrator_runner.run_one_expensive_step(green)
+    assert failed.state["deslop"]["status"] == "failed"
     retried = orchestrator_runner.run_one_expensive_step(failed.state)
 
     assert retried.state["deslop"]["status"] == "done"

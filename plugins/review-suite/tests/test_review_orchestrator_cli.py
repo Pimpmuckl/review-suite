@@ -3078,6 +3078,8 @@ def test_github_review_rejects_cycle_before_local_green(
             str(state_dir),
         ],
     )
+    public_id = str(created["review"])
+    _run_review(monkeypatch, ["--id", public_id, "--decision", "clean"])
     errors: list[tuple[str, dict[str, object]]] = []
 
     def fake_error(message: str, **kwargs: object) -> int:
@@ -3086,7 +3088,7 @@ def test_github_review_rejects_cycle_before_local_green(
 
     monkeypatch.setattr(review, "emit_error", fake_error)
     monkeypatch.setattr(
-        sys, "argv", ["review.py", "--id", str(created["review"]), "--github-review"]
+        sys, "argv", ["review.py", "--id", public_id, "--github-review"]
     )
 
     exit_code = review.main()
@@ -3094,7 +3096,7 @@ def test_github_review_rejects_cycle_before_local_green(
     assert exit_code == 2
     assert errors == [
         (
-            "--github-review requires local green review state",
+            "--github-review requires completed exact-head closure",
             {
                 "status": "usage_error",
                 "help_items": [review._help_command()],

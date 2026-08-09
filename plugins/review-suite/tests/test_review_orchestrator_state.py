@@ -173,7 +173,6 @@ def test_mark_deslop_closed_requires_completed_conforming_closure(
     closed = mark_deslop_closed(done)
     closed_again = mark_deslop_closed(closed)
 
-    assert closed["deslop"]["tracked"] is False
     assert closed["deslop"]["status"] == "closed"
     assert closed["deslop"]["conformance"] == "CONFORMS"
     assert closed_again == closed

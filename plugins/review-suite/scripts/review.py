@@ -2307,6 +2307,7 @@ def _record_validation_status(
 def _record_github_result(
     state: dict[str, Any], args: argparse.Namespace
 ) -> dict[str, Any]:
+    _require_local_green_for_github_review(state)
     reviewed_head = str(
         dict(state.get("review_heads") or {}).get("last_reviewed_head")
         or dict(state.get("identity") or {}).get("head")
@@ -2716,6 +2717,8 @@ def _render_stale_decision_recovery(
 def _require_local_green_for_github_review(state: dict[str, Any]) -> None:
     if state.get("stage") not in {STAGE_REVIEW_GREEN, STAGE_LOCAL_GREEN_HANDOFF}:
         raise ValueError("--github-review requires local green review state")
+    if bool(dict(state.get("deslop") or {}).get("tracked")):
+        raise ValueError("--github-review requires completed exact-head closure")
 
 
 def _github_review_subprocess_command(

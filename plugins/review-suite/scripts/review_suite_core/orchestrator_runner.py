@@ -123,7 +123,7 @@ def deslop_command(state: dict[str, Any]) -> list[str]:
         _identity_text(state, "head"),
     ]
     if brief := str(state.get("review_brief") or "").strip():
-        command.extend(["--review-brief", brief])
+        command.append(f"--review-brief={brief}")
     if bool(dict(state.get("deslop") or {}).get("conformance_only")):
         command.append("--conformance-only")
     if _allow_unsafe_windows_wsl_fallback(state):
@@ -205,12 +205,11 @@ def _run_deslop_once(state: dict[str, Any]) -> OrchestratorRunnerResult:
     actual_head = str(scope["reviewed_head"])
     actual_merge_base = str(scope["merge_base"])
     if (actual_head, actual_merge_base) != (expected_head, expected_merge_base):
+        reason = "exact-head closure blocked: HEAD or merge-base changed after correctness signoff"
+        _print_step_output(label="review-deslop", status="blocked", body=reason)
         return OrchestratorRunnerResult(
-            mark_blocked(
-                state,
-                reason="exact-head closure blocked: HEAD or merge-base changed after correctness signoff",
-            ),
-            ran_step=True,
+            state,
+            ran_step=False,
             step="deslop-blocked",
         )
     command = deslop_command(state)
@@ -246,13 +245,13 @@ def _run_deslop_once(state: dict[str, Any]) -> OrchestratorRunnerResult:
             ),
             "",
         )
-        if verdict not in allowed:
+        if verdict not in allowed or "review decision: clean" not in output.lower():
             return OrchestratorRunnerResult(
                 mark_deslop_failed(
                     state,
                     command=command_text,
                     returncode=0,
-                    reason="deslop did not report a valid frozen-brief conformance verdict",
+                    reason="deslop did not report valid conformance and a clean terminal decision",
                 ),
                 ran_step=True,
                 step="deslop",
