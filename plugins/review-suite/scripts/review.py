@@ -2525,9 +2525,14 @@ def _with_deslop_done_action(
 ) -> dict[str, Any] | None:
     if not _deslop_is_open(state):
         return action
+    findings = dict(state.get("deslop") or {}).get("decision") == "findings"
     return {
         "cmd": _deslop_done_command(public_id, state_dir=state_dir),
-        "note": "Acknowledge the exact-head closure before continuing.",
+        "note": (
+            "Address or dismiss the closure findings, then acknowledge the exact-head result."
+            if findings
+            else "Acknowledge the exact-head closure before continuing."
+        ),
     }
 
 

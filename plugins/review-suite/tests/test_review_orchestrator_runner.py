@@ -1292,6 +1292,7 @@ def test_runner_retry_completes_closure_with_conformance(
 
     assert retried.state["deslop"]["status"] == "done"
     assert retried.state["deslop"]["conformance"] == "NOT_APPLICABLE"
+    assert retried.state["deslop"]["decision"] == "findings"
     assert retried.state["recovery"]["status"] == "none"
     assert len(review_calls) == 1
 

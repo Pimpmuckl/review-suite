@@ -260,6 +260,7 @@ def _run_deslop_once(state: dict[str, Any]) -> OrchestratorRunnerResult:
                     command=command_text,
                     conformance=verdict,
                     reviewed_head=actual_head,
+                    decision=decision.removeprefix("Review decision: "),
                 ),
                 ran_step=True,
                 step="deslop",
