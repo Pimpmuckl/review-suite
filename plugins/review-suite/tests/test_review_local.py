@@ -636,6 +636,24 @@ def test_agent_wrapper_help_keeps_useful_targeting_controls_visible() -> None:
     assert "--status" in review.build_parser().format_help()
 
 
+def test_review_plan_prompt_chooses_the_best_credible_solution_shape() -> None:
+    prompt = review_plan.build_prompt("Keep the existing wrapper.")
+
+    for requirement in (
+        "root cause, canonical owner, and invariants",
+        "materially distinct credible solution shapes",
+        "only credible one",
+        "contract correctness",
+        "diff minimality only as a tie-breaker",
+        "exactly one verdict: PROCEED, REVISE, or RETHINK",
+        "RETHINK as scope authority",
+    ):
+        assert requirement in prompt
+    assert prompt.endswith(
+        "=== BEGIN PLAN ===\nKeep the existing wrapper.\n=== END PLAN ==="
+    )
+
+
 def test_local_review_wrappers_expose_short_wsl_flag() -> None:
     for help_text in (
         review_followup.build_parser().format_help(),
