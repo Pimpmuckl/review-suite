@@ -1300,14 +1300,15 @@ def mark_latest_profile_step_rerun_needed(
     validation.pop("note", None)
     deslop = dict(next_state.get("deslop") or {})
     if str(deslop.get("status") or "") in {
+        DESLOP_STATUS_FAILED,
         DESLOP_STATUS_DONE,
         DESLOP_STATUS_CLOSED,
     }:
         next_state["deslop"] = {
             "tracked": True,
             "status": DESLOP_STATUS_TRACKED,
-            "cleanup_completed": True,
-            "conformance_only": True,
+            "cleanup_completed": bool(deslop.get("cleanup_completed")),
+            "conformance_only": bool(deslop.get("cleanup_completed")),
         }
     action = _rewind_profile_step_action(next_state, profile_step)
     _set_review_green(next_state, "unknown")

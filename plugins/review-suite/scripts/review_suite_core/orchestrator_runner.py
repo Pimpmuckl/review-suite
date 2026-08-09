@@ -63,6 +63,7 @@ from .process_runtime import (
 )
 from .workflow_state import (
     EFFECTIVE_BASE_METADATA_KEYS,
+    current_branch,
     current_head,
     dirty_worktree_scope,
     has_committed_diff,
@@ -209,6 +210,10 @@ def _run_deslop_once(state: dict[str, Any]) -> OrchestratorRunnerResult:
         _print_step_output(label="closure", status="blocked", body="merge-base drift")
         return OrchestratorRunnerResult(state, ran_step=False, step="deslop-blocked")
     if actual_head != expected_head:
+        branch = dict(state.get("identity") or {}).get("branch")
+        dirty = dirty_worktree_scope(cwd, "HEAD")["dirty_paths"]
+        if current_branch(cwd) != branch or dirty:
+            return OrchestratorRunnerResult(state, ran_step=False, step="blocked")
         state = mark_latest_profile_step_rerun_needed(state, head=actual_head)
         state["identity"]["head"] = actual_head
         return OrchestratorRunnerResult(state, ran_step=True, step="deslop-rerun")
@@ -242,28 +247,22 @@ def _run_deslop_once(state: dict[str, Any]) -> OrchestratorRunnerResult:
             for line in lines
             if line.startswith("Conformance: ")
         ]
-        verdict = verdicts[0] if verdicts else ""
         decisions = [line for line in lines if line.startswith("Review decision: ")]
-        decision = decisions[0] if decisions else ""
         if (
             int(proc.returncode) == 0
             and len(verdicts) == len(decisions) == 1
-            and verdict in allowed
-            and lines[-1] == decision
-            and decision
-            in {
-                "Review decision: clean",
-                "Review decision: findings",
-            }
+            and verdicts[0] in allowed
+            and lines[-1] == decisions[0]
+            and decisions[0].partition(": ")[2] in {"clean", "findings"}
         ):
             _print_step_output(label="review-deslop", body=output)
             return OrchestratorRunnerResult(
                 mark_deslop_done(
                     state,
                     command=command_text,
-                    conformance=verdict,
+                    conformance=verdicts[0],
                     reviewed_head=actual_head,
-                    decision=decision.removeprefix("Review decision: "),
+                    decision=decisions[0].removeprefix("Review decision: "),
                 ),
                 ran_step=True,
                 step="deslop",

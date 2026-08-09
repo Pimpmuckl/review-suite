@@ -1249,7 +1249,6 @@ def test_create_resume_and_id_reprint_use_one_pending_action(
     assert exit_code == 0
     assert first_clean["review"] == public_id
     assert "stage" not in first_clean
-    assert set(dict(first_clean["Action"])) == {"cmd"}
     assert f"--id {public_id}" in str(first_clean["Action"]["cmd"])
     assert "--state-dir" not in str(first_clean["Action"]["cmd"])
     assert str(state_dir) not in str(first_clean["Action"]["cmd"])

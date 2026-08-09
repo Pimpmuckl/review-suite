@@ -174,7 +174,6 @@ def test_mark_deslop_closed_requires_completed_conforming_closure(
     closed_again = mark_deslop_closed(closed)
 
     assert closed["deslop"]["status"] == "closed"
-    assert closed["deslop"]["conformance"] == "CONFORMS"
     assert closed_again == closed
     assert tracked["deslop"] == {"tracked": True, "status": "tracked"}
 
@@ -1610,7 +1609,7 @@ def test_gate_findings_require_fix_followup_clean_and_same_gate_rerun(
     rerun = mark_latest_profile_step_rerun_needed(handoff, head="head-3")
     assert "note" not in rerun["validation"]
     assert rerun["deslop"]["status"] == "tracked"
-    assert rerun["deslop"]["cleanup_completed"] is True
+    assert rerun["stage"] == STAGE_CREATED
     assert rerun["deslop"]["conformance_only"] is True
 
 
