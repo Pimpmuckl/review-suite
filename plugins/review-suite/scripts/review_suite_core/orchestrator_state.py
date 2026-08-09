@@ -57,19 +57,7 @@ DESLOP_STATUS_FAILED = "failed"
 DESLOP_STATUS_CLOSED = "closed"
 DESLOP_STATUS_SKIPPED = "skipped"
 DESLOP_STATUS_SKIPPED_FAST = "skipped-fast"
-DESLOP_RETRY_STAGES = {
-    STAGE_CREATED,
-    STAGE_RUNNING,
-    STAGE_DECISION_PENDING,
-    STAGE_FIX_PENDING,
-    STAGE_FOLLOWUP_PENDING,
-    STAGE_GATE_RERUN_NEEDED,
-    STAGE_REVIEW_GREEN,
-    STAGE_LOCAL_GREEN_HANDOFF,
-    STAGE_BLOCKED,
-    STAGE_RETRY_REQUESTED,
-}
-
+CONFORMANCE_VERDICTS = {"CONFORMS", "MATERIALLY_DRIFTED", "NOT_APPLICABLE"}
 GATE_LANES = {"review_t2", "review_t4"}
 NO_WORK_STAGES = {
     STAGE_DECISION_PENDING,
@@ -408,9 +396,7 @@ def create_cycle(
     resolved_selection = _normalize_selection(
         effective_selection or requested_selection, field="effective_selection"
     )
-    deslop_tracked = (
-        bool(deslop_enabled) if deslop_enabled is not None else effective != "fast"
-    )
+    deslop_tracked = bool(deslop_enabled) if deslop_enabled is not None else True
     if deslop_tracked:
         deslop_status = DESLOP_STATUS_TRACKED
         deslop_skip = None
@@ -1312,6 +1298,17 @@ def mark_latest_profile_step_rerun_needed(
     for key in ("focused", "full_suite", "ci"):
         validation[key] = "unknown"
     validation.pop("note", None)
+    deslop = dict(next_state.get("deslop") or {})
+    if str(deslop.get("status") or "") in {
+        DESLOP_STATUS_DONE,
+        DESLOP_STATUS_CLOSED,
+    }:
+        next_state["deslop"] = {
+            "tracked": True,
+            "status": DESLOP_STATUS_TRACKED,
+            "cleanup_completed": True,
+            "conformance_only": True,
+        }
     action = _rewind_profile_step_action(next_state, profile_step)
     _set_review_green(next_state, "unknown")
     _set_stage(next_state, STAGE_CREATED, action)
@@ -1331,7 +1328,13 @@ def deslop_is_ready(state: dict[str, Any]) -> bool:
     deslop = dict(state.get("deslop") or {})
     if not bool(deslop.get("tracked")):
         return True
-    return str(deslop.get("status") or "") == DESLOP_STATUS_DONE
+    status = str(deslop.get("status") or "")
+    if status in {DESLOP_STATUS_DONE, DESLOP_STATUS_CLOSED}:
+        return True
+    return not (
+        state.get("stage") in {STAGE_REVIEW_GREEN, STAGE_LOCAL_GREEN_HANDOFF}
+        or dict(state.get("pending_action") or {}).get("kind") == "run-deslop"
+    )
 
 
 def deslop_should_run(state: dict[str, Any]) -> bool:
@@ -1340,38 +1343,42 @@ def deslop_should_run(state: dict[str, Any]) -> bool:
         return False
     status = str(deslop.get("status") or "")
     if status == DESLOP_STATUS_FAILED:
-        return state.get("stage") in DESLOP_RETRY_STAGES
-    if status == DESLOP_STATUS_TRACKED and state.get("stage") == STAGE_RUNNING:
-        return True
-    if state.get("stage") not in {
-        STAGE_CREATED,
-        STAGE_RETRY_REQUESTED,
-    }:
-        return False
-    if dict(state.get("pending_action") or {}).get("kind") not in (
-        None,
-        "run-deslop",
-        "resume-after-deslop",
-    ):
-        return False
-    return status == DESLOP_STATUS_TRACKED
+        return (
+            state.get("stage") == STAGE_RETRY_REQUESTED
+            and dict(state.get("pending_action") or {}).get("kind") == "run-deslop"
+        )
+    return status == DESLOP_STATUS_TRACKED and state.get("stage") in {
+        STAGE_REVIEW_GREEN,
+        STAGE_LOCAL_GREEN_HANDOFF,
+    }
 
 
-def mark_deslop_done(state: dict[str, Any], *, command: str) -> dict[str, Any]:
+def mark_deslop_done(
+    state: dict[str, Any], *, command: str, conformance: str, reviewed_head: str
+) -> dict[str, Any]:
     next_state = _copy_state(state)
+    verdict = _required_text(conformance, field="conformance")
+    if verdict not in CONFORMANCE_VERDICTS:
+        raise ValueError("invalid deslop conformance verdict")
+    prior = dict(next_state.get("deslop") or {})
     next_state["deslop"] = {
-        **dict(next_state.get("deslop") or {}),
+        **prior,
         "tracked": True,
         "status": DESLOP_STATUS_DONE,
         "command": _required_text(command, field="command"),
         "returncode": 0,
+        "conformance": verdict,
+        "reviewed_head": _required_text(reviewed_head, field="reviewed_head"),
+        "cleanup_completed": bool(prior.get("cleanup_completed"))
+        or not bool(prior.get("conformance_only")),
     }
     recovery = dict(next_state.get("recovery") or {})
     next_state["recovery"] = {
         "status": "none",
         "retry_count": int(recovery.get("retry_count") or 0),
     }
-    _set_stage(next_state, STAGE_CREATED, {"kind": "resume-after-deslop"})
+    next_state["pending_action"] = None
+    _set_stage(next_state, STAGE_REVIEW_GREEN)
     return next_state
 
 
@@ -1380,6 +1387,10 @@ def mark_deslop_closed(state: dict[str, Any]) -> dict[str, Any]:
     deslop = dict(next_state.get("deslop") or {})
     if not bool(deslop.get("tracked")):
         return next_state
+    if str(deslop.get("status") or "") != DESLOP_STATUS_DONE:
+        raise ValueError("cleanup can only close after the bounded closure pass")
+    if deslop.get("conformance") == "MATERIALLY_DRIFTED":
+        raise ValueError("materially drifted closure cannot close; revise the head")
     next_state["deslop"] = {
         **deslop,
         "tracked": False,

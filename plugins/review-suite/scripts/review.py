@@ -76,7 +76,6 @@ from review_suite_core.orchestrator_state import (
     STAGE_RETRY_REQUESTED,
     STAGE_REVIEW_GREEN,
     STAGE_ABORTED,
-    DESLOP_STATUS_CLOSED,
     DESLOP_STATUS_DONE,
     DESLOP_STATUS_SKIPPED,
     create_cycle,
@@ -192,7 +191,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-deslop",
         dest="skip_deslop",
         action="store_true",
-        help="Skip the deslop sidecar when creating a review cycle.",
+        help="Skip bounded exact-head closure when creating a review cycle.",
     )
     parser.add_argument(
         "--show-findings",
@@ -1206,6 +1205,8 @@ def _show_status(state: dict[str, Any], *, state_dir: Path) -> int:
     deslop = dict(state.get("deslop") or {})
     if deslop_status := str(deslop.get("status") or "").strip():
         payload["deslop"] = deslop_status
+    if conformance := str(deslop.get("conformance") or "").strip():
+        payload["conformance"] = conformance
     if validation := _validation_summary(state):
         payload["validation"] = validation
     github_review = dict(state.get("github_review") or {})
@@ -1968,8 +1969,7 @@ def _create_or_resume_cycle(
     resolution = resolve_orchestrator_profile(
         config, mode=mode, selection=_configured_selection(config)
     )
-    profile_deslop_enabled = bool(resolution.profile.deslop_enabled)
-    skip_deslop = bool(args.skip_deslop) and profile_deslop_enabled
+    skip_deslop = bool(args.skip_deslop)
     continuation = _compatible_continuation_cycle(
         state_dir=state_dir,
         review_root=review_root,
@@ -1993,7 +1993,7 @@ def _create_or_resume_cycle(
         effective_mode=resolution.effective_mode,
         selection=resolution.requested_selection,
         effective_selection=resolution.effective_selection,
-        deslop_enabled=profile_deslop_enabled and not skip_deslop,
+        deslop_enabled=not skip_deslop,
         deslop_skip_source="cli" if skip_deslop else None,
         cycle_token="skip-deslop" if skip_deslop else None,
         review_brief=args.review_brief,
@@ -2118,9 +2118,7 @@ def _create_successor_cycle(
         effective_mode=resolution.effective_mode,
         selection=resolution.requested_selection,
         effective_selection=resolution.effective_selection,
-        deslop_enabled=False
-        if source_skipped_deslop
-        else resolution.profile.deslop_enabled,
+        deslop_enabled=not source_skipped_deslop,
         deslop_skip_source=deslop_skip_source,
         restart_token=restart_token,
         review_brief=state.get("review_brief"),
@@ -2467,9 +2465,7 @@ def _github_pending_head_change_identity(
     if state.get("stage") not in {STAGE_REVIEW_GREEN, STAGE_LOCAL_GREEN_HANDOFF}:
         return None
     github_status = _github_review_status(state)
-    if (
-        _mode_label(state) == "fast" and github_status == "unknown"
-    ) or github_status in {GITHUB_RESULT_CLEAN, GITHUB_RESULT_WAIVED}:
+    if github_status in {GITHUB_RESULT_CLEAN, GITHUB_RESULT_WAIVED}:
         return None
     try:
         identity = _current_cycle_identity_if_compatible(state)
@@ -2505,9 +2501,10 @@ def _github_terminal_action(
 
 def _deslop_is_open(state: dict[str, Any]) -> bool:
     deslop = dict(state.get("deslop") or {})
-    if not bool(deslop.get("tracked")):
-        return False
-    return str(deslop.get("status") or "").strip() != DESLOP_STATUS_CLOSED
+    return (
+        bool(deslop.get("tracked"))
+        and str(deslop.get("status") or "").strip() == DESLOP_STATUS_DONE
+    )
 
 
 def _with_deslop_done_action(
@@ -2628,6 +2625,15 @@ def _action_payload(state: dict[str, Any], *, state_dir: Path) -> dict[str, Any]
             action["note"] = note
         return _with_deslop_done_action(state, action, public_id, state_dir=state_dir)
     if stage in {STAGE_REVIEW_GREEN, STAGE_LOCAL_GREEN_HANDOFF}:
+        deslop = dict(state.get("deslop") or {})
+        if bool(deslop.get("tracked")) and str(deslop.get("status") or "") in {
+            "tracked",
+            "failed",
+        }:
+            return {
+                "cmd": _review_command(public_id, state_dir=state_dir),
+                "note": "Run the bounded exact-head closure before handoff.",
+            }
         summary = review_ladder_summary(state, current_head=_identity_head(state))
         if summary.get("review_ladder") == "invalidated":
             if green_review_head_change_summary(state, summary=summary):
@@ -2671,6 +2677,10 @@ def _render(state: dict[str, Any], *, state_dir: Path) -> None:
     github_status = str(github_review.get("status") or "").strip()
     if github_status and github_status != "unknown":
         payload["github_review"] = github_status
+    if conformance := str(
+        dict(state.get("deslop") or {}).get("conformance") or ""
+    ).strip():
+        payload["conformance"] = conformance
     if convergence := _public_convergence(state):
         payload["convergence"] = convergence
     if validation := _validation_summary(state):

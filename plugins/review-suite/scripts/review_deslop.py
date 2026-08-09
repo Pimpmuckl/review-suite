@@ -83,6 +83,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--base", help="Override the detected default branch ref.")
     parser.add_argument("--commit", nargs="+")
     parser.add_argument("--focus")
+    parser.add_argument("--review-brief", help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--conformance-only", action="store_true", help=argparse.SUPPRESS
+    )
     parser.add_argument("--wsl", action="store_true")
     parser.add_argument("--output-only", action="store_true", help=argparse.SUPPRESS)
     return parser
@@ -112,6 +116,8 @@ def build_prompt(
     commit: str | None,
     commit_end: str | None,
     focus: str | None,
+    review_brief: str | None = None,
+    conformance_only: bool = False,
 ) -> str:
     focus_block = (
         f"\nPay extra attention to this focus area:\n- {focus.strip()}\n"
@@ -132,19 +138,27 @@ def build_prompt(
         target_block = (
             f"Review the current repository changes against base branch `{base}`.\n\n"
         )
+    conformance = (
+        "Compare the implementation with this frozen review brief:\n"
+        f"<review_brief>\n{review_brief.strip()}\n</review_brief>\n"
+        "Report CONFORMS unless the implementation materially changes the brief's goal or constraints; otherwise report MATERIALLY_DRIFTED.\n\n"
+        if review_brief
+        else "No frozen review brief is available; report NOT_APPLICABLE for conformance.\n\n"
+    )
+    cleanup = (
+        "Do not perform another cleanup review; this is the post-edit conformance rerun.\n"
+        if conformance_only
+        else "Inspect only for concrete redundant code, dead code, duplicate logic, and needless wrappers.\n"
+    )
     return (
         target_block
-        + "Prefer the smallest correct shape.\n\n"
-        + "Inspect for:\n"
-        + "- redundant code\n"
-        + "- duplicated logic\n"
-        + "- dead or unused code\n"
-        + "- places where a smaller or more direct implementation would work\n"
-        + "- unnecessary helpers, wrappers, flags, branching, or abstraction layers\n"
-        + "- overcomplicated abstractions that can be collapsed\n"
+        + conformance
+        + cleanup
+        + "Do not redesign ownership, add abstractions, broaden scope, or change behavior.\n"
         + focus_block
-        + "\nReturn only concrete findings with severity, file path, and fix suggestion.\n"
-        + "Skip style-only comments."
+        + "\nBegin with exactly `Conformance: CONFORMS`, `Conformance: MATERIALLY_DRIFTED`, or `Conformance: NOT_APPLICABLE`.\n"
+        + "Return only concrete cleanup findings with severity, file path, and fix suggestion. Skip style-only comments.\n"
+        + "Finish with exactly `Review decision: clean` or `Review decision: findings`."
     )
 
 
@@ -405,7 +419,7 @@ def _with_static_cleanup_output(
     body = str(result.get("final_message") or "").strip()
     if not body:
         return result
-    if _deslop_output_clean(result):
+    if _deslop_output_clean(result) and "conformance:" not in body.lower():
         body = "No reviewer findings."
     return {**result, "final_message": f"{section}\n\nDeslop Results:\n{body}"}
 
@@ -499,17 +513,23 @@ def main() -> int:
             prompt_base = str(effective_base_ref(review_root, args.base)["base"])
             ensure_clean_git_worktree(review_root)
             review_target = {"base": prompt_base}
-        static_scan = _start_static_cleanup_scan(
-            review_root=review_root,
-            base=prompt_base,
-            commit=commit,
-            commit_end=commit_end,
+        static_scan = (
+            None
+            if args.conformance_only
+            else _start_static_cleanup_scan(
+                review_root=review_root,
+                base=prompt_base,
+                commit=commit,
+                commit_end=commit_end,
+            )
         )
         prompt = build_prompt(
             base=prompt_base,
             commit=commit,
             commit_end=commit_end,
             focus=args.focus,
+            review_brief=args.review_brief,
+            conformance_only=bool(args.conformance_only),
         )
         try:
             result = run_codex_review(
@@ -526,9 +546,10 @@ def main() -> int:
                 allow_unsafe_windows_wsl_fallback=bool(args.wsl),
             )
             result = _with_effective_returncode(result)
-            static_suggestions = _collect_static_cleanup_scan(static_scan)
-            static_scan = None
-            result = _with_static_cleanup_output(result, static_suggestions)
+            if static_scan is not None:
+                static_suggestions = _collect_static_cleanup_scan(static_scan)
+                static_scan = None
+                result = _with_static_cleanup_output(result, static_suggestions)
         finally:
             if static_scan is not None:
                 _stop_static_cleanup_scan(static_scan)

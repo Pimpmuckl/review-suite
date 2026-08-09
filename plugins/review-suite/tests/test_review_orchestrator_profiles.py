@@ -57,7 +57,7 @@ def test_default_stable_profiles_cover_all_modes(tmp_path: Path) -> None:
     assert profiles["stable"]["normal"].steps[-1].rerun_on_findings is True
     assert profiles["stable"]["deep"].steps[0].rerun_on_findings is True
     assert profiles["stable"]["deep"].steps[-1].rerun_on_findings is True
-    assert profiles["stable"]["fast"].deslop_enabled is False
+    assert profiles["stable"]["fast"].deslop_enabled is True
     assert [_step_summary(step) for step in profiles["stable"]["fast"].steps] == [
         ("review", "fast-signoff", 2, "medium", False)
     ]
