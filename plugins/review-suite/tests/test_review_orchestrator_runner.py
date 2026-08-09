@@ -271,13 +271,15 @@ def test_runner_blocks_stale_exact_head_before_closure(
 ) -> None:
     green = _cycle(tmp_path)
     green["stage"] = STAGE_REVIEW_GREEN
+    green["rounds"] = [{"round_id": "round-1", "profile_step": {"index": 0}}]
+    green["review_progress"]["completed_steps"] = [{"round_id": "round-1"}]
     monkeypatch.setattr(orchestrator_runner, "current_head", lambda cwd: "head-2")
     monkeypatch.setattr(
         orchestrator_runner, "merge_base", lambda cwd, base, head: "base-1"
     )
 
     result = orchestrator_runner.run_one_expensive_step(green)
-    assert result.state is green
+    assert result.state["stage"] == STAGE_CREATED
 
 
 def test_deslop_subprocess_emits_parent_progress_without_leaking_child_stderr(
