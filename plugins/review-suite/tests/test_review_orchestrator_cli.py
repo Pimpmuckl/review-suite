@@ -2847,7 +2847,7 @@ def test_review_orchestrator_help_hides_internal_selection() -> None:
     assert "--state-dir" not in help_text
 
 
-def test_deslop_done_closes_completed_closure_without_rerunning_deslop(
+def test_deslop_done_rechecks_exact_head_before_closing(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -2875,28 +2875,19 @@ def test_deslop_done_closes_completed_closure_without_rerunning_deslop(
     _, completed = _run_review(monkeypatch, ["--id", public_id, "--decision", "clean"])
     _, completed = _run_review(monkeypatch, ["--id", public_id])
 
-    assert "--deslop-done" in str(completed["Action"]["deslop_done"])
+    assert "--deslop-done" in str(completed["Action"]["cmd"])
     assert len(deslop_calls) == 1
     drifted = _cycle_payload(state_dir, public_id)
     drifted["deslop"]["conformance"] = "MATERIALLY_DRIFTED"
     assert "Revise" in review._action_payload(drifted, state_dir=state_dir)["note"]
 
-    exit_code, closed = _run_review(monkeypatch, ["--id", public_id, "--deslop-done"])
+    amended_head = _amend_file(repo, "app.txt", "changed after closure\n")
+    exit_code, _ = _run_review(monkeypatch, ["--id", public_id, "--deslop-done"])
 
     assert exit_code == 0
-    assert closed["review"] == public_id
-    assert "deslop_done" not in dict(closed["Action"])
     state = _cycle_payload(state_dir, public_id)
-    assert state["deslop"]["tracked"] is False
-    assert state["deslop"]["status"] == "closed"
-
-    exit_code, resumed = _run_review(
-        monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)]
-    )
-
-    assert exit_code == 0
-    assert "--github-review" in str(resumed["Action"]["cmd"])
-    assert "deslop_done" not in dict(resumed["Action"])
+    assert state["identity"]["head"] == amended_head
+    assert state["deslop"]["status"] == "tracked"
     assert len(deslop_calls) == 1
     assert len(review_calls) == 1
 
@@ -2912,7 +2903,8 @@ def test_deslop_done_is_primary_action_when_no_other_action_remains() -> None:
     assert action == {
         "cmd": review._review_command(
             "rvw_example", "--deslop-done", state_dir=state_dir
-        )
+        ),
+        "note": "Acknowledge the exact-head closure before continuing.",
     }
 
 

@@ -2474,9 +2474,17 @@ def _github_pending_head_change_identity(
         return None
     if not identity:
         return None
+    head = str(identity.get("head") or "").strip()
+    current_merge_base = str(identity.get("merge_base") or "").strip()
+    deslop = dict(state.get("deslop") or {})
+    if _deslop_is_open(state) and (
+        str(deslop.get("reviewed_head") or "").strip() != head
+        or str(dict(state.get("identity") or {}).get("merge_base") or "").strip()
+        != current_merge_base
+    ):
+        return identity
     if bool(dict(identity.get("base_drift") or {}).get("patch_equivalent")):
         return None
-    head = str(identity.get("head") or "").strip()
     summary = review_ladder_summary(state, current_head=head)
     if summary.get("review_ladder") != "invalidated":
         return None
@@ -2517,11 +2525,10 @@ def _with_deslop_done_action(
 ) -> dict[str, Any] | None:
     if not _deslop_is_open(state):
         return action
-    if action is None:
-        return {"cmd": _deslop_done_command(public_id, state_dir=state_dir)}
-    next_action = dict(action or {})
-    next_action["deslop_done"] = _deslop_done_command(public_id, state_dir=state_dir)
-    return next_action
+    return {
+        "cmd": _deslop_done_command(public_id, state_dir=state_dir),
+        "note": "Acknowledge the exact-head closure before continuing.",
+    }
 
 
 def _public_convergence(state: dict[str, Any]) -> dict[str, Any] | None:
@@ -2936,6 +2943,11 @@ def main() -> int:
                 _render(saved, state_dir=state_dir)
                 return 0
             if args.deslop_done:
+                resumed = _resume_progress(state, state_dir=state_dir)
+                if resumed != state:
+                    saved = save_cycle(state_dir, resumed)
+                    _render(saved, state_dir=state_dir)
+                    return 0
                 state = mark_deslop_closed(state)
                 saved = save_cycle(state_dir, state)
                 _render(saved, state_dir=state_dir)

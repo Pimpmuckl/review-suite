@@ -237,15 +237,15 @@ def _run_deslop_once(state: dict[str, Any]) -> OrchestratorRunnerResult:
         allowed = (
             {"CONFORMS", "MATERIALLY_DRIFTED"} if has_brief else {"NOT_APPLICABLE"}
         )
-        verdict = next(
-            (
-                candidate
-                for candidate in allowed
-                if f"conformance: {candidate.lower()}" in output.lower()
-            ),
-            "",
-        )
-        if verdict not in allowed or "review decision: clean" not in output.lower():
+        lines = [line.strip() for line in output.splitlines() if line.strip()]
+        verdicts = [
+            line.removeprefix("Conformance: ")
+            for line in lines
+            if line.startswith("Conformance: ")
+        ]
+        verdict = verdicts[0] if verdicts else ""
+        clean = bool(lines) and lines[-1] == "Review decision: clean"
+        if len(verdicts) != 1 or verdict not in allowed or not clean:
             return OrchestratorRunnerResult(
                 mark_deslop_failed(
                     state,

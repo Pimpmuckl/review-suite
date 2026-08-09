@@ -1266,17 +1266,13 @@ def test_runner_retry_completes_closure_with_conformance(
     monkeypatch, tmp_path: Path
 ) -> None:
     review_calls = _stub_review(monkeypatch)
-    completed = subprocess.CompletedProcess
     outputs = iter(
-        [
-            completed([], 0, "Conformance: NOT_APPLICABLE", ""),
-            completed(
-                [],
-                0,
-                "Conformance: NOT_APPLICABLE\nReview decision: clean",
-                "",
-            ),
-        ]
+        subprocess.CompletedProcess([], 0, body, "")
+        for body in (
+            "Conformance: NOT_APPLICABLE\nConformance: NOT_APPLICABLE\nReview decision: clean",
+            "Conformance: NOT_APPLICABLE\nReview decision: clean\nReview decision: findings",
+            "Conformance: NOT_APPLICABLE\nReview decision: clean",
+        )
     )
     monkeypatch.setattr(
         orchestrator_runner, "run_deslop_subprocess", lambda **kwargs: next(outputs)
@@ -1290,7 +1286,9 @@ def test_runner_retry_completes_closure_with_conformance(
     )
     failed = orchestrator_runner.run_one_expensive_step(green)
     assert failed.state["deslop"]["status"] == "failed"
-    retried = orchestrator_runner.run_one_expensive_step(failed.state)
+    failed_again = orchestrator_runner.run_one_expensive_step(failed.state)
+    assert failed_again.state["deslop"]["status"] == "failed"
+    retried = orchestrator_runner.run_one_expensive_step(failed_again.state)
 
     assert retried.state["deslop"]["status"] == "done"
     assert retried.state["deslop"]["conformance"] == "NOT_APPLICABLE"
