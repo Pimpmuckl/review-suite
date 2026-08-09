@@ -30,6 +30,18 @@ DECISION_CLEAN = "clean"
 DECISION_FINDINGS = "findings"
 DECISION_COMMANDS = {DECISION_CLEAN, DECISION_FINDINGS}
 
+CONVERGENCE_DECISIONS = {"CONTINUE", "REPLAN", "RESLICE"}
+CONTRACT_CONFLICTS = set(
+    "goal acceptance scope stop-condition owner authorized-behavior unit-boundary".split()
+)
+DEFAULT_ACCEPTED_FINDINGS_LIMIT = 3
+CONVERGENCE_DEFAULTS = {
+    "status": "ACTIVE",
+    "accepted_findings_heads": [],
+    "continue_used": False,
+    "decisions": [],
+}
+
 GITHUB_RESULT_CLEAN = "clean"
 GITHUB_RESULT_FINDINGS = "findings"
 GITHUB_RESULT_WAIVED = "waived"
@@ -471,6 +483,7 @@ def create_cycle(
         "decisions": [],
         "active_findings": None,
         "resolved_gate_findings": [],
+        "convergence": deepcopy(CONVERGENCE_DEFAULTS),
     }
     if restart is not None:
         state["restart"] = {"token": restart}
@@ -598,6 +611,115 @@ def _set_stage(
 ) -> None:
     state["stage"] = stage
     state["pending_action"] = _compact(deepcopy(pending_action or {})) or None
+
+
+def _convergence(state: dict[str, Any]) -> dict[str, Any]:
+    return state.setdefault("convergence", deepcopy(CONVERGENCE_DEFAULTS))
+
+
+def convergence_summary(state: dict[str, Any]) -> dict[str, Any]:
+    convergence = dict(state.get("convergence") or {})
+    return _compact(
+        {
+            "status": convergence.get("status") or "ACTIVE",
+            "reason": convergence.get("reason"),
+            "conflict": convergence.get("conflict"),
+            "decision": convergence.get("decision"),
+            "accepted_findings_heads": len(
+                convergence.get("accepted_findings_heads") or []
+            ),
+            "accepted_findings_limit": DEFAULT_ACCEPTED_FINDINGS_LIMIT,
+            "recommendations": sorted(
+                CONVERGENCE_DECISIONS
+                - ({"CONTINUE"} if convergence.get("continue_used") else set())
+            ),
+        }
+    )
+
+
+def _require_convergence_decision_inplace(
+    state: dict[str, Any], *, reason: str, conflict: str | None = None
+) -> None:
+    convergence = _convergence(state)
+    if convergence.get("status") == "DECISION_REQUIRED":
+        return
+    convergence.update(
+        status="DECISION_REQUIRED", reason=reason, conflict=conflict, decision=None
+    )
+    _set_stage(
+        state,
+        "decision-required",
+        {"kind": "convergence-decision", "reason": reason},
+    )
+
+
+def _record_accepted_findings_head_inplace(
+    state: dict[str, Any], *, reviewed_head: str, reviewed_tree: str | None
+) -> None:
+    convergence = _convergence(state)
+    material_id = _optional_text(reviewed_tree) or _required_text(
+        reviewed_head, field="reviewed_head"
+    )
+    heads = convergence["accepted_findings_heads"]
+    if any(
+        isinstance(item, dict) and item.get("tree") == material_id for item in heads
+    ):
+        return
+    heads.append({"head": reviewed_head, "tree": material_id})
+    continued_head = bool(convergence.pop("continue_pending", False))
+    if continued_head or len(heads) >= DEFAULT_ACCEPTED_FINDINGS_LIMIT:
+        _require_convergence_decision_inplace(state, reason="budget_exhausted")
+
+
+def record_contract_conflict(state: dict[str, Any], *, conflict: str) -> dict[str, Any]:
+    resolved = _required_text(conflict, field="conflict")
+    if state.get("stage") != STAGE_FIX_PENDING or not isinstance(
+        state.get("active_findings"), dict
+    ):
+        raise ValueError("--contract-conflict requires findings awaiting a fix")
+    next_state = _copy_state(state)
+    _require_convergence_decision_inplace(
+        next_state, reason="contract_conflict", conflict=resolved
+    )
+    return next_state
+
+
+def record_convergence_decision(
+    state: dict[str, Any], *, decision: str
+) -> dict[str, Any]:
+    resolved = _required_text(decision, field="decision").upper()
+    if resolved not in CONVERGENCE_DECISIONS:
+        raise ValueError(
+            f"convergence decision must be one of: {', '.join(sorted(CONVERGENCE_DECISIONS))}"
+        )
+    next_state = _copy_state(state)
+    convergence = _convergence(next_state)
+    if (resolved, convergence.get("status"), convergence.get("continue_pending")) == (
+        "CONTINUE",
+        "ACTIVE",
+        True,
+    ):
+        return next_state
+    if (
+        convergence.get("status") == "DECIDED"
+        and convergence.get("decision") == resolved
+    ):
+        return next_state
+    if convergence.get("status") != "DECISION_REQUIRED":
+        raise ValueError("no convergence decision is required")
+    if resolved == "CONTINUE" and convergence.get("continue_used"):
+        raise ValueError("CONTINUE is available once per review cycle")
+    convergence["decisions"].append(
+        {"decision": resolved, "reason": convergence.get("reason")}
+    )
+    convergence["decision"] = resolved
+    if resolved == "CONTINUE":
+        convergence.update(status="ACTIVE", continue_used=True, continue_pending=True)
+        _set_stage(next_state, STAGE_FIX_PENDING)
+    else:
+        convergence["status"] = "DECIDED"
+        _set_stage(next_state, "convergence-decided")
+    return next_state
 
 
 def _nonnegative_int(value: Any, *, field: str) -> int:
@@ -1116,51 +1238,6 @@ def _profile_step_max_review_rounds(
     return rounds
 
 
-def _profile_step_review_round_count(
-    state: dict[str, Any], profile_step: dict[str, Any]
-) -> int:
-    index = _nonnegative_int(profile_step.get("index"), field="profile_step.index")
-    count = 0
-    for item in list(state.get("rounds") or []):
-        if not isinstance(item, dict):
-            continue
-        item_step = item.get("profile_step")
-        if not isinstance(item_step, dict):
-            continue
-        try:
-            item_index = _nonnegative_int(
-                item_step.get("index"), field="round.profile_step.index"
-            )
-        except ValueError:
-            continue
-        if item_index == index:
-            count += 1
-    return count
-
-
-def _mark_profile_review_budget_exhausted_inplace(
-    state: dict[str, Any],
-    active: dict[str, Any],
-    profile_step: dict[str, Any],
-    *,
-    max_review_rounds: int,
-    fix_verification: dict[str, Any] | None,
-) -> None:
-    active["status"] = "review-round-budget-exhausted"
-    action = {
-        "kind": "review-round-budget-exhausted",
-        "round_id": active.get("round_id"),
-        "lane": active.get("lane"),
-        "step_index": profile_step.get("index"),
-        "step": profile_step.get("name"),
-        "max_review_rounds": max_review_rounds,
-    }
-    if fix_verification:
-        action["fix_verification"] = _compact(deepcopy(fix_verification))
-    _set_review_green(state, "failed")
-    _set_stage(state, STAGE_FIX_PENDING, action)
-
-
 def _findings_fix_context(active: dict[str, Any]) -> dict[str, Any]:
     return _compact(
         {
@@ -1182,19 +1259,6 @@ def _mark_profile_fix_review_needed_inplace(
     )
     if not profile_step:
         return False
-    max_review_rounds = _profile_step_max_review_rounds(state, profile_step)
-    if (
-        max_review_rounds is not None
-        and _profile_step_review_round_count(state, profile_step) >= max_review_rounds
-    ):
-        _mark_profile_review_budget_exhausted_inplace(
-            state,
-            active,
-            profile_step,
-            max_review_rounds=max_review_rounds,
-            fix_verification=_findings_fix_context(active),
-        )
-        return True
     state["active_findings"] = None
     if _profile_step_has_fixed_findings_budget(state, profile_step):
         _complete_profile_step_from_metadata(
@@ -1495,6 +1559,7 @@ def record_findings_decision(
     round_id: str,
     lane: str,
     reviewed_head: str | None = None,
+    reviewed_tree: str | None = None,
     gate: str | None = None,
 ) -> dict[str, Any]:
     next_state = _copy_state(state)
@@ -1538,6 +1603,9 @@ def record_findings_decision(
     )
     _set_review_green(next_state, "unknown")
     _set_stage(next_state, STAGE_FIX_PENDING)
+    _record_accepted_findings_head_inplace(
+        next_state, reviewed_head=head, reviewed_tree=reviewed_tree
+    )
     return next_state
 
 
@@ -1685,6 +1753,7 @@ def record_followup_clean(
     active["followup_round_id"] = _required_text(round_id, field="round_id")
     active["followup_head"] = head
     next_state.setdefault("review_heads", {})["last_followup_head"] = head
+    _convergence(next_state).pop("continue_pending", None)
     if isinstance(active.get("gate"), dict):
         _mark_gate_rerun_needed_inplace(next_state)
         return next_state
@@ -1731,6 +1800,7 @@ def record_followup_findings(
     *,
     round_id: str,
     reviewed_head: str | None = None,
+    reviewed_tree: str | None = None,
 ) -> dict[str, Any]:
     next_state = _copy_state(state)
     active = _active_findings(next_state)
@@ -1769,6 +1839,9 @@ def record_followup_findings(
     )
     _set_review_green(next_state, "unknown")
     _set_stage(next_state, STAGE_FIX_PENDING)
+    _record_accepted_findings_head_inplace(
+        next_state, reviewed_head=head, reviewed_tree=reviewed_tree
+    )
     return next_state
 
 
@@ -1826,6 +1899,7 @@ def record_clean_decision(
         gate=gate_context,
     )
     next_state.setdefault("review_heads", {})["last_reviewed_head"] = head
+    _convergence(next_state).pop("continue_pending", None)
     completed_profile_step = False
     if active_gate:
         next_state.setdefault("review_heads", {})["last_gate_clean_head"] = head
@@ -1899,6 +1973,7 @@ def record_github_result(
     result: str,
     note: str | None = None,
     reviewed_head: str | None = None,
+    reviewed_tree: str | None = None,
 ) -> dict[str, Any]:
     resolved_result = _required_text(result, field="github_result")
     if resolved_result not in GITHUB_RESULT_COMMANDS:
@@ -1956,6 +2031,9 @@ def record_github_result(
     )
     _set_review_green(next_state, "unknown")
     _set_stage(next_state, STAGE_FIX_PENDING)
+    _record_accepted_findings_head_inplace(
+        next_state, reviewed_head=head, reviewed_tree=reviewed_tree
+    )
     return next_state
 
 
@@ -2037,22 +2115,6 @@ def mark_review_step_retry(
     index = _nonnegative_int(step_index, field="step_index")
     name = _required_text(step_name, field="step_name")
     next_state = mark_recovery_resolved(state)
-    profile_step = {"index": index, "name": name}
-    max_review_rounds = _profile_step_max_review_rounds(next_state, profile_step)
-    if (
-        max_review_rounds is not None
-        and _profile_step_review_round_count(next_state, profile_step)
-        >= max_review_rounds
-    ):
-        pending = dict(next_state.get("pending_action") or {})
-        _mark_profile_review_budget_exhausted_inplace(
-            next_state,
-            {"round_id": pending.get("round_id"), "lane": pending.get("lane")},
-            profile_step,
-            max_review_rounds=max_review_rounds,
-            fix_verification=fix_verification,
-        )
-        return next_state
     _set_review_progress(next_state, next_step_index=index, current_step=None)
     action = {"kind": "run-review-step", "step_index": index, "step": name}
     if post_findings_rerun:

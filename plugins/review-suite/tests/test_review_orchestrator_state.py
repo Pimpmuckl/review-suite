@@ -38,6 +38,8 @@ from review_suite_core.orchestrator_state import (
     mark_review_step_retry,
     no_work_stage_is_idle,
     record_clean_decision,
+    record_contract_conflict,
+    record_convergence_decision,
     record_findings_decision,
     record_followup_clean,
     record_followup_findings,
@@ -853,78 +855,52 @@ def test_fast_terminal_findings_get_one_verification_round(tmp_path: Path) -> No
     assert fixed["review_heads"]["last_fix_head"] == "head-2"
 
 
-def test_fast_terminal_findings_stop_after_round_budget(tmp_path: Path) -> None:
-    state = _cycle(tmp_path, mode="fast")
-    state["review_plan"] = {
-        "steps": [
-            {
-                "name": "fast-signoff",
-                "count": 1,
-                "model": "gpt-5.5",
-                "reasoning_effort": "medium",
-                "max_review_rounds": 2,
-            },
-        ]
-    }
-    first_pending = mark_review_step_pending(
-        state,
-        round_id="signoff-1",
-        lane="review_t1",
-        step_index=0,
-        step_name="fast-signoff",
-        reviewed_head="head-1",
-    )
-    first_findings = record_findings_decision(
-        first_pending,
-        round_id="signoff-1",
-        lane="review_t1",
-        reviewed_head="head-1",
-    )
-    first_fixed = mark_fix_detected(first_findings, head="head-2")
-    second_pending = mark_review_step_pending(
-        first_fixed,
-        round_id="signoff-2",
-        lane="review_t1",
-        step_index=0,
-        step_name="fast-signoff",
-        reviewed_head="head-2",
-        post_findings_rerun=True,
-        fix_verification=first_fixed["pending_action"]["fix_verification"],
-    )
-    second_findings = record_findings_decision(
-        second_pending,
-        round_id="signoff-2",
-        lane="review_t1",
-        reviewed_head="head-2",
-    )
+def test_distinct_accepted_finding_trees_require_one_use_caller_decision(
+    tmp_path: Path,
+) -> None:
+    state = _cycle(tmp_path)
+    for round_id, head, tree in (
+        ("round-1", "head-1", "tree-1"),
+        ("arena-variant", "restacked-head-1", "tree-1"),
+        ("round-2", "head-2", "tree-2"),
+        ("round-3", "head-3", "tree-3"),
+    ):
+        state = record_findings_decision(
+            state,
+            round_id=round_id,
+            lane="review_t1",
+            reviewed_head=head,
+            reviewed_tree=tree,
+        )
 
-    exhausted = mark_fix_detected(second_findings, head="head-3")
+    assert state["stage"] == "decision-required"
+    assert state["convergence"]["status"] == "DECISION_REQUIRED"
+    assert state["convergence"]["reason"] == "budget_exhausted"
+    assert len(state["convergence"]["accepted_findings_heads"]) == 3
 
-    assert exhausted["stage"] == STAGE_FIX_PENDING
-    assert exhausted["validation"]["review_green"] == "failed"
-    assert exhausted["pending_action"] == {
-        "kind": "review-round-budget-exhausted",
-        "round_id": "signoff-2",
-        "lane": "review_t1",
-        "step_index": 0,
-        "step": "fast-signoff",
-        "max_review_rounds": 2,
-        "fix_verification": {
-            "source_round_id": "signoff-2",
-            "source_lane": "review_t1",
-            "findings_reviewed_head": "head-2",
-            "fix_head": "head-3",
-        },
-    }
-    assert exhausted["active_findings"]["status"] == "review-round-budget-exhausted"
-    assert exhausted["active_findings"]["fix_head"] == "head-3"
-    assert [item["round_id"] for item in exhausted["rounds"]] == [
-        "signoff-1",
-        "signoff-2",
-    ]
+    continued = record_convergence_decision(state, decision="CONTINUE")
+    assert continued["stage"] == STAGE_FIX_PENDING
+    assert continued["convergence"]["continue_used"] is True
+
+    exhausted = record_findings_decision(
+        continued,
+        round_id="round-4",
+        lane="review_t1",
+        reviewed_head="head-4",
+        reviewed_tree="tree-4",
+    )
+    assert exhausted["stage"] == "decision-required"
+    with pytest.raises(ValueError, match="available once"):
+        record_convergence_decision(exhausted, decision="CONTINUE")
+    resliced = record_convergence_decision(exhausted, decision="RESLICE")
+    assert resliced["stage"] == "convergence-decided"
+    assert resliced["convergence"]["status"] == "DECIDED"
+    assert resliced["convergence"]["decision"] == "RESLICE"
 
 
-def test_fast_blocked_retries_stop_after_round_budget(tmp_path: Path) -> None:
+def test_blocked_retries_do_not_consume_accepted_findings_budget(
+    tmp_path: Path,
+) -> None:
     state = _cycle(tmp_path, mode="fast")
     state["review_plan"] = {
         "steps": [
@@ -957,24 +933,30 @@ def test_fast_blocked_retries_stop_after_round_budget(tmp_path: Path) -> None:
         reviewed_head="head-1",
     )
 
-    exhausted = mark_review_step_retry(
+    retried = mark_review_step_retry(
         second_pending, step_index=0, step_name="fast-signoff"
     )
 
-    assert exhausted["stage"] == STAGE_FIX_PENDING
-    assert exhausted["validation"]["review_green"] == "failed"
-    assert exhausted["pending_action"] == {
-        "kind": "review-round-budget-exhausted",
-        "round_id": "signoff-2",
-        "lane": "review_t1",
-        "step_index": 0,
-        "step": "fast-signoff",
-        "max_review_rounds": 2,
-    }
-    assert [item["round_id"] for item in exhausted["rounds"]] == [
-        "signoff-1",
-        "signoff-2",
-    ]
+    assert retried["stage"] == STAGE_CREATED
+    assert retried["pending_action"]["kind"] == "run-review-step"
+    assert retried["convergence"]["accepted_findings_heads"] == []
+
+
+def test_contract_conflict_requires_an_immediate_durable_decision(
+    tmp_path: Path,
+) -> None:
+    findings = record_findings_decision(
+        _cycle(tmp_path),
+        round_id="round-1",
+        lane="review_t1",
+        reviewed_head="head-1",
+    )
+
+    conflict = record_contract_conflict(findings, conflict="scope")
+
+    assert conflict["stage"] == "decision-required"
+    assert conflict["convergence"]["reason"] == "contract_conflict"
+    assert conflict["convergence"]["conflict"] == "scope"
 
 
 def test_non_deep_discovery_findings_advance_without_extra_discovery(
