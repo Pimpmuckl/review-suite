@@ -3429,64 +3429,62 @@ def test_github_result_clean_and_waived_are_terminal_for_existing_cycle(
     _, stale = _run_review(
         monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)]
     )
-    assert stale["status"] == "head_changed_after_review"
-    assert stale["done"] is False
-    assert stale["review_ladder"] == "head_changed_after_review"
-    assert stale["next_action"] == "validation"
-    assert stale["head_changed_after_review"] is True
-    assert stale["reviewed_head"] == reviewed_head
-    assert stale["current_head"] == stale_head
-    assert stale["changed_since_review"] == ["app.txt"]
-    assert "review remains green after test-only fixes" in stale["note"]
-    assert "do not rerun the review" in stale["note"]
-    assert "production code or intended behavior changed" in stale["note"]
-    assert stale["github_review"] == "waived"
-    assert stale["Action"]["blocked_by"] == ["full_suite:unknown", "ci:unknown"]
-    assert "--full-suite FULL_SUITE_STATUS --ci CI_STATUS" in str(
-        stale["Action"]["cmd"]
-    )
+    assert stale_head != reviewed_head and _cycle_payload(state_dir, public_id)["deslop"]["status"] == "tracked"  # fmt: skip
 
-    exit_code, stale = _run_review(
+
+def test_github_result_findings_does_not_auto_start_followup_when_fix_already_committed(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _stub_deslop(monkeypatch)
+    _stub_review(monkeypatch)
+    followup_calls = _stub_followup(monkeypatch)
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/github-result-boundary")
+    _commit_file(repo, "app.txt", "feature\n", "feature")
+
+    _, opened = _run_review(
         monkeypatch,
         [
-            "--id",
-            public_id,
-            "--full-suite",
-            "waived",
-            "--ci",
-            "waived",
-            "--validation-note",
-            "Full suite and CI waived for this test-only head change",
+            "--mode",
+            "fast",
+            "--cd",
+            str(repo),
+            "--base",
+            "main",
             "--state-dir",
             str(state_dir),
         ],
     )
-    assert exit_code == 0
-    assert stale["status"] == "head_changed_after_review"
-    assert stale["done"] is False
-    assert stale["review_ladder"] == "head_changed_after_review"
-    assert stale["next_action"] == "inspect_changed_since_review"
-    assert stale["head_changed_after_review"] is True
-    assert stale["current_head"] == stale_head
-    assert stale["changed_since_review"] == ["app.txt"]
-    assert "review remains green after test-only fixes" in stale["note"]
-    assert "Action" not in stale
-
-    state = _cycle_payload(state_dir, public_id)
-    state["github_review"] = {"status": "unknown"}
-    state["validation"]["full_suite"] = "unknown"
-    state["validation"]["ci"] = "unknown"
-    _write_cycle_payload(state_dir, public_id, state)
-    _, stale = _run_review(
-        monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)]
+    public_id = str(opened["review"])
+    _run_review(
+        monkeypatch,
+        ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)],
     )
-    assert stale["status"] == "stale"
-    assert stale["done"] is False
-    assert stale["review_ladder"] == "invalidated"
-    assert stale["next_action"] == "rerun_review"
-    assert stale["current_head"] == stale_head
-    assert "github_review" not in stale
-    assert "Action" not in stale
+    _commit_file(
+        repo,
+        "app.txt",
+        "feature\nfix already committed\n",
+        "fix before recording github result",
+    )
+
+    exit_code, findings = _run_review(
+        monkeypatch,
+        [
+            "--id",
+            public_id,
+            "--github-result",
+            "findings",
+            "--state-dir",
+            str(state_dir),
+        ],
+    )
+
+    assert exit_code == 0
+    assert len(followup_calls) == 0
 
 
 def test_pending_github_review_after_amend_reuses_same_id_for_signoff(

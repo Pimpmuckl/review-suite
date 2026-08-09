@@ -2465,9 +2465,6 @@ def _github_pending_head_change_identity(
 ) -> dict[str, Any] | None:
     if state.get("stage") not in {STAGE_REVIEW_GREEN, STAGE_LOCAL_GREEN_HANDOFF}:
         return None
-    github_status = _github_review_status(state)
-    if github_status in {GITHUB_RESULT_CLEAN, GITHUB_RESULT_WAIVED}:
-        return None
     try:
         identity = _current_cycle_identity_if_compatible(state)
     except OSError, ValueError:
@@ -2482,7 +2479,8 @@ def _github_pending_head_change_identity(
         or dict(state.get("identity") or {}).get("head")
         or ""
     ).strip()
-    if bool(deslop.get("tracked")) and (
+    terminal = _github_review_status(state) in {"clean", "waived"}
+    if (bool(deslop.get("tracked")) or terminal) and (
         closure_head != head
         or str(dict(state.get("identity") or {}).get("merge_base") or "").strip()
         != current_merge_base
