@@ -2498,6 +2498,7 @@ def test_contract_conflict_and_one_use_continue_are_durable(
     assert conflict["convergence"]["reason"] == "contract_conflict"
     assert set(conflict["Action"]["choices"]) == {"CONTINUE", "REPLAN", "RESLICE"}
 
+    _git(repo, "commit", "--allow-empty", "-m", "tree-identical head")
     _run_review(
         monkeypatch,
         [
@@ -2509,6 +2510,10 @@ def test_contract_conflict_and_one_use_continue_are_durable(
             str(state_dir),
         ],
     )
+    continued_state = _cycle_payload(state_dir, public_id)
+    assert continued_state["stage"] == "fix-pending"
+    assert continued_state["review_heads"]["last_fix_head"] is None
+    assert len(review_calls) == 1
     _run_review(
         monkeypatch,
         [
@@ -2575,6 +2580,95 @@ def test_contract_conflict_and_one_use_continue_are_durable(
     )
     assert next_plan["review"] != public_id
     assert len(review_calls) == 3
+
+
+def test_continue_consumes_material_fix_head_created_after_breaker(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    review_calls = _stub_review(
+        monkeypatch, "round-1", "round-2", "round-3", "authorized-round"
+    )
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/closure-order")
+    _commit_file(repo, "app.txt", "feature\n", "feature")
+
+    _, opened = _run_review(
+        monkeypatch,
+        [
+            "--mode",
+            "fast",
+            "--cd",
+            str(repo),
+            "--base",
+            "main",
+            "--state-dir",
+            str(state_dir),
+        ],
+    )
+    public_id = str(opened["review"])
+    for index in (1, 2):
+        _run_review(
+            monkeypatch,
+            [
+                "--id",
+                public_id,
+                "--decision",
+                "findings",
+                "--state-dir",
+                str(state_dir),
+            ],
+        )
+        _commit_file(
+            repo,
+            "app.txt",
+            "feature\n" + "".join(f"fix-{n}\n" for n in range(1, index + 1)),
+            f"fix {index}",
+        )
+        _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+
+    _, breaker = _run_review(
+        monkeypatch,
+        ["--id", public_id, "--decision", "findings", "--state-dir", str(state_dir)],
+    )
+    assert breaker["convergence"]["reason"] == "budget_exhausted"
+    assert len(review_calls) == 3
+
+    authorized_head = _commit_file(
+        repo, "app.txt", "feature\nfix-1\nfix-2\nclosure-fix\n", "closure fix"
+    )
+    _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+    blocked_state = _cycle_payload(state_dir, public_id)
+    assert blocked_state["convergence"]["status"] == "DECISION_REQUIRED"
+    assert len(blocked_state["convergence"]["accepted_findings_heads"]) == 3
+    assert blocked_state["review_heads"]["last_fix_head"] != authorized_head
+    assert len(review_calls) == 3
+
+    _run_review(
+        monkeypatch,
+        [
+            "--id",
+            public_id,
+            "--convergence-decision",
+            "continue",
+            "--state-dir",
+            str(state_dir),
+        ],
+    )
+    continued_state = _cycle_payload(state_dir, public_id)
+    assert continued_state["review_heads"]["last_fix_head"] == authorized_head
+    assert continued_state["convergence"]["continue_pending"] is True
+    assert len(review_calls) == 3
+
+    _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+    assert review_calls[-1]["review_scope"]["reviewed_head"] == authorized_head
+    _, exhausted = _run_review(
+        monkeypatch,
+        ["--id", public_id, "--decision", "findings", "--state-dir", str(state_dir)],
+    )
+    assert set(exhausted["Action"]["choices"]) == {"REPLAN", "RESLICE"}
 
 
 def test_fast_review_can_restart_into_deep_without_becoming_a_restart_target(
