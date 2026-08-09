@@ -146,7 +146,7 @@ def build_prompt(
         else "No frozen review brief is available; report NOT_APPLICABLE for conformance.\n\n"
     )
     cleanup = (
-        "Do not perform another cleanup review; this is the post-edit conformance rerun.\n"
+        "Do not perform another cleanup review or report cleanup findings; this is the post-edit conformance rerun. You must still emit the required final review decision.\n"
         if conformance_only
         else "Inspect only for concrete redundant code, dead code, duplicate logic, and needless wrappers.\n"
     )
@@ -158,7 +158,7 @@ def build_prompt(
         + focus_block
         + "\nBegin with exactly `Conformance: CONFORMS`, `Conformance: MATERIALLY_DRIFTED`, or `Conformance: NOT_APPLICABLE`.\n"
         + "Return only concrete cleanup findings with severity, file path, and fix suggestion. Skip style-only comments.\n"
-        + "Finish with exactly `Review decision: clean` or `Review decision: findings`."
+        + "Always finish with exactly `Review decision: clean` or `Review decision: findings`."
     )
 
 
