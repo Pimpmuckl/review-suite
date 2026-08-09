@@ -385,6 +385,7 @@ def create_cycle(
     deslop_skip_source: str | None = None,
     cycle_token: str | None = None,
     restart_token: str | None = None,
+    review_brief: str | None = None,
 ) -> dict[str, Any]:
     identity = normalize_cycle_identity(
         cwd=cwd, base=base, branch=branch, head=head, merge_base=merge_base
@@ -412,6 +413,8 @@ def create_cycle(
     if fresh_token is not None and restart is not None:
         raise ValueError("cycle_token cannot be combined with restart_token")
     key_token = restart or fresh_token
+    if review_brief is not None and not review_brief.strip():
+        raise ValueError("review_brief cannot be blank")
     state = {
         "schema_version": ORCHESTRATOR_STATE_SCHEMA_VERSION,
         "cycle_key": cycle_key(
@@ -431,6 +434,7 @@ def create_cycle(
             "requested": requested_selection,
             "effective": resolved_selection,
         },
+        "review_brief": review_brief,
         "stage": STAGE_CREATED,
         "pending_action": None,
         "deslop": {

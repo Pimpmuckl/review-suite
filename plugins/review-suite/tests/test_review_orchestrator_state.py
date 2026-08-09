@@ -129,6 +129,31 @@ def test_create_cycle_is_compact_json_state_keyed_by_normalized_inputs(
     }
 
 
+def test_create_cycle_preserves_exact_optional_review_brief(tmp_path: Path) -> None:
+    brief = "# Goal\n\nKeep the provider-neutral contract.\n"
+
+    briefed = create_cycle(
+        cwd=tmp_path / "repo",
+        base="main",
+        branch="feature/brief",
+        head="head-1",
+        merge_base="base-1",
+        requested_mode="fast",
+        review_brief=brief,
+    )
+    briefless = create_cycle(
+        cwd=tmp_path / "repo",
+        base="main",
+        branch="feature/brief",
+        head="head-1",
+        merge_base="base-1",
+        requested_mode="fast",
+    )
+
+    assert briefed["review_brief"] == brief
+    assert briefless["review_brief"] is None
+
+
 def test_mark_deslop_closed_disables_tracked_sidecar_and_leaves_fast_untracked(
     tmp_path: Path,
 ) -> None:

@@ -148,6 +148,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--reason")
     parser.add_argument("--cd")
     parser.add_argument("--base", help="Override the detected default branch ref.")
+    parser.add_argument(
+        "--review-brief",
+        help="Optional Markdown goal and constraints, frozen for this review cycle.",
+    )
     parser.add_argument("--decision", choices=(DECISION_CLEAN, DECISION_FINDINGS))
     parser.add_argument("--github-review", action="store_true")
     parser.add_argument("--github-force", action="store_true")
@@ -684,7 +688,11 @@ def _load_cycle_and_state_dir(
 
 
 def _reject_id_creation_args(args: argparse.Namespace, state: dict[str, Any]) -> None:
-    sent = [name for name in ("mode", "cd", "base") if getattr(args, name) is not None]
+    sent = [
+        name
+        for name in ("mode", "cd", "base", "review_brief")
+        if getattr(args, name) is not None
+    ]
     if not sent:
         return
     mode = dict(state.get("mode") or {})
@@ -700,6 +708,15 @@ def _reject_id_creation_args(args: argparse.Namespace, state: dict[str, Any]) ->
     raise ValueError(
         f"--id already selects review context; remove --{', --'.join(sent)}{suffix}"
     )
+
+
+def _reject_review_brief_replacement(
+    state: dict[str, Any], review_brief: str | None
+) -> None:
+    if review_brief is not None and review_brief != state.get("review_brief"):
+        raise ValueError(
+            "review brief is frozen for this cycle; start a new cycle to replace it"
+        )
 
 
 def _restart_reason(args: argparse.Namespace) -> str:
@@ -1151,6 +1168,10 @@ def _show_status(state: dict[str, Any], *, state_dir: Path) -> int:
     payload: dict[str, Any] = {
         "review": state.get("public_id"),
         "status": state.get("stage") or "unknown",
+        "review_brief": "available" if state.get("review_brief") else "unavailable",
+        "design_conformance_context": "available"
+        if state.get("review_brief")
+        else "unavailable",
     }
     if mode := _mode_label(state):
         payload["mode"] = mode
@@ -1798,6 +1819,7 @@ def _compatible_continuation_cycle(
     head: str,
     merge_base_head: str,
     effective_mode: str,
+    review_brief: str | None = None,
     skip_deslop: bool = False,
 ) -> dict[str, Any] | None:
     normalized_cwd = normalize_cwd(str(review_root))
@@ -1882,8 +1904,10 @@ def _compatible_continuation_cycle(
             f"rerun with --id for one of: {', '.join(public_ids)}"
         )
     selected_base_drift = selected_candidates[0][3]
+    selected_state = selected_candidates[0][2]
+    _reject_review_brief_replacement(selected_state, review_brief)
     resumed = _with_current_identity(
-        selected_candidates[0][2],
+        selected_state,
         head=head,
         merge_base_head=merge_base_head,
         base_drift=selected_base_drift,
@@ -1922,6 +1946,7 @@ def _create_or_resume_cycle(
         head=head,
         merge_base_head=merge_base_head,
         effective_mode=resolution.effective_mode,
+        review_brief=args.review_brief,
         skip_deslop=skip_deslop,
     )
     if continuation is not None:
@@ -1939,6 +1964,7 @@ def _create_or_resume_cycle(
         deslop_enabled=profile_deslop_enabled and not skip_deslop,
         deslop_skip_source="cli" if skip_deslop else None,
         cycle_token="skip-deslop" if skip_deslop else None,
+        review_brief=args.review_brief,
     )
     if str(base_info["requested_base"]) != base:
         state["identity"]["requested_base"] = str(base_info["requested_base"])
@@ -1948,6 +1974,7 @@ def _create_or_resume_cycle(
     state = _apply_runtime_options(state, args)
     existing = load_cycle_by_key(state_dir, str(state["cycle_key"]))
     if existing is not None:
+        _reject_review_brief_replacement(existing, args.review_brief)
         return _apply_runtime_options(existing, args)
     return _apply_profile_resolution(state, resolution)
 
@@ -2064,6 +2091,7 @@ def _create_successor_cycle(
         else resolution.profile.deslop_enabled,
         deslop_skip_source=deslop_skip_source,
         restart_token=restart_token,
+        review_brief=state.get("review_brief"),
     )
     existing = load_cycle_by_key(state_dir, str(replacement["cycle_key"]))
     if existing is not None:
@@ -2606,6 +2634,10 @@ def _action_payload(state: dict[str, Any], *, state_dir: Path) -> dict[str, Any]
 def _render(state: dict[str, Any], *, state_dir: Path) -> None:
     payload: dict[str, Any] = {
         "review": state.get("public_id"),
+        "review_brief": "available" if state.get("review_brief") else "unavailable",
+        "design_conformance_context": "available"
+        if state.get("review_brief")
+        else "unavailable",
     }
     action = _action_payload(state, state_dir=state_dir)
     summary = _add_review_ladder_fields(payload, state, action)
@@ -2710,6 +2742,7 @@ def main() -> int:
                 or args.validation_note
                 or args.deslop_done
                 or args.skip_deslop
+                or args.review_brief
                 or args.show_findings
                 or args.show_status
             ):
