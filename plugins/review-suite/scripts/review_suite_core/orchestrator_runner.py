@@ -243,10 +243,16 @@ def _run_deslop_once(state: dict[str, Any]) -> OrchestratorRunnerResult:
             if line.startswith("Conformance: ")
         ]
         verdict = verdicts[0] if verdicts else ""
-        decision = lines[-1] if lines else ""
+        decisions = [line for line in lines if line.startswith("Review decision: ")]
+        decision = decisions[0] if decisions else ""
+        valid_returncode = int(proc.returncode) == 0 or (
+            int(proc.returncode) == 1 and decision == "Review decision: findings"
+        )
         if (
-            len(verdicts) == 1
+            valid_returncode
+            and len(verdicts) == len(decisions) == 1
             and verdict in allowed
+            and lines[-1] == decision
             and decision
             in {
                 "Review decision: clean",
