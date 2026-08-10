@@ -33,6 +33,7 @@ def launch_captured_child_process(
     *,
     command: list[str],
     cwd: Path,
+    env: dict[str, str] | None = None,
     stdin_text: str | None = None,
     stdout_prefix: str,
     stderr_prefix: str | None = None,
@@ -52,6 +53,7 @@ def launch_captured_child_process(
         proc = subprocess.Popen(
             command,
             cwd=str(cwd),
+            env=env,
             stdin=subprocess.PIPE if stdin_text else None,
             stdout=stdout_tmp,
             stderr=stderr_tmp,

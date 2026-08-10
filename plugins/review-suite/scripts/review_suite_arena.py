@@ -419,7 +419,6 @@ def _validate_benchmarked_review_runtime(
         codex_executable=codex_executable,
         review_root=review_cwd,
         allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
-        unsafe_command_hint="codex exec review --dangerously-bypass-approvals-and-sandbox",
     )
 
 

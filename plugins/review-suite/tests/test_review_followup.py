@@ -54,11 +54,6 @@ def test_main_uses_recorded_anchor_and_records_new_followup_anchor(
     )
     monkeypatch.setattr(
         review_followup,
-        "use_unsafe_windows_wsl_fallback",
-        lambda *args, **kwargs: False,
-    )
-    monkeypatch.setattr(
-        review_followup,
         "effective_base_ref",
         lambda review_root, base: {"base": base, "requested_base": base},
     )
@@ -156,11 +151,6 @@ def test_main_records_effective_branch_base_for_followup_anchor(
     )
     monkeypatch.setattr(
         review_followup,
-        "use_unsafe_windows_wsl_fallback",
-        lambda *args, **kwargs: False,
-    )
-    monkeypatch.setattr(
-        review_followup,
         "effective_base_ref",
         lambda review_root, base: {
             "base": "origin/main",
@@ -251,11 +241,6 @@ def test_main_rejects_empty_followup_interdiff(monkeypatch, tmp_path: Path) -> N
     errors: list[tuple[str, dict[str, object]]] = []
 
     monkeypatch.setattr(review_followup, "resolve_repo_root", lambda cd: tmp_path)
-    monkeypatch.setattr(
-        review_followup,
-        "use_unsafe_windows_wsl_fallback",
-        lambda *args, **kwargs: False,
-    )
     monkeypatch.setattr(
         review_followup,
         "effective_base_ref",

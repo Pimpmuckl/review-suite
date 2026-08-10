@@ -1119,6 +1119,7 @@ def _launch_gate_run(
     child = launch_captured_child_process(
         command=launch.command,
         cwd=launch.cwd,
+        env=launch.env,
         stdin_text=launch.stdin_text,
         stdout_prefix=f"{gate_task_class}-{slot}-",
     )

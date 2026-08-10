@@ -32,7 +32,6 @@ from review_suite_core import (
     lens_model_config,
     resolve_repo_root,
     run_codex,
-    use_unsafe_windows_wsl_fallback,
     validated_linear_review_range,
     write_text,
 )
@@ -498,12 +497,6 @@ def main() -> int:
         if commit and args.base is not None:
             raise ValueError("use either --base or --commit")
         review_root = resolve_repo_root(args.cd)
-        if use_unsafe_windows_wsl_fallback(review_root, bool(args.wsl)):
-            print(
-                "[review-deslop] WARNING: using Windows Codex fallback for a WSL UNC repo. This bypasses the Codex sandbox and is not the happy path.",
-                file=sys.stderr,
-                flush=True,
-            )
         model_config = lens_model_config("review-deslop")
         if commit and commit_end:
             validated_linear_review_range(

@@ -17,6 +17,7 @@ from .axi_output import emit_toon
 from .codex_runtime import (
     use_unsafe_windows_wsl_fallback,
     validate_codex_runtime,
+    windows_wsl_codex_child_env,
     wrapper_launch_cwd,
 )
 from .model_labels import codex_reasoning_effort
@@ -60,6 +61,7 @@ class CodexReviewLaunch:
     stdin_text: str | None
     final_message_path: Path | None
     cwd: Path
+    env: dict[str, str] | None
     effective_reasoning_effort: str
 
 
@@ -165,7 +167,6 @@ def _codex_command_prefix(
     tool_name: str,
     review_root: Path,
     allow_unsafe_windows_wsl_fallback: bool,
-    unsafe_command_hint: str,
     subcommand: str,
     model: str,
     reasoning_effort: str,
@@ -178,31 +179,20 @@ def _codex_command_prefix(
         codex_executable=codex_executable,
         review_root=review_root,
         allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
-        unsafe_command_hint=unsafe_command_hint,
     )
-    unsafe_fallback = use_unsafe_windows_wsl_fallback(
-        review_root, allow_unsafe_windows_wsl_fallback
-    )
-    command = [codex_executable]
-    if subcommand == "exec":
-        command.append("exec")
-        command.append("--ignore-user-config")
-        if unsafe_fallback:
-            command.append("--dangerously-bypass-approvals-and-sandbox")
-        command.extend(["-C", str(review_root)])
-        if not unsafe_fallback:
-            command.extend(["-s", "read-only"])
-    elif subcommand == "exec-review":
-        command.append("exec")
-        command.append("--ignore-user-config")
-        if unsafe_fallback:
-            command.append("--dangerously-bypass-approvals-and-sandbox")
-        command.extend(["-C", str(review_root)])
-        if not unsafe_fallback:
-            command.extend(["-s", "read-only"])
-        command.append("review")
-    else:
+    if subcommand not in {"exec", "exec-review"}:
         raise ValueError(f"unsupported Codex subcommand: {subcommand}")
+    command = [
+        codex_executable,
+        "exec",
+        "--ignore-user-config",
+        "-C",
+        str(review_root),
+        "-s",
+        "read-only",
+    ]
+    if subcommand == "exec-review":
+        command.append("review")
     command.extend(_isolated_runtime_user_config_args())
     effective_reasoning_effort = codex_reasoning_effort(model, reasoning_effort)
     command.extend(
@@ -247,7 +237,6 @@ def codex_exec_command(
         tool_name=tool_name,
         review_root=review_root,
         allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
-        unsafe_command_hint="codex exec --dangerously-bypass-approvals-and-sandbox",
         subcommand="exec",
         model=model,
         reasoning_effort=reasoning_effort,
@@ -347,7 +336,6 @@ def codex_exec_review_command(
         tool_name=tool_name,
         review_root=review_root,
         allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
-        unsafe_command_hint="codex exec --dangerously-bypass-approvals-and-sandbox review",
         subcommand="exec-review",
         model=model,
         reasoning_effort=reasoning_effort,
@@ -445,6 +433,7 @@ def prepare_codex_review_launch(
         stdin_text=stdin_text,
         final_message_path=final_message_path,
         cwd=cwd,
+        env=windows_wsl_codex_child_env(review_root, allow_unsafe_windows_wsl_fallback),
         effective_reasoning_effort=codex_reasoning_effort(model, reasoning_effort),
     )
 
@@ -539,12 +528,14 @@ def _run_captured_codex_command(
     timeout_seconds: int,
     final_message_path: Path | None = None,
     cleanup_paths: tuple[Path, ...] = (),
+    env: dict[str, str] | None = None,
 ) -> dict[str, object]:
     child: CapturedChildProcess | None = None
     try:
         child = launch_captured_child_process(
             command=command,
             cwd=cwd,
+            env=env,
             stdin_text=stdin_text,
             stdout_prefix=f"{tool_name}-stdout-",
             stderr_prefix=f"{tool_name}-stderr-",
@@ -642,6 +633,7 @@ def run_codex(
         timeout_seconds=timeout_seconds,
         final_message_path=output_path,
         cleanup_paths=(output_path,),
+        env=windows_wsl_codex_child_env(review_root, allow_unsafe_windows_wsl_fallback),
     )
 
 
@@ -686,6 +678,7 @@ def run_codex_review(
         cleanup_paths=(launch.final_message_path,)
         if launch.final_message_path is not None
         else (),
+        env=launch.env,
     )
 
 

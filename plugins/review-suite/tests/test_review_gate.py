@@ -1947,10 +1947,13 @@ def test_run_gate_round_inline_fallback_skips_cooling_backup(
 
 
 def test_launch_gate_run_preserves_retry_attempts(monkeypatch, tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+
     class FakeProc:
         def __init__(self, *args, **kwargs) -> None:
             self.pid = 123
             self.stdin = None
+            captured.update(kwargs)
 
     monkeypatch.setattr("review_gate.subprocess.Popen", FakeProc)
     monkeypatch.setattr(
@@ -1958,6 +1961,7 @@ def test_launch_gate_run_preserves_retry_attempts(monkeypatch, tmp_path: Path) -
         lambda **kwargs: SimpleNamespace(
             command=["codex", "review"],
             cwd=tmp_path,
+            env={"GIT_CONFIG_COUNT": "1"},
             stdin_text=None,
             final_message_path=None,
         ),
@@ -1977,6 +1981,7 @@ def test_launch_gate_run_preserves_retry_attempts(monkeypatch, tmp_path: Path) -
 
     try:
         assert run["retry_attempts"] == 1
+        assert captured["env"] == {"GIT_CONFIG_COUNT": "1"}
     finally:
         for key in ("stdout_path", "stderr_path"):
             Path(run[key]).unlink(missing_ok=True)

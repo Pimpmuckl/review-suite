@@ -278,9 +278,6 @@ def test_main_uses_generic_read_only_deslop_review(
 
     monkeypatch.setattr(review_deslop, "resolve_repo_root", lambda cd: tmp_path)
     monkeypatch.setattr(
-        review_deslop, "use_unsafe_windows_wsl_fallback", lambda *args, **kwargs: False
-    )
-    monkeypatch.setattr(
         review_deslop, "ensure_clean_git_worktree", lambda *args, **kwargs: None
     )
     monkeypatch.setattr(
@@ -356,9 +353,6 @@ def test_main_stops_static_scan_when_review_launch_fails(
 
     monkeypatch.setattr(review_deslop, "resolve_repo_root", lambda cd: tmp_path)
     monkeypatch.setattr(
-        review_deslop, "use_unsafe_windows_wsl_fallback", lambda *args, **kwargs: False
-    )
-    monkeypatch.setattr(
         review_deslop, "ensure_clean_git_worktree", lambda *args, **kwargs: None
     )
     monkeypatch.setattr(
@@ -401,9 +395,6 @@ def test_main_uses_generic_prompt_for_linear_commit_ranges(
     captured: dict[str, object] = {}
 
     monkeypatch.setattr(review_deslop, "resolve_repo_root", lambda cd: tmp_path)
-    monkeypatch.setattr(
-        review_deslop, "use_unsafe_windows_wsl_fallback", lambda *args, **kwargs: False
-    )
     monkeypatch.setattr(
         review_deslop, "ensure_clean_git_worktree", lambda *args, **kwargs: None
     )
