@@ -1305,7 +1305,7 @@ def test_runner_retry_completes_closure_with_conformance(
         for body in (
             "Conformance: NOT_APPLICABLE\nConformance: NOT_APPLICABLE\nReview decision: clean",
             "Conformance: NOT_APPLICABLE\nReview decision: clean\nReview decision: findings",
-            "Conformance: NOT_APPLICABLE\nReview decision: findings",
+            "Actionable: Conformance: NOT_APPLICABLE\nActionable: Review decision: findings\nConformance: NOT_APPLICABLE\nReview decision: findings",
         )
     )
     monkeypatch.setattr(
@@ -1327,6 +1327,9 @@ def test_runner_retry_completes_closure_with_conformance(
     assert retried.state["deslop"]["status"] == "done"
     assert retried.state["deslop"]["conformance"] == "NOT_APPLICABLE"
     assert retried.state["deslop"]["decision"] == "findings"
+    assert retried.state["deslop"]["findings"] == (
+        "Actionable: Conformance: NOT_APPLICABLE\nActionable: Review decision: findings"
+    )
 
 
 def test_runner_does_not_retry_failed_deslop_for_aborted_cycle(

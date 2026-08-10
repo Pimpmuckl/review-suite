@@ -264,6 +264,8 @@ def _run_deslop_once(state: dict[str, Any]) -> OrchestratorRunnerResult:
             and decisions[0].partition(": ")[2] in {"clean", "findings"}
         ):
             _print_step_output(label="review-deslop", body=output)
+            protocol_lines = {f"Conformance: {verdicts[0]}", decisions[0]}
+            findings = "\n".join(line for line in lines if line not in protocol_lines)
             return OrchestratorRunnerResult(
                 mark_deslop_done(
                     state,
@@ -271,6 +273,7 @@ def _run_deslop_once(state: dict[str, Any]) -> OrchestratorRunnerResult:
                     conformance=verdicts[0],
                     reviewed_head=actual_head,
                     decision=decisions[0].removeprefix("Review decision: "),
+                    findings=findings,
                 ),
                 ran_step=True,
                 step="deslop",

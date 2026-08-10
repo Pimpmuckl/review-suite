@@ -1983,7 +1983,7 @@ def test_public_id_allocation_preserves_index_updates_written_before_lock(
     }
 
 
-def test_id_show_findings_reads_orchestrator_round_payload_without_running(
+def test_id_show_findings_prefers_closure_over_round_payload_without_running(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -2075,6 +2075,13 @@ def test_id_show_findings_reads_orchestrator_round_payload_without_running(
     assert "task:" not in captured.out
     assert "status:" not in captured.out
     assert "Alpha recovered finding" in captured.out
+
+    state["deslop"]["findings"] = "Closure recovered finding"
+    _write_cycle_payload(state_dir, public_id, state)
+    assert review.main() == 0
+    captured = capsys.readouterr()
+    assert "Closure recovered finding" in captured.out
+    assert "Alpha recovered finding" not in captured.out
     assert len(review_calls) == before_calls
 
 

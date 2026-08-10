@@ -995,6 +995,15 @@ def _output_round_candidates(state: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _show_findings(state: dict[str, Any], *, state_dir: Path) -> int:
     public_id = str(state.get("public_id") or "").strip()
+    closure_findings = str(
+        dict(state.get("deslop") or {}).get("findings") or ""
+    ).strip()
+    if closure_findings:
+        write_text(f"review: {public_id}")
+        write_text("")
+        write_text("Output:")
+        write_text(closure_findings)
+        return 0
     candidates = _output_round_candidates(state)
     if not candidates:
         write_text(f"review: {public_id}")

@@ -1363,6 +1363,7 @@ def mark_deslop_done(
     conformance: str,
     reviewed_head: str,
     decision: str | None = None,
+    findings: str | None = None,
 ) -> dict[str, Any]:
     next_state = _copy_state(state)
     verdict = _required_text(conformance, field="conformance")
@@ -1380,11 +1381,14 @@ def mark_deslop_done(
         "cleanup_completed": bool(prior.get("cleanup_completed"))
         or not bool(prior.get("conformance_only")),
     }
+    next_state["deslop"].pop("findings", None)
     if decision is not None:
         parsed_decision = _required_text(decision, field="decision")
         if parsed_decision not in {"clean", "findings"}:
             raise ValueError("invalid deslop review decision")
         next_state["deslop"]["decision"] = parsed_decision
+        if parsed_decision == "findings" and _optional_text(findings):
+            next_state["deslop"]["findings"] = _optional_text(findings)
     recovery = dict(next_state.get("recovery") or {})
     next_state["recovery"] = {
         "status": "none",
