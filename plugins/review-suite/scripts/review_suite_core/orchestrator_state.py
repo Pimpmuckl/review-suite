@@ -1280,6 +1280,23 @@ def _last_completed_profile_round_id(state: dict[str, Any]) -> str | None:
     return None
 
 
+def _mark_deslop_rerun_needed_inplace(state: dict[str, Any]) -> None:
+    deslop = dict(state.get("deslop") or {})
+    if str(deslop.get("status") or "") not in {
+        DESLOP_STATUS_FAILED,
+        DESLOP_STATUS_DONE,
+        DESLOP_STATUS_CLOSED,
+    }:
+        return
+    cleanup_completed = bool(deslop.get("cleanup_completed"))
+    state["deslop"] = {
+        "tracked": True,
+        "status": DESLOP_STATUS_TRACKED,
+        "cleanup_completed": cleanup_completed,
+        "conformance_only": cleanup_completed,
+    }
+
+
 def mark_latest_profile_step_rerun_needed(
     state: dict[str, Any], *, head: str
 ) -> dict[str, Any]:
@@ -1298,18 +1315,7 @@ def mark_latest_profile_step_rerun_needed(
     for key in ("focused", "full_suite", "ci"):
         validation[key] = "unknown"
     validation.pop("note", None)
-    deslop = dict(next_state.get("deslop") or {})
-    if str(deslop.get("status") or "") in {
-        DESLOP_STATUS_FAILED,
-        DESLOP_STATUS_DONE,
-        DESLOP_STATUS_CLOSED,
-    }:
-        next_state["deslop"] = {
-            "tracked": True,
-            "status": DESLOP_STATUS_TRACKED,
-            "cleanup_completed": bool(deslop.get("cleanup_completed")),
-            "conformance_only": bool(deslop.get("cleanup_completed")),
-        }
+    _mark_deslop_rerun_needed_inplace(next_state)
     action = _rewind_profile_step_action(next_state, profile_step)
     _set_review_green(next_state, "unknown")
     _set_stage(next_state, STAGE_CREATED, action)
@@ -1648,6 +1654,7 @@ def mark_fix_detected(
     fix_head = _required_text(head, field="head")
     active["fix_head"] = fix_head
     next_state.setdefault("review_heads", {})["last_fix_head"] = fix_head
+    _mark_deslop_rerun_needed_inplace(next_state)
     if _findings_use_followup(next_state):
         active["status"] = STAGE_FOLLOWUP_PENDING
         _set_stage(

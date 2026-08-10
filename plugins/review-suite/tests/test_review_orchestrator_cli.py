@@ -3168,7 +3168,7 @@ def test_github_result_findings_reenters_existing_cycle_for_final_signoff(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    _stub_deslop(monkeypatch)
+    deslop_calls = _stub_deslop(monkeypatch)
     review_calls = _stub_review(monkeypatch, "signoff-round-1", "signoff-round-2")
     followup_calls = _stub_followup(monkeypatch, "github-followup-1")
     repo = tmp_path / "repo"
@@ -3228,7 +3228,7 @@ def test_github_result_findings_reenters_existing_cycle_for_final_signoff(
     assert state["active_findings"]["profile_round_id"] == "signoff-round-1"
     assert state["validation"]["review_green"] == "unknown"
 
-    _commit_file(repo, "app.txt", "feature\nfixed\n", "fix github finding")
+    fixed_head = _commit_file(repo, "app.txt", "feature\nfixed\n", "fix github finding")
     _, signoff = _run_review(
         monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)]
     )
@@ -3244,6 +3244,9 @@ def test_github_result_findings_reenters_existing_cycle_for_final_signoff(
 
     _run_review(monkeypatch, ["--id", public_id, "--decision", "clean"])
     _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+    assert len(deslop_calls) == 2
+    assert fixed_head == deslop_calls[-1][deslop_calls[-1].index("--commit") + 2]
+    assert "--conformance-only" in deslop_calls[-1]
     _, final_clean = _run_review(monkeypatch, ["--id", public_id, "--deslop-done"])
     _assert_github_handoff(
         final_clean["Action"],
