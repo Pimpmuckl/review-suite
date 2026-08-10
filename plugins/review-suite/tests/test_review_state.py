@@ -824,6 +824,16 @@ def test_review_state_status_uses_bare_id_for_structured_verdict(
     assert "--id rvw_progress --decision findings" in str(
         action["override"]["findings"]
     )
+    briefed_fix = review_state._orchestrator_action(
+        {"stage": "fix-pending", "review_brief": "Frozen contract"},
+        "rvw_progress",
+        state_dir=state_dir,
+    )
+    briefless_fix = review_state._orchestrator_action(
+        {"stage": "fix-pending"}, "rvw_progress", state_dir=state_dir
+    )
+    assert "--contract-conflict <dimension>" in str(briefed_fix["note"])
+    assert briefless_fix["note"] == "Commit/amend valid fixes, then rerun this command."
 
 
 def test_review_state_status_surfaces_grade_before_structured_verdict(

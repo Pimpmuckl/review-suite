@@ -732,9 +732,15 @@ def _orchestrator_action(
                     "note": "Classify the reviewer output, then record clean or findings.",
                 }
     elif stage == "fix-pending":
+        note = "Commit/amend valid fixes, then rerun this command."
+        if str(state.get("review_brief") or "").strip():
+            note += (
+                " If a finding conflicts with the frozen contract, rerun this review "
+                "id with --contract-conflict <dimension> instead."
+            )
         action = {
             "cmd": _review_command(public_id),
-            "note": "Commit/amend valid fixes, then rerun this command.",
+            "note": note,
         }
     elif stage in {"review-green", "local-green-handoff"}:
         summary = review_ladder_summary(state, current_head=current_head)
