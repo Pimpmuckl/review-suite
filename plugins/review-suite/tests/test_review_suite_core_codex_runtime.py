@@ -884,6 +884,7 @@ def test_windows_wsl_fallback_requires_explicit_authorization(
     assert use_unsafe_windows_wsl_fallback(review_root, True)
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows UNC normalization")
 def test_windows_wsl_codex_child_env_appends_exact_safe_directory(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
