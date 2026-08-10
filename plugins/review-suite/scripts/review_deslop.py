@@ -462,7 +462,7 @@ def _deslop_protocol_decision(result: dict[str, object]) -> str | None:
     ]
     conformance_lines = [line for line in lines if line.startswith("Conformance: ")]
     decision_lines = [line for line in lines if line.startswith("Review decision: ")]
-    if len(conformance_lines) != 1 or len(decision_lines) != 1:
+    if lines[:1] != conformance_lines or len(decision_lines) != 1:
         return None
     if conformance_lines[0].removeprefix("Conformance: ") not in {
         "CONFORMS",
