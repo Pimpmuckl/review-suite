@@ -488,9 +488,13 @@ def _deslop_output_clean(result: dict[str, object]) -> bool:
 
 
 def _with_effective_returncode(result: dict[str, object]) -> dict[str, object]:
-    if result.get("timed_out") or _deslop_output_unusable(result):
+    if result.get("timed_out"):
         return {**result, "returncode": int(result.get("returncode") or 1)}
-    if _deslop_protocol_decision(result) or _deslop_output_clean(result):
+    if _deslop_protocol_decision(result):
+        return {**result, "returncode": 0}
+    if _deslop_output_unusable(result):
+        return {**result, "returncode": int(result.get("returncode") or 1)}
+    if _deslop_output_clean(result):
         return {**result, "returncode": 0}
     return result
 

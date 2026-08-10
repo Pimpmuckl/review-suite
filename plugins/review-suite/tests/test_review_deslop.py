@@ -49,7 +49,8 @@ def test_emit_output_only_treats_uninspectable_success_as_failure(capsys) -> Non
         (_CLEAN_PROTOCOL, "later process text", 1, False, 0),
         (_FINDINGS_PROTOCOL, "later process text", 1, False, 0),
         (_CLEAN_PROTOCOL, "", 0, True, 1),
-        (_CLEAN_PROTOCOL, "windows sandbox failed", 0, False, 1),
+        (_CLEAN_PROTOCOL, "windows sandbox failed", 1, False, 0),
+        ("No findings.", "windows sandbox failed", 0, False, 1),
         (f"{_CLEAN_PROTOCOL}\nextra text", "", 1, False, 1),
         (
             "Conformance: CONFORMS\nConformance: NOT_APPLICABLE\nReview decision: clean",
