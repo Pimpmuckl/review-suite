@@ -1556,6 +1556,73 @@ def test_create_with_skip_deslop_runs_review_without_sidecar(
     assert state["rounds"][0]["round_id"] == "phase_review-round-1"
 
 
+def test_review_brief_is_frozen_and_public_output_reports_coverage(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _stub_review(monkeypatch)
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+
+    _, created = _run_review(
+        monkeypatch,
+        [
+            "--mode",
+            "fast",
+            "--review-brief",
+            "# Goal\n\nKeep it neutral.",
+            "--cd",
+            str(repo),
+            "--base",
+            "main",
+            "--state-dir",
+            str(state_dir),
+        ],
+    )
+    public_id = str(created["review"])
+
+    assert _cycle_payload(state_dir, public_id)["review_brief"] == (
+        "# Goal\n\nKeep it neutral."
+    )
+    assert created["review_brief"] == "available"
+    assert created["design_conformance_context"] == "available"
+
+    errors: list[str] = []
+    monkeypatch.setattr(
+        review,
+        "emit_error",
+        lambda message, **kwargs: errors.append(str(message)) or 2,
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "review.py",
+            "--mode",
+            "fast",
+            "--review-brief",
+            "Changed goal",
+            "--cd",
+            str(repo),
+            "--base",
+            "main",
+        ],
+    )
+
+    assert review.main() == 2
+    assert errors[-1] == (
+        "review brief is frozen for this cycle; start a new cycle to replace it"
+    )
+
+    terminal = _cycle_payload(state_dir, public_id)
+    terminal["stage"] = "aborted"
+    _write_cycle_payload(state_dir, public_id, terminal)
+    errors.clear()
+    assert review.main() == 2
+    assert "review brief is frozen" in errors[-1]
+
+
 def test_skip_deslop_does_not_resume_same_head_sidecar_cycle(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -2109,6 +2176,8 @@ def test_id_show_status_reports_cycle_without_advancing(
     )
     assert payload["rounds"] == 1
     assert payload["deslop"] == "skipped-fast"
+    assert payload["review_brief"] == "unavailable"
+    assert payload["design_conformance_context"] == "unavailable"
     assert dict(payload["worktree"]) == {
         "branch": "feature/show-status",
         "head": str(dict(before_state["identity"])["head"])[:12],
