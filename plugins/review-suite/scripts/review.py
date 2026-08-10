@@ -2481,7 +2481,9 @@ def _github_pending_head_change_identity(
         or ""
     ).strip()
     terminal = _github_review_status(state) in {"clean", "waived"}
-    if (bool(deslop.get("tracked")) or terminal) and (
+    if (
+        str(deslop.get("status") or "").strip() != DESLOP_STATUS_SKIPPED or terminal
+    ) and (
         closure_head != head
         or str(dict(state.get("identity") or {}).get("merge_base") or "").strip()
         != current_merge_base

@@ -193,10 +193,10 @@ def _git_lines(
     ]
 
 
-def _changed_python_lines(*, review_root: Path, base: str) -> dict[str, set[int]]:
+def _changed_python_lines(*, review_root: Path, diff_range: str) -> dict[str, set[int]]:
     diff = _git_output(
         review_root,
-        ["diff", "--unified=0", "--find-renames", f"{base}...HEAD", "--", "*.py"],
+        ["diff", "--unified=0", "--find-renames", diff_range, "--", "*.py"],
     )
     changed: dict[str, set[int]] = {}
     current_path: str | None = None
@@ -258,9 +258,16 @@ def _start_static_cleanup_scan(
     commit: str | None,
     commit_end: str | None,
 ) -> StaticCleanupScan | None:
-    if commit or commit_end or not base:
+    if commit and not commit_end:
         return None
-    changed_lines = _changed_python_lines(review_root=review_root, base=base)
+    diff_range = (
+        f"{commit}..{commit_end}" if commit else f"{base}...HEAD" if base else None
+    )
+    if not diff_range:
+        return None
+    changed_lines = _changed_python_lines(
+        review_root=review_root, diff_range=diff_range
+    )
     if not changed_lines:
         return None
     command = _ensure_vulture_command()

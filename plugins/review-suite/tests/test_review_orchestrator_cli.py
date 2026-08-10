@@ -1464,7 +1464,21 @@ def test_create_with_skip_deslop_runs_review_without_sidecar(
         monkeypatch,
         [
             "--mode",
-            "normal",
+            "fast",
+            flag,
+            "--cd",
+            str(repo),
+            "--base",
+            "main",
+            "--state-dir",
+            str(state_dir),
+        ],
+    )
+    _, resumed = _run_review(
+        monkeypatch,
+        [
+            "--mode",
+            "fast",
             flag,
             "--cd",
             str(repo),
@@ -1477,11 +1491,13 @@ def test_create_with_skip_deslop_runs_review_without_sidecar(
 
     assert exit_code == 0
     public_id = str(payload["review"])
+    assert resumed["review"] == public_id
     assert set(dict(payload["Action"])) == {"cmd", "alt"}
     assert "--decision clean" in str(payload["Action"]["cmd"])
     assert "--decision findings" in str(payload["Action"]["alt"])
     assert len(deslop_calls) == 0
     assert len(review_calls) == 1
+    assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 1
     state = _cycle_payload(state_dir, public_id)
     assert state["deslop"] == {"tracked": False, "status": "skipped", "source": "cli"}
     assert state["rounds"][0]["round_id"] == "phase_review-round-1"
@@ -2627,6 +2643,7 @@ def test_fast_review_can_restart_into_deep_without_becoming_a_restart_target(
         [
             "--mode",
             "fast",
+            "--skip-deslop",
             "--cd",
             str(repo),
             "--base",
@@ -2660,6 +2677,11 @@ def test_fast_review_can_restart_into_deep_without_becoming_a_restart_target(
     new_state = _cycle_payload(state_dir, new_id)
     assert new_state["mode"] == {"requested": "deep", "effective": "deep"}
     assert new_state["restart"]["from_mode"] == "fast"
+    assert new_state["deslop"] == {
+        "tracked": False,
+        "status": "skipped",
+        "source": "cli",
+    }
 
     restart_action = next(
         action
@@ -3672,7 +3694,7 @@ def test_mode_rerun_after_pending_github_head_change_reuses_same_id_for_signoff(
     assert state["github_review"]["status"] == "unknown"
 
 
-def test_mode_rerun_after_patch_equivalent_green_base_drift_keeps_handoff(
+def test_patch_equivalent_rebase_after_closed_deslop_reopens_local_closure(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -3729,20 +3751,19 @@ def test_mode_rerun_after_patch_equivalent_green_base_drift_keeps_handoff(
 
     assert exit_code == 0
     assert resumed["review"] == public_id
-    assert resumed["next_action"] == "github_review"
-    assert "--github-review" in str(resumed["Action"]["cmd"])
-    assert len(review_calls) == 1
+    assert "--decision clean" in str(resumed["Action"]["cmd"])
+    assert len(review_calls) == 2
     assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 1
     state = _cycle_payload(state_dir, public_id)
-    assert state["stage"] == "review-green"
+    assert state["stage"] == "decision-pending"
     assert state["identity"]["head"] == rebased_head
     assert state["identity"]["merge_base"] == current_base
-    assert state["review_heads"]["last_reviewed_head"] == rebased_head
-    assert state["rounds"][0]["reviewed_head"] == rebased_head
-    assert state["decisions"][0]["reviewed_head"] == rebased_head
-    assert (
-        state["review_progress"]["completed_steps"][0]["reviewed_head"] == rebased_head
-    )
+    assert state["deslop"] == {
+        "tracked": True,
+        "status": "tracked",
+        "cleanup_completed": True,
+        "conformance_only": True,
+    }
     assert state["base_drift"] == {
         "status": "ignored_no_path_overlap",
         "recorded_merge_base": base_at_review,

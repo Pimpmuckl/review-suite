@@ -96,7 +96,7 @@ def test_normalize_repo_path_preserves_dot_prefixed_paths() -> None:
     )
 
 
-def test_static_cleanup_scan_skip_commit_modes(
+def test_static_cleanup_scan_skips_single_commit(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setattr(
@@ -113,18 +113,36 @@ def test_static_cleanup_scan_skip_commit_modes(
         )
         is None
     )
+
+
+def test_static_cleanup_scan_uses_two_commit_range(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    diff_ranges: list[str] = []
+    monkeypatch.setattr(
+        review_deslop,
+        "_changed_python_lines",
+        lambda **kwargs: diff_ranges.append(kwargs["diff_range"]) or {},
+    )
+
     assert (
         review_deslop._start_static_cleanup_scan(
             review_root=tmp_path, base=None, commit="abc123", commit_end="def456"
         )
         is None
     )
+    assert diff_ranges == ["abc123..def456"]
 
 
 def test_static_cleanup_scan_skip_without_changed_python(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(review_deslop, "_changed_python_lines", lambda **kwargs: {})
+    diff_ranges: list[str] = []
+    monkeypatch.setattr(
+        review_deslop,
+        "_changed_python_lines",
+        lambda **kwargs: diff_ranges.append(kwargs["diff_range"]) or {},
+    )
     monkeypatch.setattr(
         review_deslop.subprocess,
         "Popen",
@@ -139,6 +157,7 @@ def test_static_cleanup_scan_skip_without_changed_python(
         )
         is None
     )
+    assert diff_ranges == ["origin/main...HEAD"]
 
 
 def test_static_cleanup_scan_starts_with_exact_tracked_paths(

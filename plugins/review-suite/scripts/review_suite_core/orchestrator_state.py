@@ -56,7 +56,6 @@ DESLOP_STATUS_DONE = "done"
 DESLOP_STATUS_FAILED = "failed"
 DESLOP_STATUS_CLOSED = "closed"
 DESLOP_STATUS_SKIPPED = "skipped"
-DESLOP_STATUS_SKIPPED_FAST = "skipped-fast"
 CONFORMANCE_VERDICTS = {"CONFORMS", "MATERIALLY_DRIFTED", "NOT_APPLICABLE"}
 GATE_LANES = {"review_t2", "review_t4"}
 NO_WORK_STAGES = {
@@ -399,9 +398,6 @@ def create_cycle(
     deslop_tracked = bool(deslop_enabled) if deslop_enabled is not None else True
     if deslop_tracked:
         deslop_status = DESLOP_STATUS_TRACKED
-        deslop_skip = None
-    elif effective == "fast":
-        deslop_status = DESLOP_STATUS_SKIPPED_FAST
         deslop_skip = None
     else:
         deslop_status = DESLOP_STATUS_SKIPPED
