@@ -260,6 +260,7 @@ def _run_deslop_once(state: dict[str, Any]) -> OrchestratorRunnerResult:
             int(proc.returncode) == 0
             and len(verdicts) == len(decisions) == 1
             and verdicts[0] in allowed
+            and lines[0] == f"Conformance: {verdicts[0]}"
             and lines[-1] == decisions[0]
             and decisions[0].partition(": ")[2] in {"clean", "findings"}
         ):

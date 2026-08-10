@@ -430,11 +430,15 @@ def _with_static_cleanup_output(
     body = str(result.get("final_message") or "").strip()
     if not body:
         return result
-    if _deslop_output_clean(result) and "conformance:" not in body.lower():
+    protocol_decision = _deslop_protocol_decision(result)
+    conformance = ""
+    if protocol_decision:
+        conformance, _, body = body.partition("\n")
+        body = body.rpartition("\n")[0].strip()
+    elif _deslop_output_clean(result) and "conformance:" not in body.lower():
         body = "No reviewer findings."
-    if _deslop_protocol_decision(result):
-        body = body.rpartition("\n")[0]
-    body = f"{section}\n\nDeslop Results:\n{body}\nReview decision: findings"
+    prefix = f"{conformance}\n\n" if conformance else ""
+    body = f"{prefix}{section}\n\nDeslop Results:\n{body}\nReview decision: findings"
     return {**result, "final_message": body}
 
 

@@ -304,7 +304,7 @@ def test_static_cleanup_output_prefixes_successful_deslop_result() -> None:
         "returncode": 0,
         "stdout": "",
         "stderr": "",
-        "final_message": "No findings.",
+        "final_message": "Conformance: CONFORMS\nNo cleanup findings.\nReview decision: clean",
         "session_id": "sess-1",
         "elapsed_seconds": 1.0,
         "timed_out": False,
@@ -317,7 +317,7 @@ def test_static_cleanup_output_prefixes_successful_deslop_result() -> None:
 
     assert (
         updated["final_message"]
-        == "Static cleanup suggestions:\n- Low - app.py:1 - unused import 'os'. Fix: Remove the unused import.\n\nDeslop Results:\nNo reviewer findings.\nReview decision: findings"
+        == "Conformance: CONFORMS\n\nStatic cleanup suggestions:\n- Low - app.py:1 - unused import 'os'. Fix: Remove the unused import.\n\nDeslop Results:\nNo cleanup findings.\nReview decision: findings"
     )
 
 
