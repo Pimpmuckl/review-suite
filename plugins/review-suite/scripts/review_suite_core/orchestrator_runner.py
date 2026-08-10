@@ -220,12 +220,10 @@ def _run_deslop_once(state: dict[str, Any]) -> OrchestratorRunnerResult:
     scope = _review_scope(state, cwd)
     actual_head = str(scope["reviewed_head"])
     actual_merge_base = str(scope["merge_base"])
-    if actual_merge_base != expected_merge_base:
-        _print_step_output(label="closure", status="blocked", body="merge-base drift")
-        return OrchestratorRunnerResult(state, ran_step=False, step="deslop-blocked")
-    if actual_head != expected_head:
+    if actual_head != expected_head or actual_merge_base != expected_merge_base:
         state = mark_latest_profile_step_rerun_needed(state, head=actual_head)
-        state["identity"]["head"] = actual_head
+        state["identity"].update(head=actual_head, merge_base=actual_merge_base)
+        state["review_heads"].update(head=actual_head, merge_base=actual_merge_base)
         return OrchestratorRunnerResult(state, ran_step=True, step="deslop-rerun")
     command = deslop_command(state)
     command_text = format_command(command)

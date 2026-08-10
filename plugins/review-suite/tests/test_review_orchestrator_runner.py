@@ -285,17 +285,25 @@ def test_runner_blocks_stale_exact_head_before_closure(
     monkeypatch.setattr(runner, "current_branch", lambda cwd: "feature/orchestrator")
     monkeypatch.setattr(runner, "dirty_worktree_scope", lambda *_: {"dirty_paths": []})
     monkeypatch.setattr(runner, "current_head", lambda cwd: "head-2")
-    monkeypatch.setattr(runner, "merge_base", lambda cwd, base, head: "base-1")
-
-    result = runner.run_one_expensive_step(green)
-    assert result.state["deslop"]["status"] == "tracked"
-    monkeypatch.setattr(runner, "current_branch", lambda cwd: "other")
-    assert runner.run_one_expensive_step(green).state is green
-    monkeypatch.setattr(runner, "current_head", lambda cwd: "head-1")
+    monkeypatch.setattr(runner, "merge_base", lambda cwd, base, head: "different-base")
     calls: list[object] = []
     monkeypatch.setattr(
         runner, "run_deslop_subprocess", lambda **kwargs: calls.append(kwargs)
     )
+
+    result = runner.run_one_expensive_step(green)
+    assert result.ran_step is True
+    assert result.step == "deslop-rerun"
+    assert result.state["stage"] == STAGE_CREATED
+    assert result.state["pending_action"]["kind"] == "run-review-step"
+    for mirror in ("identity", "review_heads"):
+        assert result.state[mirror]["head"] == "head-2"
+        assert result.state[mirror]["merge_base"] == "different-base"
+    assert result.state["deslop"]["status"] == "tracked"
+    assert calls == []
+    monkeypatch.setattr(runner, "current_branch", lambda cwd: "other")
+    assert runner.run_one_expensive_step(green).state is green
+    monkeypatch.setattr(runner, "current_head", lambda cwd: "head-1")
     assert runner.run_one_expensive_step(green).step == "blocked"
     assert "expected feature/orchestrator" in capsys.readouterr().out
     monkeypatch.setattr(runner, "current_branch", lambda cwd: "feature/orchestrator")
@@ -304,9 +312,6 @@ def test_runner_blocks_stale_exact_head_before_closure(
     )
     assert runner.run_one_expensive_step(green).step == "blocked"
     assert "clean worktree required" in capsys.readouterr().out
-    monkeypatch.setattr(runner, "dirty_worktree_scope", lambda *_: {"dirty_paths": []})
-    monkeypatch.setattr(runner, "merge_base", lambda cwd, base, head: "different-base")
-    assert runner.run_one_expensive_step(green).step == "deslop-blocked"
     assert calls == []
 
 
