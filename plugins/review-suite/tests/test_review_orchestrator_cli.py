@@ -2877,6 +2877,9 @@ def test_deslop_done_rechecks_exact_head_before_closing(
     state_dir = tmp_path / "state"
     _init_repo(repo)
     _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/closure-drift")
+    advanced_base = _commit_file(repo, "app.txt", "base\nstep\n", "stack step")
+    head = _commit_file(repo, "app.txt", "base\nstep\nhead\n", "feature head")
 
     _, created = _run_review(
         monkeypatch,
@@ -2901,12 +2904,16 @@ def test_deslop_done_rechecks_exact_head_before_closing(
     drifted["deslop"]["conformance"] = "MATERIALLY_DRIFTED"
     assert "Revise" in review._action_payload(drifted, state_dir=state_dir)["note"]
 
-    amended_head = _amend_file(repo, "app.txt", "changed after closure\n")
-    exit_code, _ = _run_review(monkeypatch, ["--id", public_id, "--deslop-done"])
+    _git(repo, "branch", "-f", "main", advanced_base)
+    exit_code, resumed = _run_review(monkeypatch, ["--id", public_id, "--deslop-done"])
 
     assert exit_code == 0
+    assert resumed["review"] == public_id
     state = _cycle_payload(state_dir, public_id)
-    assert state["identity"]["head"] == amended_head
+    assert state["identity"]["head"] == head
+    assert state["identity"]["merge_base"] == advanced_base
+    assert state["stage"] == "created"
+    assert state["pending_action"]["kind"] == "run-review-step"
     assert state["deslop"]["status"] == "tracked"
     assert len(deslop_calls) == 1
     assert len(review_calls) == 1

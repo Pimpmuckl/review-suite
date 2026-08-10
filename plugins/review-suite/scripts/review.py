@@ -2471,7 +2471,17 @@ def _github_pending_head_change_identity(
     except OSError, ValueError:
         return None
     if not identity:
-        return None
+        try:
+            _, _, _, head, current_merge_base = _current_restart_identity(
+                state, require_exact=False
+            )
+        except AttributeError, OSError, ValueError:
+            return None
+        identity = {
+            "head": head,
+            "merge_base": current_merge_base,
+            "base_drift": None,
+        }
     head = str(identity.get("head") or "").strip()
     current_merge_base = str(identity.get("merge_base") or "").strip()
     deslop = dict(state.get("deslop") or {})
@@ -2954,15 +2964,15 @@ def main() -> int:
                 _render(saved, state_dir=state_dir)
                 return 0
             if args.deslop_done:
-                if _current_cycle_identity_if_compatible(state) is None:
-                    raise ValueError(
-                        "--deslop-done requires the exact clean branch, HEAD, and merge-base"
-                    )
                 resumed = _resume_progress(state, state_dir=state_dir)
                 if resumed != state:
                     saved = save_cycle(state_dir, resumed)
                     _render(saved, state_dir=state_dir)
                     return 0
+                if _current_cycle_identity_if_compatible(state) is None:
+                    raise ValueError(
+                        "--deslop-done requires the exact clean branch, HEAD, and merge-base"
+                    )
                 state = mark_deslop_closed(state)
                 saved = save_cycle(state_dir, state)
                 _render(saved, state_dir=state_dir)
