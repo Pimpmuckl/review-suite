@@ -1452,6 +1452,16 @@ def _reviewed_tree(state: dict[str, Any], head: str | None) -> str | None:
         return None
 
 
+def _is_material_fix_head(
+    state: dict[str, Any], *, head: str, reviewed_head: str
+) -> bool:
+    head_tree = _reviewed_tree(state, head)
+    reviewed_tree = _reviewed_tree(state, reviewed_head)
+    return head != reviewed_head and (
+        not head_tree or not reviewed_tree or head_tree != reviewed_tree
+    )
+
+
 def _apply_decision_to_ready_state(
     state: dict[str, Any],
     decision: str,
@@ -1636,7 +1646,7 @@ def _resume_progress(
     if (
         head
         and reviewed_head
-        and head != reviewed_head
+        and _is_material_fix_head(state, head=head, reviewed_head=reviewed_head)
         and not bool(base_drift.get("patch_equivalent"))
     ):
         return mark_fix_detected(state, head=head)
@@ -2902,6 +2912,8 @@ def main() -> int:
                 state = record_convergence_decision(
                     state, decision=str(args.convergence_decision)
                 )
+                if str(args.convergence_decision).upper() == "CONTINUE":
+                    state = _resume_progress(state, state_dir=state_dir)
                 saved = save_cycle(state_dir, state)
                 _render(saved, state_dir=state_dir)
                 return 0
