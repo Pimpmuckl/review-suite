@@ -1430,6 +1430,7 @@ def test_runner_runs_real_followup_once_from_followup_pending(
     fixed["identity"]["requested_base"] = "main"
     fixed["identity"]["base_upstream"] = "origin/main"
     fixed["identity"]["base_ref_stale"] = True
+    fixed["review_brief"] = "# Goal\n\nStay scoped."
 
     result = orchestrator_runner.run_one_expensive_step(
         fixed, state_dir=tmp_path / "state"
@@ -1468,6 +1469,7 @@ def test_runner_runs_real_followup_once_from_followup_pending(
     assert "Source review round phase_review-round-1" in str(
         followup_calls[0]["prompt"]
     )
+    _assert_review_brief_instructions(followup_calls[0]["prompt"])
 
 
 def test_runner_runs_rewritten_followup_against_branch_scope(

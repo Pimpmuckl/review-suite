@@ -1450,6 +1450,8 @@ def _run_followup_review_once(
             f"{note} The reviewed head is no longer an ancestor of HEAD; review the current branch diff "
             f"against {base} and focus on whether the fixes address that source round's findings."
         )
+    if review_instructions := _review_instructions(state, {}):
+        note = f"{note}\n\n{review_instructions}"
     prompt = build_followup_prompt(
         since_head=since_head,
         head=head,
