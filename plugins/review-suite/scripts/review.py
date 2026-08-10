@@ -115,7 +115,6 @@ from review_suite_local import (
     print_reviewer_output_section,
     round_has_live_reviewer_process,
     round_needs_caller_grade,
-    terminal_review_command,
     unique_round_state_dirs,
 )
 
@@ -802,8 +801,6 @@ def _round_terminal_command(payload: dict[str, Any]) -> str | None:
         if status and status != "completed":
             return None
         command = str(run.get("terminal_command") or "").strip().lower()
-        if not command:
-            command = terminal_review_command(str(run.get("reviewer_output") or ""))
         if command not in DECISION_COMMANDS:
             return None
         commands.append(command)
@@ -2642,18 +2639,25 @@ def _action_payload(state: dict[str, Any], *, state_dir: Path) -> dict[str, Any]
                 state, action, public_id, state_dir=state_dir
             )
         action = {
-            "cmd": _review_command(
-                public_id, "--decision", DECISION_CLEAN, state_dir=state_dir
-            ),
-            "alt": _review_command(
-                public_id, "--decision", DECISION_FINDINGS, state_dir=state_dir
-            ),
+            "choices": {
+                decision: _review_command(
+                    public_id, "--decision", decision, state_dir=state_dir
+                )
+                for decision in (DECISION_CLEAN, DECISION_FINDINGS)
+            },
+            "note": "Classify the reviewer output, then record clean or findings.",
         }
         return _with_deslop_done_action(state, action, public_id, state_dir=state_dir)
     if stage == STAGE_FIX_PENDING:
+        note = "Commit/amend valid fixes, then rerun this command."
+        if str(state.get("review_brief") or "").strip():
+            note += (
+                " If a finding conflicts with the frozen contract, rerun this review "
+                "id with --contract-conflict <dimension> instead."
+            )
         action = {
             "cmd": _review_command(public_id, state_dir=state_dir),
-            "note": "Commit/amend valid fixes, then rerun this command.",
+            "note": note,
         }
         return _with_deslop_done_action(state, action, public_id, state_dir=state_dir)
     if stage in {STAGE_CREATED, STAGE_GATE_RERUN_NEEDED}:

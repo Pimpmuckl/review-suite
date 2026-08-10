@@ -4,6 +4,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -236,6 +237,13 @@ def _stub_gate(monkeypatch, *round_ids: str) -> list[dict[str, object]]:
     return calls
 
 
+def _assert_review_brief_instructions(value: object) -> None:
+    instructions = str(value)
+    assert "# Goal\n\nStay scoped." in instructions
+    assert "interpret intended behavior and scope" in instructions
+    assert "non-blocking suggestions" in instructions
+
+
 def test_runner_runs_bounded_closure_after_clean_correctness(
     monkeypatch, clean_worktree: None, tmp_path: Path
 ) -> None:
@@ -350,6 +358,7 @@ def test_runner_walks_profile_steps_after_clean_decisions(
         deslop_enabled=False,
         step_names=("broad-discovery", "precision-signoff"),
     )
+    state["review_brief"] = "# Goal\n\nStay scoped."
 
     first = orchestrator_runner.run_one_expensive_step(
         state, state_dir=tmp_path / "state"
@@ -363,6 +372,7 @@ def test_runner_walks_profile_steps_after_clean_decisions(
     assert review_calls[0]["step_name"] == "broad-discovery"
     assert review_calls[0]["step_position"] == 1
     assert review_calls[0]["step_total"] == 2
+    _assert_review_brief_instructions(review_calls[0]["custom_instructions"])
 
     queued = record_clean_decision(
         first.state,
@@ -465,12 +475,21 @@ def test_runner_runs_gate_profile_step_once_after_review_steps(
 ) -> None:
     _stub_review(monkeypatch, "phase_review-round-1")
     gate_calls = _stub_gate(monkeypatch, "phase_gate-round-1")
+    request_calls: list[dict[str, object]] = []
+
+    def fake_build_request(**kwargs: object) -> SimpleNamespace:
+        request_calls.append(dict(kwargs))
+        return SimpleNamespace(
+            review_scope={"base": "main", "reviewed_head": "head-1"}, prompt=""
+        )
+
     monkeypatch.setattr(
         orchestrator_runner,
-        "_gate_review_scope_and_prompt",
-        lambda **kwargs: ({"base": "main", "reviewed_head": "head-1"}, ""),
+        "build_local_review_request",
+        fake_build_request,
     )
     state = _cycle(tmp_path, deslop_enabled=False, step_names=("precision",))
+    state["review_brief"] = "# Goal\n\nStay scoped."
     state["review_plan"]["steps"].append(
         {"name": "local-signoff", "kind": "gate", "gate": "phase_gate"}
     )
@@ -508,6 +527,7 @@ def test_runner_runs_gate_profile_step_once_after_review_steps(
     assert len(gate_calls) == 1
     assert gate_calls[0]["gate_task_class"] == "phase_gate"
     assert gate_calls[0]["review_scope"]["base"] == "main"
+    _assert_review_brief_instructions(request_calls[0]["custom_instructions"])
 
     reprint = orchestrator_runner.run_one_expensive_step(
         gate.state, state_dir=tmp_path / "state"
@@ -526,6 +546,7 @@ def test_runner_executes_arena_step_with_configured_lane(
         deslop_enabled=False,
         step_names=("arena-discovery", "broad-discovery", "precision-signoff"),
     )
+    state["review_brief"] = "# Goal\n\nStay scoped."
     state["review_plan"]["steps"][0] = {
         "kind": "arena",
         "name": "arena-discovery",
@@ -562,6 +583,7 @@ def test_runner_executes_arena_step_with_configured_lane(
     assert arena_calls[0]["variant_ids"] == ["a", "b", "c", "d", "e"]
     assert arena_calls[0]["step_position"] == 1
     assert arena_calls[0]["step_total"] == 3
+    _assert_review_brief_instructions(arena_calls[0]["custom_instructions"])
     assert result.state["pending_action"] == {
         "kind": "decision",
         "round_id": "pr_review-round-1",
@@ -602,6 +624,7 @@ def test_runner_arena_findings_fix_advances_with_findings_context(
         deslop_enabled=False,
         step_names=("arena-discovery", "broad-discovery", "precision-signoff"),
     )
+    state["review_brief"] = "# Goal\n\nStay scoped."
     state["review_plan"]["steps"][0] = {
         "kind": "arena",
         "name": "arena-discovery",
@@ -639,6 +662,7 @@ def test_runner_arena_findings_fix_advances_with_findings_context(
     assert review_calls[0]["step_position"] == 2
     assert review_calls[0]["step_total"] == 3
     instructions = str(review_calls[0]["custom_instructions"])
+    _assert_review_brief_instructions(instructions)
     assert "post-findings verification rerun" in instructions
     assert "Source findings round: pr_review-round-1" in instructions
     assert "Preserve fix verification for arena reruns" in instructions
@@ -1305,7 +1329,8 @@ def test_runner_retry_completes_closure_with_conformance(
         for body in (
             "Conformance: NOT_APPLICABLE\nConformance: NOT_APPLICABLE\nReview decision: clean",
             "Conformance: NOT_APPLICABLE\nReview decision: clean\nReview decision: findings",
-            "Actionable: Conformance: NOT_APPLICABLE\n\n    if ready:\n        run()\nActionable: Review decision: findings\nConformance: NOT_APPLICABLE\nReview decision: findings",
+            "preamble\nConformance: NOT_APPLICABLE\nReview decision: clean",
+            "Conformance: NOT_APPLICABLE\nActionable: Conformance: NOT_APPLICABLE\n\n    if ready:\n        run()\nActionable: Review decision: findings\nReview decision: findings",
         )
     )
     monkeypatch.setattr(
@@ -1322,7 +1347,9 @@ def test_runner_retry_completes_closure_with_conformance(
     assert failed.state["deslop"]["status"] == "failed"
     failed_again = orchestrator_runner.run_one_expensive_step(failed.state)
     assert failed_again.state["deslop"]["status"] == "failed"
-    retried = orchestrator_runner.run_one_expensive_step(failed_again.state)
+    failed_preamble = orchestrator_runner.run_one_expensive_step(failed_again.state)
+    assert failed_preamble.state["deslop"]["status"] == "failed"
+    retried = orchestrator_runner.run_one_expensive_step(failed_preamble.state)
 
     assert retried.state["deslop"]["status"] == "done"
     assert retried.state["deslop"]["conformance"] == "NOT_APPLICABLE"

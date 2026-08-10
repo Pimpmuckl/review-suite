@@ -31,11 +31,12 @@ from review_suite_core import (
     format_command,
     lens_model_config,
     resolve_repo_root,
+    resolve_ref,
     run_codex,
     validated_linear_review_range,
     write_text,
 )
-from review_suite_local import ensure_clean_git_worktree, terminal_review_command
+from review_suite_local import ensure_clean_git_worktree
 
 STATIC_CLEANUP_LIMIT = 20
 STATIC_CLEANUP_MIN_CONFIDENCE = 90
@@ -259,6 +260,10 @@ def _start_static_cleanup_scan(
 ) -> StaticCleanupScan | None:
     if commit and not commit_end:
         return None
+    if commit_end and resolve_ref(review_root, commit_end) != resolve_ref(
+        review_root, "HEAD"
+    ):
+        return None
     diff_range = (
         f"{commit}..{commit_end}" if commit else f"{base}...HEAD" if base else None
     )
@@ -425,10 +430,15 @@ def _with_static_cleanup_output(
     body = str(result.get("final_message") or "").strip()
     if not body:
         return result
-    if _deslop_output_clean(result) and "conformance:" not in body.lower():
+    protocol_decision = _deslop_protocol_decision(result)
+    conformance = ""
+    if protocol_decision:
+        conformance, _, body = body.partition("\n")
+        body = body.rpartition("\n")[0].strip()
+    elif _deslop_output_clean(result) and "conformance:" not in body.lower():
         body = "No reviewer findings."
-    body = body.rpartition("\n")[0] if terminal_review_command(body) else body
-    body = f"{section}\n\nDeslop Results:\n{body}\nReview decision: findings"
+    prefix = f"{conformance}\n\n" if conformance else ""
+    body = f"{prefix}{section}\n\nDeslop Results:\n{body}\nReview decision: findings"
     return {**result, "final_message": body}
 
 
@@ -448,21 +458,47 @@ def _deslop_output_unusable(result: dict[str, object]) -> bool:
     return any(marker in text for marker in UNUSABLE_REVIEW_MARKERS)
 
 
+def _deslop_protocol_decision(result: dict[str, object]) -> str | None:
+    lines = [
+        line.strip()
+        for line in str(result.get("final_message") or "").splitlines()
+        if line.strip()
+    ]
+    conformance_lines = [line for line in lines if line.startswith("Conformance: ")]
+    decision_lines = [line for line in lines if line.startswith("Review decision: ")]
+    if lines[:1] != conformance_lines or len(decision_lines) != 1:
+        return None
+    if conformance_lines[0].removeprefix("Conformance: ") not in {
+        "CONFORMS",
+        "MATERIALLY_DRIFTED",
+        "NOT_APPLICABLE",
+    }:
+        return None
+    decision = decision_lines[0].removeprefix("Review decision: ")
+    if decision not in {"clean", "findings"} or lines[-1] != decision_lines[0]:
+        return None
+    return decision
+
+
 def _deslop_output_clean(result: dict[str, object]) -> bool:
     text = (
         _review_output_text(result).replace(chr(0x2019), "'").replace(chr(0xFFFD), "'")
     )
     compact = " ".join(text.lower().split()).rstrip(".")
-    return terminal_review_command(text) == "clean" or compact in {
+    return _deslop_protocol_decision(result) == "clean" or compact in {
         "no findings",
         "no concrete findings",
     }
 
 
 def _with_effective_returncode(result: dict[str, object]) -> dict[str, object]:
-    if _deslop_output_unusable(result) and int(result.get("returncode") or 0) == 0:
-        return {**result, "returncode": 1}
-    if not result.get("timed_out") and _deslop_output_clean(result):
+    if result.get("timed_out"):
+        return {**result, "returncode": int(result.get("returncode") or 1)}
+    if _deslop_protocol_decision(result):
+        return {**result, "returncode": 0}
+    if _deslop_output_unusable(result):
+        return {**result, "returncode": int(result.get("returncode") or 1)}
+    if _deslop_output_clean(result):
         return {**result, "returncode": 0}
     return result
 
