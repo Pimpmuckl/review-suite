@@ -31,7 +31,7 @@ from review_suite_core import (
     format_command,
     lens_model_config,
     resolve_repo_root,
-    run_codex_review,
+    run_codex,
     use_unsafe_windows_wsl_fallback,
     validated_linear_review_range,
     write_text,
@@ -503,18 +503,15 @@ def main() -> int:
                 review_root,
                 commit,
                 commit_end,
-                label="native commit-range deslop review",
+                label="commit-range deslop review",
             )
             ensure_clean_git_worktree(review_root)
-            review_target = {"base": commit, "commit_end": commit_end}
             prompt_base = None
         elif commit:
-            review_target = {"commit": commit}
             prompt_base = None
         else:
             prompt_base = str(effective_base_ref(review_root, args.base)["base"])
             ensure_clean_git_worktree(review_root)
-            review_target = {"base": prompt_base}
         static_scan = (
             None
             if args.conformance_only
@@ -534,15 +531,13 @@ def main() -> int:
             conformance_only=bool(args.conformance_only),
         )
         try:
-            result = run_codex_review(
+            result = run_codex(
                 tool_name="review-deslop",
                 prompt=prompt,
                 model=model_config.model,
                 reasoning_effort=model_config.reasoning_effort,
                 service_tier=model_config.service_tier,
-                title="review-deslop",
                 review_root=review_root,
-                **review_target,
                 progress_interval_seconds=DEFAULT_PROGRESS_INTERVAL_SECONDS,
                 timeout_seconds=DEFAULT_TIMEOUT_SECONDS,
                 allow_unsafe_windows_wsl_fallback=bool(args.wsl),

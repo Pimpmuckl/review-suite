@@ -252,7 +252,7 @@ def test_static_cleanup_output_prefixes_successful_deslop_result() -> None:
     )
 
 
-def test_main_uses_native_base_deslop_review(
+def test_main_uses_generic_read_only_deslop_review(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     captured: dict[str, object] = {}
@@ -288,9 +288,9 @@ def test_main_uses_native_base_deslop_review(
         ),
     )
 
-    def fake_run_codex_review(**kwargs):
+    def fake_run_codex(**kwargs):
         order.append("review")
-        captured["run_codex_review"] = kwargs
+        captured["run_codex"] = kwargs
         return {
             "returncode": 0,
             "stdout": "",
@@ -301,7 +301,7 @@ def test_main_uses_native_base_deslop_review(
             "timed_out": False,
         }
 
-    monkeypatch.setattr(review_deslop, "run_codex_review", fake_run_codex_review)
+    monkeypatch.setattr(review_deslop, "run_codex", fake_run_codex)
 
     def fake_emit_result(**kwargs):
         captured["emit_result"] = kwargs
@@ -314,10 +314,9 @@ def test_main_uses_native_base_deslop_review(
 
     assert review_deslop.main() == 0
 
-    assert captured["run_codex_review"]["review_root"] == tmp_path
-    assert captured["run_codex_review"]["base"] == "origin/main"
-    assert captured["run_codex_review"].get("commit") is None
-    prompt = str(captured["run_codex_review"]["prompt"])
+    assert not hasattr(review_deslop, "run_codex_review")
+    assert captured["run_codex"]["review_root"] == tmp_path
+    prompt = str(captured["run_codex"]["prompt"])
     assert "base branch `origin/main`" in prompt
     assert "redundant code" in prompt
     assert "=== BEGIN DIFF ===" not in prompt
@@ -365,7 +364,7 @@ def test_main_stops_static_scan_when_review_launch_fails(
     )
     monkeypatch.setattr(
         review_deslop,
-        "run_codex_review",
+        "run_codex",
         lambda **kwargs: (_ for _ in ()).throw(ValueError("launch failed")),
     )
     monkeypatch.setattr(review_deslop, "emit_error", lambda *args, **kwargs: 2)
@@ -377,7 +376,7 @@ def test_main_stops_static_scan_when_review_launch_fails(
     assert stopped == [scan]
 
 
-def test_main_uses_native_base_for_linear_commit_ranges(
+def test_main_uses_generic_prompt_for_linear_commit_ranges(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     captured: dict[str, object] = {}
@@ -413,8 +412,8 @@ def test_main_uses_native_base_for_linear_commit_ranges(
         },
     )
 
-    def fake_run_codex_review(**kwargs):
-        captured["run_codex_review"] = kwargs
+    def fake_run_codex(**kwargs):
+        captured["run_codex"] = kwargs
         return {
             "returncode": 0,
             "stdout": "",
@@ -425,7 +424,7 @@ def test_main_uses_native_base_for_linear_commit_ranges(
             "timed_out": False,
         }
 
-    monkeypatch.setattr(review_deslop, "run_codex_review", fake_run_codex_review)
+    monkeypatch.setattr(review_deslop, "run_codex", fake_run_codex)
 
     def fake_emit_result(**kwargs):
         captured["emit_result"] = kwargs
@@ -438,10 +437,7 @@ def test_main_uses_native_base_for_linear_commit_ranges(
 
     assert review_deslop.main() == 0
 
-    assert captured["run_codex_review"]["base"] == "abc123"
-    assert captured["run_codex_review"]["commit_end"] == "def456"
-    assert captured["run_codex_review"].get("commit") is None
-    prompt = str(captured["run_codex_review"]["prompt"])
+    prompt = str(captured["run_codex"]["prompt"])
     assert "commit range `abc123..def456`" in prompt
     assert captured["emit_result"]["result"]["final_message"] == "No findings."
     assert "=== BEGIN DIFF ===" not in prompt
