@@ -431,6 +431,60 @@ def test_review_state_status_json_emits_sanitized_running_review(
     }
 
 
+def test_review_state_status_json_emits_caller_convergence_decision(
+    monkeypatch, tmp_path: Path, capsys
+) -> None:
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    repo.mkdir()
+    _write_orchestrator_cycle(
+        state_dir,
+        "decision.json",
+        {
+            "public_id": "rvw_decision",
+            "stage": "decision-required",
+            "mode": {"requested": "fast", "effective": "fast"},
+            "identity": {
+                "cwd": str(review_state.normalize_review_cwd_value(repo)),
+                "base": "main",
+                "branch": "feature/json",
+            },
+            "convergence": {
+                "status": "DECISION_REQUIRED",
+                "reason": "budget_exhausted",
+                "accepted_findings_limit": 3,
+                "accepted_findings_heads": [
+                    {"head": f"head-{index}", "material_id": f"tree-{index}"}
+                    for index in range(3)
+                ],
+                "continue_used": False,
+            },
+        },
+    )
+    monkeypatch.setattr(review_state, "resolve_repo_root", lambda cd: repo)
+    monkeypatch.setattr(
+        review_state,
+        "inspect_workflow_status",
+        lambda **kwargs: {
+            "status": "ok",
+            "base": "main",
+            "branch": "feature/json",
+            "head": "head-3",
+        },
+    )
+    _use_default_state_dir(monkeypatch, state_dir)
+    monkeypatch.setattr(
+        sys, "argv", ["review.py", "--status", "--json", "--base", "main"]
+    )
+
+    assert review.main() == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "decision_required"
+    assert payload["next_action"] == "caller_decision"
+    assert payload["convergence"]["reason"] == "budget_exhausted"
+    assert payload["convergence"]["accepted_findings_heads"] == 3
+
+
 def test_review_state_status_json_without_current_review(
     monkeypatch, tmp_path: Path, capsys
 ) -> None:

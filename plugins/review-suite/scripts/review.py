@@ -57,6 +57,8 @@ from review_suite_core.orchestrator_runner import run_one_expensive_step
 from review_suite_core.orchestrator_state import (
     DECISION_CLEAN,
     DECISION_FINDINGS,
+    CONVERGENCE_DECISIONS,
+    CONTRACT_CONFLICTS,
     GITHUB_RESULT_CLEAN,
     GITHUB_RESULT_FINDINGS,
     GITHUB_RESULT_WAIVED,
@@ -94,6 +96,9 @@ from review_suite_core.orchestrator_state import (
     HEAD_CHANGED_AFTER_GREEN_REVIEW_LADDER,
     mark_review_step_retry,
     abort_cycle,
+    convergence_summary,
+    record_contract_conflict,
+    record_convergence_decision,
 )
 from review_suite_core.orchestrator_store import (
     cycles_dir,
@@ -132,6 +137,7 @@ CONTINUATION_REDIRECT_STAGES = {
     STAGE_RETRY_REQUESTED,
     STAGE_BLOCKED,
     STAGE_CRASHED,
+    "decision-required",
 }
 
 
@@ -141,9 +147,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mode", choices=SUPPORTED_MODES)
     parser.add_argument("--restart-mode", choices=RESTART_TARGET_MODES)
     parser.add_argument(
-        "--new-cycle",
-        action="store_true",
-        help="Start one successor cycle after this review exhausts its round budget.",
+        "--contract-conflict", choices=tuple(sorted(CONTRACT_CONFLICTS))
+    )
+    parser.add_argument(
+        "--convergence-decision",
+        choices=tuple(sorted(decision.lower() for decision in CONVERGENCE_DECISIONS)),
     )
     parser.add_argument("--reason")
     parser.add_argument("--cd")
@@ -1204,6 +1212,8 @@ def _show_status(state: dict[str, Any], *, state_dir: Path) -> int:
     github_status = str(github_review.get("status") or "").strip()
     if github_status and github_status != "unknown":
         payload["github_review"] = github_status
+    if convergence := _public_convergence(state):
+        payload["convergence"] = convergence
     action = _action_payload(state, state_dir=state_dir)
     summary = _add_review_ladder_fields(payload, state, action)
     if action:
@@ -1432,6 +1442,16 @@ def _fix_pending_head_change_identity_if_compatible(
         return None
 
 
+def _reviewed_tree(state: dict[str, Any], head: str | None) -> str | None:
+    try:
+        cwd = str(dict(state.get("identity") or {}).get("cwd") or "").strip()
+        if not cwd or not head:
+            return None
+        return resolve_ref(cwd_path_from_normalized(cwd), f"{head}^{{tree}}")
+    except OSError, ValueError:
+        return None
+
+
 def _apply_decision_to_ready_state(
     state: dict[str, Any],
     decision: str,
@@ -1457,6 +1477,7 @@ def _apply_decision_to_ready_state(
             "Rerun or recover the review round before recording a decision."
         )
     reviewed_head = str(round_payload.get("reviewed_head") or "").strip() or None
+    reviewed_tree = _reviewed_tree(state, reviewed_head)
     gate = _round_gate(round_payload, lane)
     if decision == DECISION_CLEAN:
         if lane == FOLLOWUP_LANE:
@@ -1475,7 +1496,10 @@ def _apply_decision_to_ready_state(
         if lane == FOLLOWUP_LANE:
             return _with_fix_action(
                 record_followup_findings(
-                    state, round_id=round_id, reviewed_head=reviewed_head
+                    state,
+                    round_id=round_id,
+                    reviewed_head=reviewed_head,
+                    reviewed_tree=reviewed_tree,
                 )
             )
         next_state = _with_fix_action(
@@ -1484,6 +1508,7 @@ def _apply_decision_to_ready_state(
                 round_id=round_id,
                 lane=lane,
                 reviewed_head=reviewed_head,
+                reviewed_tree=reviewed_tree,
                 gate=gate,
             )
         )
@@ -1527,11 +1552,6 @@ def _resume_progress(
     state: dict[str, Any], *, state_dir: Path | None = None
 ) -> dict[str, Any]:
     stage = state.get("stage")
-    if (
-        dict(state.get("pending_action") or {}).get("kind")
-        == "review-round-budget-exhausted"
-    ):
-        return state
     if stage in {STAGE_CREATED, STAGE_FOLLOWUP_PENDING}:
         return state
     if stage == STAGE_DECISION_PENDING:
@@ -1803,6 +1823,7 @@ def _continuation_head_match_kind(
         STAGE_FIX_PENDING,
         STAGE_FOLLOWUP_PENDING,
         STAGE_GATE_RERUN_NEEDED,
+        "decision-required",
     }:
         return "changed"
     if _green_cycle_needs_current_head_signoff(state, head=head):
@@ -1878,9 +1899,10 @@ def _compatible_continuation_cycle(
                 continue
         mode = dict(state.get("mode") or {})
         state_mode = str(mode.get("effective") or mode.get("requested") or "").strip()
-        if state_mode != effective_mode:
+        decision_pending = state_stage == "decision-required"
+        if state_mode != effective_mode and not decision_pending:
             continue
-        if _cycle_cli_skips_deslop(state) != bool(skip_deslop):
+        if _cycle_cli_skips_deslop(state) != bool(skip_deslop) and not decision_pending:
             continue
         match_kind = _continuation_head_match_kind(
             state, review_root=review_root, head=head
@@ -2189,30 +2211,6 @@ def _restart_cycle(
     )
 
 
-def _new_cycle_after_budget_exhaustion(
-    state: dict[str, Any], *, state_dir: Path
-) -> dict[str, Any]:
-    superseded = dict(state.get("superseded_by") or {})
-    replacement_id = str(superseded.get("review") or "").strip()
-    if (
-        replacement_id
-        and str(superseded.get("kind") or "").strip() == "budget-exhausted"
-    ):
-        replacement = load_cycle_by_public_id(state_dir, replacement_id)
-        return _resume_reserved_successor(replacement, state_dir=state_dir)
-    pending = dict(state.get("pending_action") or {})
-    if str(pending.get("kind") or "").strip() != "review-round-budget-exhausted":
-        raise ValueError("--new-cycle requires an exhausted review round budget")
-    return _start_successor_cycle(
-        state,
-        state_dir=state_dir,
-        target_mode=_current_mode(state),
-        reason="review round budget exhausted",
-        kind="budget-exhausted",
-        require_exact_identity=False,
-    )
-
-
 def _advance_without_decision(
     state: dict[str, Any], *, state_dir: Path
 ) -> dict[str, Any]:
@@ -2301,10 +2299,17 @@ def _record_validation_status(
 def _record_github_result(
     state: dict[str, Any], args: argparse.Namespace
 ) -> dict[str, Any]:
+    reviewed_head = str(
+        dict(state.get("review_heads") or {}).get("last_reviewed_head")
+        or dict(state.get("identity") or {}).get("head")
+        or ""
+    ).strip()
     return record_github_result(
         state,
         result=str(args.github_result),
         note=args.github_note,
+        reviewed_head=reviewed_head or None,
+        reviewed_tree=_reviewed_tree(state, reviewed_head),
     )
 
 
@@ -2511,10 +2516,33 @@ def _with_deslop_done_action(
     return next_action
 
 
+def _public_convergence(state: dict[str, Any]) -> dict[str, Any] | None:
+    summary = convergence_summary(state)
+    if summary.get("status") == "ACTIVE" and not summary.get("accepted_findings_heads"):
+        return None
+    return summary
+
+
 def _action_payload(state: dict[str, Any], *, state_dir: Path) -> dict[str, Any] | None:
     public_id = str(state.get("public_id") or "").strip()
     action: dict[str, Any] | None
     stage = state.get("stage")
+    if stage in {"decision-required", "convergence-decided"}:
+        convergence = convergence_summary(state)
+        if convergence.get("status") != "DECISION_REQUIRED":
+            return None
+        return {
+            "choices": {
+                decision: _review_command(
+                    public_id,
+                    "--convergence-decision",
+                    decision.lower(),
+                    state_dir=state_dir,
+                )
+                for decision in convergence["recommendations"]
+            },
+            "note": "The caller must commit one decision; Review Suite will not change scope automatically.",
+        }
     if stage == STAGE_ABORTED and isinstance(state.get("superseded_by"), dict):
         replacement = dict(state.get("superseded_by") or {})
         replacement_id = str(replacement.get("review") or "").strip()
@@ -2578,21 +2606,6 @@ def _action_payload(state: dict[str, Any], *, state_dir: Path) -> dict[str, Any]
         }
         return _with_deslop_done_action(state, action, public_id, state_dir=state_dir)
     if stage == STAGE_FIX_PENDING:
-        pending = dict(state.get("pending_action") or {})
-        if pending.get("kind") == "review-round-budget-exhausted":
-            max_rounds = pending.get("max_review_rounds")
-            step = str(pending.get("step") or "review").strip() or "review"
-            action = {
-                "cmd": _review_command(public_id, "--new-cycle", state_dir=state_dir),
-                "note": (
-                    f"{step} reached its {max_rounds} round review budget; "
-                    "no more local reviewers will be launched. "
-                    "Action.cmd starts one successor cycle if another local review pass is needed."
-                ),
-            }
-            return _with_deslop_done_action(
-                state, action, public_id, state_dir=state_dir
-            )
         action = {
             "cmd": _review_command(public_id, state_dir=state_dir),
             "note": "Commit/amend valid fixes, then rerun this command.",
@@ -2648,6 +2661,8 @@ def _render(state: dict[str, Any], *, state_dir: Path) -> None:
     github_status = str(github_review.get("status") or "").strip()
     if github_status and github_status != "unknown":
         payload["github_review"] = github_status
+    if convergence := _public_convergence(state):
+        payload["convergence"] = convergence
     if validation := _validation_summary(state):
         payload["validation"] = validation
     emit_toon(payload)
@@ -2729,7 +2744,8 @@ def main() -> int:
             if (
                 args.mode
                 or args.restart_mode
-                or args.new_cycle
+                or args.contract_conflict
+                or args.convergence_decision
                 or args.reason
                 or args.decision
                 or args.github_review
@@ -2752,25 +2768,32 @@ def main() -> int:
             return cmd_branch_status(args)
         if args.restart_mode and not args.id:
             raise ValueError("--restart-mode requires --id")
-        if args.new_cycle and not args.id:
-            raise ValueError("--new-cycle requires --id")
-        if args.new_cycle and (
-            args.restart_mode
-            or args.reason
-            or args.decision
-            or args.github_review
-            or args.github_force
-            or args.github_result
-            or args.github_note
+        convergence_action = args.contract_conflict or args.convergence_decision
+        if convergence_action and not args.id:
+            raise ValueError("convergence actions require --id")
+        convergence_conflict = args.contract_conflict and args.convergence_decision
+        other_action = (
+            any(
+                getattr(args, name)
+                for name in (
+                    "restart_mode",
+                    "reason",
+                    "decision",
+                    "github_review",
+                    "github_force",
+                    "github_result",
+                    "github_note",
+                    "deslop_done",
+                    "show_findings",
+                    "show_status",
+                    "wsl",
+                )
+            )
             or has_validation_status
-            or args.deslop_done
-            or args.show_findings
-            or args.show_status
-            or args.wsl
-        ):
+        )
+        if convergence_action and (convergence_conflict or other_action):
             raise ValueError(
-                "--new-cycle cannot be combined with restart, decisions, GitHub review, GitHub results, "
-                "GitHub notes, validation status flags, deslop-done, show-findings, show-status, or wsl"
+                "convergence actions cannot be combined with another id action"
             )
         if args.skip_deslop and args.id:
             raise ValueError(
@@ -2868,9 +2891,19 @@ def main() -> int:
                 return _show_findings(state, state_dir=state_dir)
             if args.show_status:
                 return _show_status(state, state_dir=state_dir)
-            if args.new_cycle:
-                state = _new_cycle_after_budget_exhaustion(state, state_dir=state_dir)
-                _render(state, state_dir=state_dir)
+            if args.contract_conflict:
+                state = record_contract_conflict(
+                    state, conflict=str(args.contract_conflict)
+                )
+                saved = save_cycle(state_dir, state)
+                _render(saved, state_dir=state_dir)
+                return 0
+            if args.convergence_decision:
+                state = record_convergence_decision(
+                    state, decision=str(args.convergence_decision)
+                )
+                saved = save_cycle(state_dir, state)
+                _render(saved, state_dir=state_dir)
                 return 0
             if args.deslop_done:
                 state = mark_deslop_closed(state)

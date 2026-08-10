@@ -17,6 +17,7 @@ from review_suite_core.config import default_state_dir
 from review_suite_core.orchestrator_profiles import MODE_STRICTNESS_ORDER
 from review_suite_core.orchestrator_state import (
     HEAD_CHANGED_AFTER_GREEN_REVIEW_LADDER,
+    convergence_summary,
     green_review_head_change_summary,
     review_ladder_summary,
     validation_blockers,
@@ -277,6 +278,7 @@ def _public_status_payload(payload: dict[str, object]) -> dict[str, object]:
         "recommendation",
         "reason",
         "progress",
+        "convergence",
     ):
         value = payload.get(key)
         if value not in (None, "", [], {}):
@@ -689,6 +691,8 @@ def _orchestrator_action(
     current_head: str | None = None,
 ) -> dict[str, object] | None:
     stage = str(state.get("stage") or "").strip()
+    if convergence_summary(state).get("status") != "ACTIVE":
+        return None
     superseded_by = state.get("superseded_by")
     if stage == "aborted" and isinstance(superseded_by, dict):
         replacement = str(superseded_by.get("review") or "").strip()
@@ -855,6 +859,11 @@ def _orchestrator_status_override(
         "head": current_payload.get("head"),
         "mode": _orchestrator_mode_label(state),
     }
+    convergence = convergence_summary(state)
+    if convergence.get("status") != "ACTIVE" or convergence.get(
+        "accepted_findings_heads"
+    ):
+        payload["convergence"] = convergence
     current_head = str(current_payload.get("head") or "").strip()
     action = _orchestrator_action(
         state, public_id, state_dir=state_dir, current_head=current_head
@@ -867,7 +876,14 @@ def _orchestrator_status_override(
         or summary
     )
     payload.update(summary)
-    if summary.get("review_ladder") == "invalidated":
+    if convergence.get("status") != "ACTIVE":
+        if convergence.get("status") == "DECISION_REQUIRED":
+            payload["status"] = "decision_required"
+            payload["next_action"] = "caller_decision"
+        else:
+            payload["status"] = str(convergence.get("decision") or "decided").lower()
+            payload["next_action"] = "none"
+    elif summary.get("review_ladder") == "invalidated":
         payload["status"] = "stale"
         payload["next_action"] = "rerun_review"
     elif summary.get("review_ladder") == HEAD_CHANGED_AFTER_GREEN_REVIEW_LADDER:
