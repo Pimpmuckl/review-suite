@@ -14,6 +14,9 @@ if str(SCRIPT_DIR) not in sys.path:
 
 import review_deslop
 
+_CLEAN_PROTOCOL = "Conformance: CONFORMS\nReview decision: clean"
+_FINDINGS_PROTOCOL = "Conformance: CONFORMS\nReview decision: findings"
+
 
 def test_emit_output_only_reports_timeout_without_returncode(capsys) -> None:
     exit_code = review_deslop.emit_output_only(
@@ -39,15 +42,45 @@ def test_emit_output_only_treats_uninspectable_success_as_failure(capsys) -> Non
     assert capsys.readouterr().out == f"{body}\n"
 
 
-def test_emit_output_only_treats_clean_text_as_success(capsys) -> None:
-    body = "No findings."
+@pytest.mark.parametrize(
+    ("body", "stderr", "returncode", "timed_out", "expected"),
+    [
+        ("No findings.", "", 1, False, 0),
+        (_CLEAN_PROTOCOL, "later process text", 1, False, 0),
+        (_FINDINGS_PROTOCOL, "later process text", 1, False, 0),
+        (_CLEAN_PROTOCOL, "", 0, True, 1),
+        (_CLEAN_PROTOCOL, "windows sandbox failed", 0, False, 1),
+        (f"{_CLEAN_PROTOCOL}\nextra text", "", 1, False, 1),
+        (
+            "Conformance: CONFORMS\nConformance: NOT_APPLICABLE\nReview decision: clean",
+            "",
+            1,
+            False,
+            1,
+        ),
+        (f"{_FINDINGS_PROTOCOL}\nReview decision: clean", "", 1, False, 1),
+    ],
+)
+def test_emit_output_only_normalizes_only_usable_terminal_results(
+    capsys,
+    body: str,
+    stderr: str,
+    returncode: int,
+    timed_out: bool,
+    expected: int,
+) -> None:
 
     exit_code = review_deslop.emit_output_only(
         tool_name="review-deslop",
-        result={"final_message": body, "returncode": 1, "timed_out": False},
+        result={
+            "final_message": body,
+            "stderr": stderr,
+            "returncode": returncode,
+            "timed_out": timed_out,
+        },
     )
 
-    assert exit_code == 0
+    assert exit_code == expected
     assert capsys.readouterr().out == f"{body}\n"
 
 
