@@ -26,6 +26,7 @@ from review_suite_core.orchestrator_state import (
     mark_crashed,
     mark_decision_pending,
     mark_deslop_closed,
+    mark_deslop_done,
     mark_deslop_failed,
     mark_fix_detected,
     mark_followup_review_pending,
@@ -123,7 +124,7 @@ def test_create_cycle_is_compact_json_state_keyed_by_normalized_inputs(
     assert state["validation"]["review_green"] == "unknown"
     assert state["validation"]["full_suite"] == "unknown"
     assert fast["identity"]["branch"] is None
-    assert fast["deslop"] == {"tracked": False, "status": "skipped-fast"}
+    assert fast["deslop"] == {"tracked": True, "status": "tracked"}
     assert skipped["deslop"] == {
         "tracked": False,
         "status": "skipped",
@@ -156,48 +157,45 @@ def test_create_cycle_preserves_exact_optional_review_brief(tmp_path: Path) -> N
     assert briefless["review_brief"] is None
 
 
-def test_mark_deslop_closed_disables_tracked_sidecar_and_leaves_fast_untracked(
+def test_mark_deslop_closed_requires_completed_conforming_closure(
     tmp_path: Path,
 ) -> None:
     tracked = _cycle(tmp_path)
-    closed = mark_deslop_closed(tracked)
+    with pytest.raises(ValueError, match="only close after"):
+        mark_deslop_closed(tracked)
+
+    done = mark_deslop_done(
+        tracked,
+        command="review-deslop",
+        conformance="CONFORMS",
+        reviewed_head="head-1",
+    )
+    closed = mark_deslop_closed(done)
     closed_again = mark_deslop_closed(closed)
 
-    assert closed["deslop"] == {"tracked": False, "status": "closed"}
+    assert closed["deslop"]["status"] == "closed"
     assert closed_again == closed
     assert tracked["deslop"] == {"tracked": True, "status": "tracked"}
 
-    fast = create_cycle(
-        cwd=tmp_path / "repo",
-        base="main",
-        branch="HEAD",
-        head="head-1",
-        merge_base="base-1",
-        requested_mode="fast",
-        effective_mode="fast",
-        selection="stable",
+    drifted = mark_deslop_done(
+        tracked,
+        command="review-deslop",
+        conformance="MATERIALLY_DRIFTED",
+        reviewed_head="head-1",
     )
-
-    assert mark_deslop_closed(fast)["deslop"] == {
-        "tracked": False,
-        "status": "skipped-fast",
-    }
+    with pytest.raises(ValueError, match="materially drifted"):
+        mark_deslop_closed(drifted)
 
 
-def test_mark_deslop_closed_resumes_after_failed_sidecar(tmp_path: Path) -> None:
+def test_failed_closure_cannot_be_skipped(tmp_path: Path) -> None:
     failed = mark_deslop_failed(
         _cycle(tmp_path), command="review-deslop", returncode=2, reason="deslop failed"
     )
 
-    closed = mark_deslop_closed(failed)
-
     assert failed["stage"] == STAGE_RETRY_REQUESTED
     assert failed["pending_action"] == {"kind": "run-deslop"}
-    assert closed["deslop"]["tracked"] is False
-    assert closed["deslop"]["status"] == "closed"
-    assert closed["stage"] == STAGE_CREATED
-    assert closed["pending_action"] == {"kind": "resume-after-deslop"}
-    assert closed["recovery"] == {"status": "none", "retry_count": 1}
+    with pytest.raises(ValueError, match="only close after"):
+        mark_deslop_closed(failed)
 
 
 def test_wait_states_are_idle_and_transitions_are_idempotent(tmp_path: Path) -> None:
@@ -1585,8 +1583,14 @@ def test_gate_findings_require_fix_followup_clean_and_same_gate_rerun(
     with pytest.raises(ValueError, match="must be one of"):
         record_validation_statuses(rerun_clean, full_suite="classified")
 
-    handoff = mark_local_green_handoff(
+    closure = mark_deslop_done(
         rerun_clean,
+        command="review-deslop",
+        conformance="CONFORMS",
+        reviewed_head="head-2",
+    )
+    handoff = mark_local_green_handoff(
+        mark_deslop_closed(closure),
         focused="passed",
         full_suite="passed",
         ci="waived",
@@ -1604,6 +1608,9 @@ def test_gate_findings_require_fix_followup_clean_and_same_gate_rerun(
     assert validation_blockers(reasonless) == ["ci:waived_without_note"]
     rerun = mark_latest_profile_step_rerun_needed(handoff, head="head-3")
     assert "note" not in rerun["validation"]
+    assert rerun["deslop"]["status"] == "tracked"
+    assert rerun["stage"] == STAGE_CREATED
+    assert rerun["deslop"]["conformance_only"] is True
 
 
 def test_non_deep_gate_findings_rerun_same_gate_without_followup(

@@ -37,7 +37,6 @@ from review_suite_core import (
     resolve_ref,
     resolve_repo_root,
     run_codex_review,
-    use_unsafe_windows_wsl_fallback,
     validated_linear_review_range,
 )
 from review_suite_local import (
@@ -255,12 +254,6 @@ def main() -> int:
         base_info = effective_base_ref(review_root, args.base)
         branch_base = str(base_info["base"])
         requested_base = str(base_info["requested_base"])
-        if use_unsafe_windows_wsl_fallback(review_root, bool(args.wsl)):
-            print(
-                "[review-followup] WARNING: using Windows Codex fallback for a WSL UNC repo. This bypasses the Codex sandbox and is not the happy path.",
-                file=sys.stderr,
-                flush=True,
-            )
         since_head = resolve_since_head(
             explicit_since=args.since,
             state_dir=state_dir,

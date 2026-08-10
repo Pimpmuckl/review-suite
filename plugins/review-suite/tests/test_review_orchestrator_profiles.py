@@ -42,7 +42,6 @@ def test_default_stable_profiles_cover_all_modes(tmp_path: Path) -> None:
     assert set(profiles["stable"]) == {"normal", "deep", "fast"}
     assert config["arena"]["enabled"] is False
     assert config["orchestrator"]["calibration"]["auto_promotion_enabled"] is False
-    assert profiles["stable"]["normal"].deslop_enabled is True
     assert [_step_summary(step) for step in profiles["stable"]["normal"].steps] == [
         ("review", "precision-signoff", 2, "medium", True),
     ]
@@ -57,12 +56,19 @@ def test_default_stable_profiles_cover_all_modes(tmp_path: Path) -> None:
     assert profiles["stable"]["normal"].steps[-1].rerun_on_findings is True
     assert profiles["stable"]["deep"].steps[0].rerun_on_findings is True
     assert profiles["stable"]["deep"].steps[-1].rerun_on_findings is True
-    assert profiles["stable"]["fast"].deslop_enabled is False
     assert [_step_summary(step) for step in profiles["stable"]["fast"].steps] == [
         ("review", "fast-signoff", 2, "medium", False)
     ]
     assert profiles["stable"]["fast"].steps[0].max_review_rounds == 2
     assert set(profiles) == {"stable"}
+
+
+def test_stable_profile_rejects_obsolete_deslop_setting(tmp_path: Path) -> None:
+    config = deepcopy(load_config(tmp_path / "state"))
+    config["orchestrator"]["profiles"]["stable"]["normal"]["deslop_enabled"] = False
+
+    with pytest.raises(ValueError, match=r"deslop_enabled.*--skip-deslop"):
+        load_orchestrator_profiles(config)
 
 
 def test_profile_step_kind_defaults_to_review(tmp_path: Path) -> None:

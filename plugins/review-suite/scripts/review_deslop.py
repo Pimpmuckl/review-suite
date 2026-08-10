@@ -31,8 +31,7 @@ from review_suite_core import (
     format_command,
     lens_model_config,
     resolve_repo_root,
-    run_codex_review,
-    use_unsafe_windows_wsl_fallback,
+    run_codex,
     validated_linear_review_range,
     write_text,
 )
@@ -83,6 +82,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--base", help="Override the detected default branch ref.")
     parser.add_argument("--commit", nargs="+")
     parser.add_argument("--focus")
+    parser.add_argument("--review-brief", help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--conformance-only", action="store_true", help=argparse.SUPPRESS
+    )
     parser.add_argument("--wsl", action="store_true")
     parser.add_argument("--output-only", action="store_true", help=argparse.SUPPRESS)
     return parser
@@ -112,6 +115,8 @@ def build_prompt(
     commit: str | None,
     commit_end: str | None,
     focus: str | None,
+    review_brief: str | None = None,
+    conformance_only: bool = False,
 ) -> str:
     focus_block = (
         f"\nPay extra attention to this focus area:\n- {focus.strip()}\n"
@@ -132,19 +137,27 @@ def build_prompt(
         target_block = (
             f"Review the current repository changes against base branch `{base}`.\n\n"
         )
+    conformance = (
+        "Compare the implementation with this frozen review brief:\n"
+        f"<review_brief>\n{review_brief.strip()}\n</review_brief>\n"
+        "Report CONFORMS unless the implementation materially changes the brief's goal or constraints; otherwise report MATERIALLY_DRIFTED.\n\n"
+        if review_brief
+        else "No frozen review brief is available; report NOT_APPLICABLE for conformance.\n\n"
+    )
+    cleanup = (
+        "Do not perform another cleanup review or report cleanup findings; this is the post-edit conformance rerun. You must still emit the required final review decision.\n"
+        if conformance_only
+        else "Inspect only for concrete redundant code, dead code, duplicate logic, and needless wrappers.\n"
+    )
     return (
         target_block
-        + "Prefer the smallest correct shape.\n\n"
-        + "Inspect for:\n"
-        + "- redundant code\n"
-        + "- duplicated logic\n"
-        + "- dead or unused code\n"
-        + "- places where a smaller or more direct implementation would work\n"
-        + "- unnecessary helpers, wrappers, flags, branching, or abstraction layers\n"
-        + "- overcomplicated abstractions that can be collapsed\n"
+        + conformance
+        + cleanup
+        + "Do not redesign ownership, add abstractions, broaden scope, or change behavior.\n"
         + focus_block
-        + "\nReturn only concrete findings with severity, file path, and fix suggestion.\n"
-        + "Skip style-only comments."
+        + "\nBegin with exactly `Conformance: CONFORMS`, `Conformance: MATERIALLY_DRIFTED`, or `Conformance: NOT_APPLICABLE`.\n"
+        + "Return only concrete cleanup findings with severity, file path, and fix suggestion. Skip style-only comments.\n"
+        + "Always finish with exactly `Review decision: clean` or `Review decision: findings`."
     )
 
 
@@ -179,10 +192,10 @@ def _git_lines(
     ]
 
 
-def _changed_python_lines(*, review_root: Path, base: str) -> dict[str, set[int]]:
+def _changed_python_lines(*, review_root: Path, diff_range: str) -> dict[str, set[int]]:
     diff = _git_output(
         review_root,
-        ["diff", "--unified=0", "--find-renames", f"{base}...HEAD", "--", "*.py"],
+        ["diff", "--unified=0", "--find-renames", diff_range, "--", "*.py"],
     )
     changed: dict[str, set[int]] = {}
     current_path: str | None = None
@@ -244,9 +257,16 @@ def _start_static_cleanup_scan(
     commit: str | None,
     commit_end: str | None,
 ) -> StaticCleanupScan | None:
-    if commit or commit_end or not base:
+    if commit and not commit_end:
         return None
-    changed_lines = _changed_python_lines(review_root=review_root, base=base)
+    diff_range = (
+        f"{commit}..{commit_end}" if commit else f"{base}...HEAD" if base else None
+    )
+    if not diff_range:
+        return None
+    changed_lines = _changed_python_lines(
+        review_root=review_root, diff_range=diff_range
+    )
     if not changed_lines:
         return None
     command = _ensure_vulture_command()
@@ -405,9 +425,11 @@ def _with_static_cleanup_output(
     body = str(result.get("final_message") or "").strip()
     if not body:
         return result
-    if _deslop_output_clean(result):
+    if _deslop_output_clean(result) and "conformance:" not in body.lower():
         body = "No reviewer findings."
-    return {**result, "final_message": f"{section}\n\nDeslop Results:\n{body}"}
+    body = body.rpartition("\n")[0] if terminal_review_command(body) else body
+    body = f"{section}\n\nDeslop Results:\n{body}\nReview decision: findings"
+    return {**result, "final_message": body}
 
 
 def _review_output_text(result: dict[str, object]) -> str:
@@ -475,60 +497,56 @@ def main() -> int:
         if commit and args.base is not None:
             raise ValueError("use either --base or --commit")
         review_root = resolve_repo_root(args.cd)
-        if use_unsafe_windows_wsl_fallback(review_root, bool(args.wsl)):
-            print(
-                "[review-deslop] WARNING: using Windows Codex fallback for a WSL UNC repo. This bypasses the Codex sandbox and is not the happy path.",
-                file=sys.stderr,
-                flush=True,
-            )
         model_config = lens_model_config("review-deslop")
         if commit and commit_end:
             validated_linear_review_range(
                 review_root,
                 commit,
                 commit_end,
-                label="native commit-range deslop review",
+                label="commit-range deslop review",
             )
             ensure_clean_git_worktree(review_root)
-            review_target = {"base": commit, "commit_end": commit_end}
             prompt_base = None
         elif commit:
-            review_target = {"commit": commit}
             prompt_base = None
         else:
             prompt_base = str(effective_base_ref(review_root, args.base)["base"])
             ensure_clean_git_worktree(review_root)
-            review_target = {"base": prompt_base}
-        static_scan = _start_static_cleanup_scan(
-            review_root=review_root,
-            base=prompt_base,
-            commit=commit,
-            commit_end=commit_end,
+        static_scan = (
+            None
+            if args.conformance_only
+            else _start_static_cleanup_scan(
+                review_root=review_root,
+                base=prompt_base,
+                commit=commit,
+                commit_end=commit_end,
+            )
         )
         prompt = build_prompt(
             base=prompt_base,
             commit=commit,
             commit_end=commit_end,
             focus=args.focus,
+            review_brief=args.review_brief,
+            conformance_only=bool(args.conformance_only),
         )
         try:
-            result = run_codex_review(
+            result = run_codex(
                 tool_name="review-deslop",
                 prompt=prompt,
                 model=model_config.model,
                 reasoning_effort=model_config.reasoning_effort,
                 service_tier=model_config.service_tier,
-                title="review-deslop",
                 review_root=review_root,
-                **review_target,
                 progress_interval_seconds=DEFAULT_PROGRESS_INTERVAL_SECONDS,
                 timeout_seconds=DEFAULT_TIMEOUT_SECONDS,
                 allow_unsafe_windows_wsl_fallback=bool(args.wsl),
             )
             result = _with_effective_returncode(result)
-            static_suggestions = _collect_static_cleanup_scan(static_scan)
-            static_scan = None
-            result = _with_static_cleanup_output(result, static_suggestions)
+            if static_scan is not None:
+                static_suggestions = _collect_static_cleanup_scan(static_scan)
+                static_scan = None
+                result = _with_static_cleanup_output(result, static_suggestions)
         finally:
             if static_scan is not None:
                 _stop_static_cleanup_scan(static_scan)

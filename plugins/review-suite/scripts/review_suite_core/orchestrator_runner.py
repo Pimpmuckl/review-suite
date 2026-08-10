@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import subprocess
 import sys
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -34,7 +33,6 @@ from .lens_runtime import (
     progress_heartbeat_line,
 )
 from .orchestrator_state import (
-    DESLOP_STATUS_TRACKED,
     STAGE_CREATED,
     STAGE_DECISION_PENDING,
     STAGE_FOLLOWUP_PENDING,
@@ -50,6 +48,7 @@ from .orchestrator_state import (
     mark_recovery_resolved,
     mark_followup_review_pending,
     mark_gate_step_pending,
+    mark_latest_profile_step_rerun_needed,
     mark_review_step_running,
     mark_review_step_pending,
     mark_review_step_retry,
@@ -64,6 +63,7 @@ from .process_runtime import (
 )
 from .workflow_state import (
     EFFECTIVE_BASE_METADATA_KEYS,
+    current_branch,
     current_head,
     dirty_worktree_scope,
     has_committed_diff,
@@ -120,9 +120,14 @@ def deslop_command(state: dict[str, Any]) -> list[str]:
         "--output-only",
         "--cd",
         str(cwd),
-        "--base",
-        _identity_text(state, "base"),
+        "--commit",
+        _identity_text(state, "merge_base"),
+        _identity_text(state, "head"),
     ]
+    if brief := str(state.get("review_brief") or "").strip():
+        command.append(f"--review-brief={brief}")
+    if bool(dict(state.get("deslop") or {}).get("conformance_only")):
+        command.append("--conformance-only")
     if _allow_unsafe_windows_wsl_fallback(state):
         command.append("--wsl")
     return command
@@ -195,9 +200,33 @@ def _process_output(proc: subprocess.CompletedProcess) -> str:
 
 
 def _run_deslop_once(state: dict[str, Any]) -> OrchestratorRunnerResult:
+    cwd = cwd_path_from_normalized(_identity_text(state, "cwd"))
+    expected_head = _identity_text(state, "head")
+    expected_merge_base = _identity_text(state, "merge_base")
+    expected_branch = dict(state.get("identity") or {}).get("branch")
+    dirty = dirty_worktree_scope(cwd, "HEAD")["dirty_paths"]
+    if current_branch(cwd) != expected_branch:
+        _print_step_output(
+            label="closure",
+            status="blocked",
+            body=f"expected {expected_branch or 'detached HEAD'}",
+        )
+        return OrchestratorRunnerResult(state, ran_step=False, step="blocked")
+    if dirty:
+        _print_step_output(
+            label="closure", status="blocked", body="clean worktree required"
+        )
+        return OrchestratorRunnerResult(state, ran_step=False, step="blocked")
+    scope = _review_scope(state, cwd)
+    actual_head = str(scope["reviewed_head"])
+    actual_merge_base = str(scope["merge_base"])
+    if actual_head != expected_head or actual_merge_base != expected_merge_base:
+        state = mark_latest_profile_step_rerun_needed(state, head=actual_head)
+        state["identity"].update(head=actual_head, merge_base=actual_merge_base)
+        state["review_heads"].update(head=actual_head, merge_base=actual_merge_base)
+        return OrchestratorRunnerResult(state, ran_step=True, step="deslop-rerun")
     command = deslop_command(state)
     command_text = format_command(command)
-    cwd = cwd_path_from_normalized(_identity_text(state, "cwd"))
     try:
         proc = run_deslop_subprocess(command=command, cwd=cwd)
     except OSError as exc:
@@ -214,16 +243,60 @@ def _run_deslop_once(state: dict[str, Any]) -> OrchestratorRunnerResult:
             ran_step=True,
             step="deslop",
         )
+    output = _process_output(proc)
+    if output:
+        has_brief = bool(str(state.get("review_brief") or "").strip())
+        allowed = (
+            {"CONFORMS", "MATERIALLY_DRIFTED"} if has_brief else {"NOT_APPLICABLE"}
+        )
+        lines = [line.strip() for line in output.splitlines() if line.strip()]
+        verdicts = [
+            line.removeprefix("Conformance: ")
+            for line in lines
+            if line.startswith("Conformance: ")
+        ]
+        decisions = [line for line in lines if line.startswith("Review decision: ")]
+        if (
+            int(proc.returncode) == 0
+            and len(verdicts) == len(decisions) == 1
+            and verdicts[0] in allowed
+            and lines[-1] == decisions[0]
+            and decisions[0].partition(": ")[2] in {"clean", "findings"}
+        ):
+            _print_step_output(label="review-deslop", body=output)
+            protocol_lines = {f"Conformance: {verdicts[0]}", decisions[0]}
+            output_lines = output.splitlines()
+            findings = "\n".join(
+                line for line in output_lines if line not in protocol_lines
+            )
+            return OrchestratorRunnerResult(
+                mark_deslop_done(
+                    state,
+                    command=command_text,
+                    conformance=verdicts[0],
+                    reviewed_head=actual_head,
+                    decision=decisions[0].removeprefix("Review decision: "),
+                    findings=findings,
+                ),
+                ran_step=True,
+                step="deslop",
+            )
     if int(proc.returncode) == 0:
-        _print_step_output(label="review-deslop", body=str(proc.stdout or ""))
+        _print_step_output(label="review-deslop", body=output)
         return OrchestratorRunnerResult(
-            mark_deslop_done(state, command=command_text), ran_step=True, step="deslop"
+            mark_deslop_failed(
+                state,
+                command=command_text,
+                returncode=0,
+                reason="deslop did not report valid conformance and a terminal decision",
+            ),
+            ran_step=True,
+            step="deslop",
         )
     _print_step_output(
         label="review-deslop",
         status="failed",
-        body=_process_output(proc)
-        or f"review-deslop failed with exit {int(proc.returncode)}",
+        body=output or f"review-deslop failed with exit {int(proc.returncode)}",
     )
     return OrchestratorRunnerResult(
         mark_deslop_failed(
@@ -1428,23 +1501,6 @@ def _run_profile_step_once(
     )
 
 
-def _merge_deslop_result(
-    state: dict[str, Any], deslop_result: OrchestratorRunnerResult
-) -> dict[str, Any]:
-    next_state = dict(state)
-    next_state["deslop"] = dict(deslop_result.state.get("deslop") or {})
-    review_recovery = dict(state.get("recovery") or {})
-    deslop_retry_recovery = str(review_recovery.get("reason") or "").startswith(
-        "deslop failed"
-    )
-    if (
-        str(review_recovery.get("status") or "") in {"", "none"}
-        or deslop_retry_recovery
-    ):
-        next_state["recovery"] = dict(deslop_result.state.get("recovery") or {})
-    return next_state
-
-
 def run_one_expensive_step(
     state: dict[str, Any],
     *,
@@ -1453,38 +1509,7 @@ def run_one_expensive_step(
 ) -> OrchestratorRunnerResult:
     resolved_state_dir = state_dir or Path.home() / ".codex" / "state" / "review-suite"
     if deslop_should_run(state):
-        deslop_status = str(dict(state.get("deslop") or {}).get("status") or "")
-        if (
-            deslop_status == DESLOP_STATUS_TRACKED
-            and state.get("stage") == STAGE_CREATED
-            and review_profile_has_next_step(state)
-        ):
-            with ThreadPoolExecutor(max_workers=2) as executor:
-                deslop_future = executor.submit(_run_deslop_once, state)
-                review_result = _run_profile_step_once(
-                    state,
-                    state_dir=resolved_state_dir,
-                    persist_state=persist_state,
-                )
-                deslop_result = deslop_future.result()
-            next_state = _merge_deslop_result(review_result.state, deslop_result)
-            return OrchestratorRunnerResult(
-                next_state,
-                ran_step=True,
-                step=review_result.step,
-            )
-        deslop_result = _run_deslop_once(state)
-        if (
-            state.get("stage") not in {STAGE_CREATED, STAGE_RETRY_REQUESTED}
-            or dict(state.get("pending_action") or {}).get("kind") == "arena-blocked"
-        ):
-            next_state = _merge_deslop_result(state, deslop_result)
-            return OrchestratorRunnerResult(
-                next_state,
-                ran_step=True,
-                step="deslop",
-            )
-        return deslop_result
+        return _run_deslop_once(state)
     if state.get("stage") == STAGE_RUNNING:
         return _collect_running_review_once(state, state_dir=resolved_state_dir)
     if (

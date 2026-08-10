@@ -21,6 +21,7 @@ def test_launch_captured_child_process_starts_clock_before_stdin_write(
     tmp_path: Path,
 ) -> None:
     events: list[str] = []
+    captured: dict[str, object] = {}
 
     class FakeStdin:
         def write(self, value: str) -> None:
@@ -38,6 +39,7 @@ def test_launch_captured_child_process_starts_clock_before_stdin_write(
 
     def fake_popen(*args, **kwargs) -> FakeProcess:
         events.append("popen")
+        captured.update(kwargs)
         return FakeProcess()
 
     monkeypatch.setattr(
@@ -50,6 +52,7 @@ def test_launch_captured_child_process_starts_clock_before_stdin_write(
     child = launch_captured_child_process(
         command=[sys.executable, "-c", "pass"],
         cwd=tmp_path,
+        env={"SCOPED": "1"},
         stdin_text="prompt",
         stdout_prefix="child-stdout-",
         stderr_prefix="child-stderr-",
@@ -57,6 +60,7 @@ def test_launch_captured_child_process_starts_clock_before_stdin_write(
     try:
         assert child.started_monotonic == 123.0
         assert events[:4] == ["clock", "popen", "write:prompt", "close"]
+        assert captured["env"] == {"SCOPED": "1"}
     finally:
         child.stdout_path.unlink(missing_ok=True)
         child.stderr_path.unlink(missing_ok=True)

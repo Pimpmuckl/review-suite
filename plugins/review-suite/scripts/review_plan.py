@@ -30,7 +30,6 @@ from review_suite_core import (
     resolve_cd_path,
     resolve_repo_root,
     run_codex,
-    use_unsafe_windows_wsl_fallback,
 )
 
 _STD_INPUT_HANDLE = -10
@@ -148,12 +147,6 @@ def main() -> int:
     try:
         args = parser.parse_args()
         review_root = resolve_review_root(args)
-        if use_unsafe_windows_wsl_fallback(review_root, bool(args.wsl)):
-            print(
-                "[review-plan] WARNING: using Windows Codex fallback for a WSL UNC repo. This bypasses the Codex sandbox and is not the happy path.",
-                file=sys.stderr,
-                flush=True,
-            )
         plan_text, _input_source = load_plan_input(args)
         model_config = lens_model_config("review-plan")
         result = run_codex(

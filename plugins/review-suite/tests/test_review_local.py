@@ -714,9 +714,6 @@ def test_review_plan_forwards_skip_git_repo_check(
 
     monkeypatch.setattr(review_plan, "resolve_repo_root", lambda value: tmp_path)
     monkeypatch.setattr(
-        review_plan, "use_unsafe_windows_wsl_fallback", lambda *args: False
-    )
-    monkeypatch.setattr(
         review_plan,
         "lens_model_config",
         lambda name: SimpleNamespace(

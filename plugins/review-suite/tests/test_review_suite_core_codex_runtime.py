@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -10,10 +11,9 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from review_suite_core.codex_runtime import (
-    AUTO_UNSAFE_WINDOWS_WSL_FALLBACK_ENV,
-    unsafe_windows_wsl_fallback_requested,
     use_unsafe_windows_wsl_fallback,
     validate_codex_runtime,
+    windows_wsl_codex_child_env,
 )
 from review_suite_core.lens_runtime import (
     TECHNICAL_REVIEW_DEVELOPER_INSTRUCTIONS,
@@ -278,7 +278,7 @@ def test_codex_exec_command_repasses_provider_overrides_before_review_model(
     assert 'mcp_servers.node_repl.command="node_repl"' not in command
 
 
-def test_codex_exec_command_isolates_unsafe_wsl_fallback(
+def test_codex_exec_command_keeps_wsl_fallback_read_only(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setattr(
@@ -307,12 +307,12 @@ def test_codex_exec_command_isolates_unsafe_wsl_fallback(
     )
 
     assert command[0:3] == ["codex", "exec", "--ignore-user-config"]
-    assert "--dangerously-bypass-approvals-and-sandbox" in command
+    assert "--dangerously-bypass-approvals-and-sandbox" not in command
     assert 'approval_policy="never"' in command
-    assert "-s" not in command
+    assert command[command.index("-s") + 1] == "read-only"
 
 
-def test_codex_exec_review_command_isolates_unsafe_wsl_fallback(
+def test_codex_exec_review_command_keeps_wsl_fallback_read_only(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setattr(
@@ -341,9 +341,9 @@ def test_codex_exec_review_command_isolates_unsafe_wsl_fallback(
     )
 
     assert command[0:3] == ["codex", "exec", "--ignore-user-config"]
-    assert "--dangerously-bypass-approvals-and-sandbox" in command
+    assert "--dangerously-bypass-approvals-and-sandbox" not in command
     assert 'approval_policy="never"' in command
-    assert "-s" not in command
+    assert command[command.index("-s") + 1] == "read-only"
     assert command[-2:] == ["--base", "origin/main"]
 
 
@@ -414,6 +414,7 @@ def test_prepare_codex_review_launch_creates_prompted_exec_without_native_target
         assert launch.final_message_path.parent == state_dir / "tmp"
         assert str(launch.final_message_path) in launch.command
         assert launch.cwd == tmp_path
+        assert launch.env is None
     finally:
         if launch.final_message_path is not None:
             launch.final_message_path.unlink(missing_ok=True)
@@ -872,50 +873,44 @@ def test_emit_result_classifies_only_non_timeout_windows_sharing_violations(
     assert ("Retry the review" in output) is retryable
 
 
-def test_unsafe_windows_wsl_fallback_requested_honors_env(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        "review_suite_core.codex_runtime._env_flag_value", lambda name: ""
-    )
-    assert not unsafe_windows_wsl_fallback_requested(False)
-
-    monkeypatch.setattr(
-        "review_suite_core.codex_runtime._env_flag_value", lambda name: "1"
-    )
-    assert unsafe_windows_wsl_fallback_requested(False)
-
-
-def test_unsafe_windows_wsl_fallback_requested_honors_windows_user_env(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv(AUTO_UNSAFE_WINDOWS_WSL_FALLBACK_ENV, raising=False)
-    monkeypatch.setattr(
-        "review_suite_core.codex_runtime._env_flag_value", lambda name: "on"
-    )
-
-    assert unsafe_windows_wsl_fallback_requested(False)
-
-
-def test_use_unsafe_windows_wsl_fallback_honors_env_only_for_unc_path(
+def test_windows_wsl_fallback_requires_explicit_authorization(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(sys, "platform", "win32")
-    monkeypatch.setenv(AUTO_UNSAFE_WINDOWS_WSL_FALLBACK_ENV, "true")
+    monkeypatch.setenv("REVIEW_SUITE_AUTO_WSL_FALLBACK", "true")
+    review_root = Path("//wsl.localhost/Ubuntu/home/alice/code/repo")
 
-    assert use_unsafe_windows_wsl_fallback(
-        Path("//wsl.localhost/Ubuntu/home/alice/code/repo"), False
-    )
-    assert not use_unsafe_windows_wsl_fallback(Path("C:/Code/repo"), False)
+    assert not use_unsafe_windows_wsl_fallback(review_root, False)
+    assert use_unsafe_windows_wsl_fallback(review_root, True)
 
 
-def test_validate_codex_runtime_mentions_env_opt_in_for_unc_path(
+@pytest.mark.skipif(os.name != "nt", reason="Windows UNC normalization")
+def test_windows_wsl_codex_child_env_appends_exact_safe_directory(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(sys, "platform", "win32")
-    monkeypatch.setattr(
-        "review_suite_core.codex_runtime._env_flag_value", lambda name: ""
-    )
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "core.autocrlf")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "false")
+    monkeypatch.delenv("GIT_CONFIG_KEY_1", raising=False)
+    review_root = Path("//wsl.localhost/Ubuntu/home/alice/code/repo/../repo")
+
+    env = windows_wsl_codex_child_env(review_root, True)
+
+    assert env is not None
+    assert env["GIT_CONFIG_COUNT"] == "2"
+    assert env["GIT_CONFIG_KEY_0"] == "core.autocrlf"
+    assert env["GIT_CONFIG_VALUE_0"] == "false"
+    assert env["GIT_CONFIG_KEY_1"] == "safe.directory"
+    assert env["GIT_CONFIG_VALUE_1"] == "//wsl.localhost/Ubuntu/home/alice/code/repo"
+    assert os.environ["GIT_CONFIG_COUNT"] == "1"
+    assert "GIT_CONFIG_KEY_1" not in os.environ
+
+
+def test_validate_codex_runtime_requires_wsl_flag_for_unc_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "platform", "win32")
 
     with pytest.raises(ValueError) as excinfo:
         validate_codex_runtime(
@@ -923,12 +918,12 @@ def test_validate_codex_runtime_mentions_env_opt_in_for_unc_path(
             codex_executable="codex",
             review_root=Path("//wsl.localhost/Ubuntu/home/alice/code/repo"),
             allow_unsafe_windows_wsl_fallback=False,
-            unsafe_command_hint="codex exec --dangerously-bypass-approvals-and-sandbox",
         )
 
     message = str(excinfo.value)
     assert "--wsl" in message
-    assert f"{AUTO_UNSAFE_WINDOWS_WSL_FALLBACK_ENV}=1" in message
+    assert "REVIEW_SUITE_AUTO_WSL_FALLBACK" not in message
+    assert "bypass" not in message
 
 
 def test_validate_codex_runtime_mentions_windows_unc_workaround_for_wsl_windows_shim(
@@ -944,9 +939,9 @@ def test_validate_codex_runtime_mentions_windows_unc_workaround_for_wsl_windows_
             codex_executable="/mnt/c/Users/alice/AppData/Roaming/npm/codex",
             review_root=Path("/home/alice/code/repo"),
             allow_unsafe_windows_wsl_fallback=False,
-            unsafe_command_hint="codex exec --dangerously-bypass-approvals-and-sandbox",
         )
 
     message = str(excinfo.value)
     assert "//wsl.localhost/Ubuntu/home/alice/code/repo" in message
     assert "--wsl" in message
+    assert "install and authenticate" not in message

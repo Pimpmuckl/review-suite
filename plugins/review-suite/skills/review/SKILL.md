@@ -19,13 +19,13 @@ Path rules:
 
 Mode:
 - Omit `--mode` for `normal`, the default for ordinary changes.
-- Use `--mode fast` for UI-only, local presentation, and other small, well-tested changes. It runs dual GPT-5.6 Sol medium signoff with no deslop, Arena, or GitHub review; convergence uses the same accepted-findings budget as other modes.
+- Use `--mode fast` for UI-only, local presentation, and other small, well-tested changes. It runs dual GPT-5.6 Sol medium signoff with no Arena or GitHub review; convergence and bounded closure match the other modes.
 - Use `--mode deep` for billing, login/authentication, authorization/security, business-critical systems, database integrity or migrations, concurrency, and similarly critical or high-blast-radius logic.
 - Treat those mappings as risk heuristics. A nominally UI-only change that crosses a trust or data-integrity boundary is not `fast`.
 
 Rules:
 - Run focused validation before dispatch; start slow full-suite/CI after dispatch and track final status.
-- Normal and deep run deslop as a sidecar; handle or dismiss its output before completion, then close it with `review.py --id <id> --deslop-done`.
+- After correctness is clean, every mode runs one bounded closure pass for frozen-brief conformance and local cleanup. Handle or dismiss its output, then close it with `review.py --id <id> --deslop-done`. Accepted edits rerun correctness and conformance on the new exact head; cleanup does not recurse.
 - To replace an existing ladder with stricter review, use `review.py --id <id> --restart-mode deep --reason "<why>"` while the original repo/base/branch/head/merge-base still match and the worktree is clean; plain `--mode deep --cd <repo-root>` is not a restart.
 - Three distinct caller-accepted findings heads require a durable `CONTINUE`, `REPLAN`, or `RESLICE` decision; `CONTINUE` is available once for one additional fix head and its correctness decision. Report conflicts with the frozen goal, acceptance, scope, stop condition, owner, authorized behavior, or unit boundary immediately with `review.py --id <id> --contract-conflict <dimension>`.
 - Review orchestration expects committed review changes. If `git diff` is non-empty but `base..HEAD` is empty, commit intended changes or stash unrelated worktree changes before rerunning.

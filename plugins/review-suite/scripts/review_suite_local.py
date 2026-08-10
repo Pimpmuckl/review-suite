@@ -47,7 +47,6 @@ from review_suite_core import (
     prepare_codex_review_launch,
     price_usage_tokens,
     terminate_process_tree,
-    use_unsafe_windows_wsl_fallback,
     utc_now,
     utc_now_iso,
     validated_linear_review_range,
@@ -3601,6 +3600,7 @@ def _launch_reviewer_process(
     child = launch_captured_child_process(
         command=launch.command,
         cwd=launch.cwd,
+        env=launch.env,
         stdin_text=launch.stdin_text,
         stdout_prefix=f"review-suite-{run['slot']}-",
     )
@@ -3791,12 +3791,6 @@ def launch_round(
         allow_unsafe_windows_wsl_fallback
     )
     running_payload["progress_interval_seconds"] = progress_interval_seconds
-    if use_unsafe_windows_wsl_fallback(review_cwd, allow_unsafe_windows_wsl_fallback):
-        print(
-            "[review-suite] WARNING: using Windows Codex fallback for a WSL UNC repo. This bypasses the Codex sandbox and is not the happy path.",
-            file=sys.stderr,
-            flush=True,
-        )
     launched_count = 0
     for run in round_payload["runs"]:
         if _run_is_finalized(run):

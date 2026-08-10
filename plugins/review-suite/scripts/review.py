@@ -76,7 +76,6 @@ from review_suite_core.orchestrator_state import (
     STAGE_RETRY_REQUESTED,
     STAGE_REVIEW_GREEN,
     STAGE_ABORTED,
-    DESLOP_STATUS_CLOSED,
     DESLOP_STATUS_DONE,
     DESLOP_STATUS_SKIPPED,
     create_cycle,
@@ -192,7 +191,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-deslop",
         dest="skip_deslop",
         action="store_true",
-        help="Skip the deslop sidecar when creating a review cycle.",
+        help="Skip bounded exact-head closure when creating a review cycle.",
     )
     parser.add_argument(
         "--show-findings",
@@ -996,6 +995,15 @@ def _output_round_candidates(state: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _show_findings(state: dict[str, Any], *, state_dir: Path) -> int:
     public_id = str(state.get("public_id") or "").strip()
+    closure_findings = str(
+        dict(state.get("deslop") or {}).get("findings") or ""
+    ).strip()
+    if closure_findings:
+        write_text(f"review: {public_id}")
+        write_text("")
+        write_text("Output:")
+        write_text(closure_findings)
+        return 0
     candidates = _output_round_candidates(state)
     if not candidates:
         write_text(f"review: {public_id}")
@@ -1206,6 +1214,8 @@ def _show_status(state: dict[str, Any], *, state_dir: Path) -> int:
     deslop = dict(state.get("deslop") or {})
     if deslop_status := str(deslop.get("status") or "").strip():
         payload["deslop"] = deslop_status
+    if conformance := str(deslop.get("conformance") or "").strip():
+        payload["conformance"] = conformance
     if validation := _validation_summary(state):
         payload["validation"] = validation
     github_review = dict(state.get("github_review") or {})
@@ -1613,6 +1623,7 @@ def _resume_progress(
             base_drift=base_drift,
         )
         next_state = _with_equivalent_base_drift_review_head(next_state, base_drift)
+        next_state["github_review"] = {"status": "unknown"}
         return mark_latest_profile_step_rerun_needed(next_state, head=head)
     if stage != STAGE_FIX_PENDING:
         return state
@@ -1968,8 +1979,7 @@ def _create_or_resume_cycle(
     resolution = resolve_orchestrator_profile(
         config, mode=mode, selection=_configured_selection(config)
     )
-    profile_deslop_enabled = bool(resolution.profile.deslop_enabled)
-    skip_deslop = bool(args.skip_deslop) and profile_deslop_enabled
+    skip_deslop = bool(args.skip_deslop)
     continuation = _compatible_continuation_cycle(
         state_dir=state_dir,
         review_root=review_root,
@@ -1993,7 +2003,7 @@ def _create_or_resume_cycle(
         effective_mode=resolution.effective_mode,
         selection=resolution.requested_selection,
         effective_selection=resolution.effective_selection,
-        deslop_enabled=profile_deslop_enabled and not skip_deslop,
+        deslop_enabled=not skip_deslop,
         deslop_skip_source="cli" if skip_deslop else None,
         cycle_token="skip-deslop" if skip_deslop else None,
         review_brief=args.review_brief,
@@ -2118,9 +2128,7 @@ def _create_successor_cycle(
         effective_mode=resolution.effective_mode,
         selection=resolution.requested_selection,
         effective_selection=resolution.effective_selection,
-        deslop_enabled=False
-        if source_skipped_deslop
-        else resolution.profile.deslop_enabled,
+        deslop_enabled=not source_skipped_deslop,
         deslop_skip_source=deslop_skip_source,
         restart_token=restart_token,
         review_brief=state.get("review_brief"),
@@ -2309,6 +2317,7 @@ def _record_validation_status(
 def _record_github_result(
     state: dict[str, Any], args: argparse.Namespace
 ) -> dict[str, Any]:
+    _require_local_green_for_github_review(state)
     reviewed_head = str(
         dict(state.get("review_heads") or {}).get("last_reviewed_head")
         or dict(state.get("identity") or {}).get("head")
@@ -2466,20 +2475,41 @@ def _github_pending_head_change_identity(
 ) -> dict[str, Any] | None:
     if state.get("stage") not in {STAGE_REVIEW_GREEN, STAGE_LOCAL_GREEN_HANDOFF}:
         return None
-    github_status = _github_review_status(state)
-    if (
-        _mode_label(state) == "fast" and github_status == "unknown"
-    ) or github_status in {GITHUB_RESULT_CLEAN, GITHUB_RESULT_WAIVED}:
-        return None
     try:
         identity = _current_cycle_identity_if_compatible(state)
     except OSError, ValueError:
         return None
     if not identity:
-        return None
+        try:
+            _, _, _, head, current_merge_base = _current_restart_identity(
+                state, require_exact=False
+            )
+        except AttributeError, OSError, ValueError:
+            return None
+        identity = {
+            "head": head,
+            "merge_base": current_merge_base,
+            "base_drift": None,
+        }
+    head = str(identity.get("head") or "").strip()
+    current_merge_base = str(identity.get("merge_base") or "").strip()
+    deslop = dict(state.get("deslop") or {})
+    closure_head = str(
+        deslop.get("reviewed_head")
+        or dict(state.get("identity") or {}).get("head")
+        or ""
+    ).strip()
+    terminal = _github_review_status(state) in {"clean", "waived"}
+    if (
+        str(deslop.get("status") or "").strip() != DESLOP_STATUS_SKIPPED or terminal
+    ) and (
+        closure_head != head
+        or str(dict(state.get("identity") or {}).get("merge_base") or "").strip()
+        != current_merge_base
+    ):
+        return identity
     if bool(dict(identity.get("base_drift") or {}).get("patch_equivalent")):
         return None
-    head = str(identity.get("head") or "").strip()
     summary = review_ladder_summary(state, current_head=head)
     if summary.get("review_ladder") != "invalidated":
         return None
@@ -2505,9 +2535,10 @@ def _github_terminal_action(
 
 def _deslop_is_open(state: dict[str, Any]) -> bool:
     deslop = dict(state.get("deslop") or {})
-    if not bool(deslop.get("tracked")):
-        return False
-    return str(deslop.get("status") or "").strip() != DESLOP_STATUS_CLOSED
+    return (
+        bool(deslop.get("tracked"))
+        and str(deslop.get("status") or "").strip() == DESLOP_STATUS_DONE
+    )
 
 
 def _with_deslop_done_action(
@@ -2519,11 +2550,15 @@ def _with_deslop_done_action(
 ) -> dict[str, Any] | None:
     if not _deslop_is_open(state):
         return action
-    if action is None:
-        return {"cmd": _deslop_done_command(public_id, state_dir=state_dir)}
-    next_action = dict(action or {})
-    next_action["deslop_done"] = _deslop_done_command(public_id, state_dir=state_dir)
-    return next_action
+    findings = dict(state.get("deslop") or {}).get("decision") == "findings"
+    return {
+        "cmd": _deslop_done_command(public_id, state_dir=state_dir),
+        "note": (
+            "Address or dismiss the closure findings, then acknowledge the exact-head result."
+            if findings
+            else "Acknowledge the exact-head closure before continuing."
+        ),
+    }
 
 
 def _public_convergence(state: dict[str, Any]) -> dict[str, Any] | None:
@@ -2628,6 +2663,20 @@ def _action_payload(state: dict[str, Any], *, state_dir: Path) -> dict[str, Any]
             action["note"] = note
         return _with_deslop_done_action(state, action, public_id, state_dir=state_dir)
     if stage in {STAGE_REVIEW_GREEN, STAGE_LOCAL_GREEN_HANDOFF}:
+        deslop = dict(state.get("deslop") or {})
+        if deslop.get("conformance") == "MATERIALLY_DRIFTED":
+            return {
+                "cmd": _review_command(public_id, state_dir=state_dir),
+                "note": "Revise the materially drifted implementation, then rerun this review id.",
+            }
+        if bool(deslop.get("tracked")) and str(deslop.get("status") or "") in {
+            "tracked",
+            "failed",
+        }:
+            return {
+                "cmd": _review_command(public_id, state_dir=state_dir),
+                "note": "Run the bounded exact-head closure before handoff.",
+            }
         summary = review_ladder_summary(state, current_head=_identity_head(state))
         if summary.get("review_ladder") == "invalidated":
             if green_review_head_change_summary(state, summary=summary):
@@ -2671,6 +2720,10 @@ def _render(state: dict[str, Any], *, state_dir: Path) -> None:
     github_status = str(github_review.get("status") or "").strip()
     if github_status and github_status != "unknown":
         payload["github_review"] = github_status
+    if conformance := str(
+        dict(state.get("deslop") or {}).get("conformance") or ""
+    ).strip():
+        payload["conformance"] = conformance
     if convergence := _public_convergence(state):
         payload["convergence"] = convergence
     if validation := _validation_summary(state):
@@ -2701,6 +2754,8 @@ def _render_stale_decision_recovery(
 def _require_local_green_for_github_review(state: dict[str, Any]) -> None:
     if state.get("stage") not in {STAGE_REVIEW_GREEN, STAGE_LOCAL_GREEN_HANDOFF}:
         raise ValueError("--github-review requires local green review state")
+    if bool(dict(state.get("deslop") or {}).get("tracked")):
+        raise ValueError("--github-review requires completed exact-head closure")
 
 
 def _github_review_subprocess_command(
@@ -2918,6 +2973,15 @@ def main() -> int:
                 _render(saved, state_dir=state_dir)
                 return 0
             if args.deslop_done:
+                resumed = _resume_progress(state, state_dir=state_dir)
+                if resumed != state:
+                    saved = save_cycle(state_dir, resumed)
+                    _render(saved, state_dir=state_dir)
+                    return 0
+                if _current_cycle_identity_if_compatible(state) is None:
+                    raise ValueError(
+                        "--deslop-done requires the exact clean branch, HEAD, and merge-base"
+                    )
                 state = mark_deslop_closed(state)
                 saved = save_cycle(state_dir, state)
                 _render(saved, state_dir=state_dir)
@@ -2971,6 +3035,15 @@ def main() -> int:
                     )
                     return 0
             if has_validation_status and not args.decision:
+                resumed = (
+                    _resume_progress(state, state_dir=state_dir)
+                    if _github_review_status(state) in {"clean", "waived"}
+                    else state
+                )
+                if resumed != state:
+                    saved = save_cycle(state_dir, resumed)
+                    _render(saved, state_dir=state_dir)
+                    return 0
                 state = _record_validation_status(state, args)
             elif not args.decision:
                 state = (
