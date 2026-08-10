@@ -265,7 +265,10 @@ def _run_deslop_once(state: dict[str, Any]) -> OrchestratorRunnerResult:
         ):
             _print_step_output(label="review-deslop", body=output)
             protocol_lines = {f"Conformance: {verdicts[0]}", decisions[0]}
-            findings = "\n".join(line for line in lines if line not in protocol_lines)
+            output_lines = output.splitlines()
+            findings = "\n".join(
+                line for line in output_lines if line not in protocol_lines
+            )
             return OrchestratorRunnerResult(
                 mark_deslop_done(
                     state,
