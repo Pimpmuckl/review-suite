@@ -52,7 +52,6 @@ class OrchestratorProfileStep:
 class OrchestratorProfile:
     mode: str
     profile: str
-    deslop_enabled: bool
     steps: tuple[OrchestratorProfileStep, ...]
 
 
@@ -484,6 +483,10 @@ def _normalize_profile(
 ) -> OrchestratorProfile:
     if not isinstance(raw_profile, dict):
         raise ValueError(f"orchestrator.profiles.{profile}.{mode} must be an object")
+    if "deslop_enabled" in raw_profile:
+        raise ValueError(
+            f"orchestrator.profiles.{profile}.{mode}.deslop_enabled is obsolete; use --skip-deslop"
+        )
     raw_steps = raw_profile.get("steps")
     if not isinstance(raw_steps, list) or not raw_steps:
         raise ValueError(
@@ -498,7 +501,6 @@ def _normalize_profile(
     return OrchestratorProfile(
         mode=mode,
         profile=profile,
-        deslop_enabled=bool(raw_profile.get("deslop_enabled", True)),
         steps=steps,
     )
 

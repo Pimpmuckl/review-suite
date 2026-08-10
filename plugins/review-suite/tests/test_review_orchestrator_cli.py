@@ -451,7 +451,6 @@ def _use_single_step_normal_profile(
 ) -> None:
     config = deepcopy(review.load_config(state_dir))
     normal = config["orchestrator"]["profiles"]["stable"]["normal"]
-    normal["deslop_enabled"] = False
     normal["steps"] = [
         {
             "name": "precision-signoff",
