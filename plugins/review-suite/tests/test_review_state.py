@@ -622,16 +622,21 @@ def test_review_state_status_surfaces_orchestrator_progress(
     assert emitted[0]["progress"] == "review 1/2 broad-discovery"
     assert "recommendation" not in emitted[0]
     assert "reason" not in emitted[0]
-    assert "--id rvw_progress --decision clean" in str(emitted[0]["Action"]["cmd"])
-    assert "--id rvw_progress --decision findings" in str(emitted[0]["Action"]["alt"])
+    action = emitted[0]["Action"]
+    assert set(action) == {"choices", "note", "restart"}
+    assert action["note"] == (
+        "Classify the reviewer output, then record clean or findings."
+    )
+    assert "--id rvw_progress --decision clean" in str(action["choices"]["clean"])
+    assert "--id rvw_progress --decision findings" in str(action["choices"]["findings"])
     assert "--id rvw_progress --restart-mode deep --reason REASON" in str(
         emitted[0]["Action"]["restart"]["cmd"]
     )
     assert emitted[0]["Action"]["restart"]["mode"] == "deep"
-    assert "--state-dir" not in str(emitted[0]["Action"]["cmd"])
-    assert "--state-dir" not in str(emitted[0]["Action"]["alt"])
+    assert "--state-dir" not in str(action["choices"]["clean"])
+    assert "--state-dir" not in str(action["choices"]["findings"])
     assert "--state-dir" not in str(emitted[0]["Action"]["restart"]["cmd"])
-    assert str(state_dir.resolve(strict=False)) not in str(emitted[0]["Action"]["cmd"])
+    assert str(state_dir.resolve(strict=False)) not in str(action["choices"]["clean"])
     assert "review_t1.py" not in str(emitted[0]["Action"])
 
 
@@ -773,7 +778,8 @@ def test_review_state_status_uses_bare_id_for_structured_verdict(
                     {
                         "slot": "alpha",
                         "review_status": "completed",
-                        "reviewer_output": "No findings.\n\nReview result: clean",
+                        "reviewer_output": "Review result: findings",
+                        "terminal_command": "clean",
                         "grade_blocked": False,
                     }
                 ],
