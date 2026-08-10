@@ -36,7 +36,6 @@ from review_suite_local import (
     public_task_name,
     read_jsonl,
     round_needs_caller_grade,
-    terminal_review_command,
     unique_round_state_dirs,
 )
 
@@ -605,8 +604,6 @@ def _round_terminal_command(round_record: dict[str, object]) -> str | None:
         if status and status != "completed":
             return None
         command = str(run.get("terminal_command") or "").strip().lower()
-        if not command:
-            command = terminal_review_command(str(run.get("reviewer_output") or ""))
         if command not in DECISION_COMMANDS:
             return None
         commands.append(command)
@@ -726,13 +723,24 @@ def _orchestrator_action(
                 }
             else:
                 action = {
-                    "cmd": _review_command(public_id, extra=("--decision", "clean")),
-                    "alt": _review_command(public_id, extra=("--decision", "findings")),
+                    "choices": {
+                        decision: _review_command(
+                            public_id, extra=("--decision", decision)
+                        )
+                        for decision in ("clean", "findings")
+                    },
+                    "note": "Classify the reviewer output, then record clean or findings.",
                 }
     elif stage == "fix-pending":
+        note = "Commit/amend valid fixes, then rerun this command."
+        if str(state.get("review_brief") or "").strip():
+            note += (
+                " If a finding conflicts with the frozen contract, rerun this review "
+                "id with --contract-conflict <dimension> instead."
+            )
         action = {
             "cmd": _review_command(public_id),
-            "note": "Commit/amend valid fixes, then rerun this command.",
+            "note": note,
         }
     elif stage in {"review-green", "local-green-handoff"}:
         summary = review_ladder_summary(state, current_head=current_head)
