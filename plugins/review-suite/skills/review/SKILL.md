@@ -15,7 +15,7 @@ Path rules:
 - `<review-suite-plugin-root>` is the installed Codex plugin cache root, such as `%USERPROFILE%\.codex\plugins\cache\review-suite\review-suite\0.1.0` for the git marketplace install.
 - When reviewing Review Suite itself, use the current source checkout only if the user explicitly requests dogfooding unsynced source changes.
 - Do not run scripts from `%USERPROFILE%\.codex\.tmp\marketplaces\review-suite`; that is Codex's marketplace source clone.
-- Follow emitted `Action.cmd`; runtime-backed runs should emit installed-launcher paths for follow-up commands.
+- Follow the emitted `Action`; its commands should use installed-launcher paths for runtime-backed runs.
 
 Mode:
 - Omit `--mode` for `normal`, the default for ordinary changes.
@@ -30,7 +30,7 @@ Rules:
 - Three distinct caller-accepted findings heads require a durable `CONTINUE`, `REPLAN`, or `RESLICE` decision; `CONTINUE` is available once for one additional fix head and its correctness decision. Report conflicts with the frozen goal, acceptance, scope, stop condition, owner, authorized behavior, or unit boundary immediately with `review.py --id <id> --contract-conflict <dimension>`.
 - Review orchestration expects committed review changes. If `git diff` is non-empty but `base..HEAD` is empty, commit intended changes or stash unrelated worktree changes before rerunning.
 - Review commands do not support a dirty-worktree override. Do not append `--allow-dirty`; commit intended review changes first.
-- Read `Output:`, then follow the emitted `Action.cmd`.
+- Read `Output:`, then follow the emitted `Action`: run `cmd` when present, or classify the output and run exactly one matching `choices` command.
 - On `head_changed_after_review`, inspect `reviewed_head..current_head`. If the changes only fix stale tests to match already-reviewed behavior, do not rerun review; run the affected tests and required validation, then proceed. Rerun only if production code or intended behavior changed.
 - For arena grading actions, grade only after checking findings against the diff/repo. Plausible but unverified findings do not count as valid. Use `scope_bloat_loss` when a review asks for product behavior, AI guardrails, validation, fallback behavior, UX policy, or safety checks that are not required by the diff, a real bug, a trust boundary, or the user request.
 - Supply the requested rating pool and repeat `--rank` from best to worst; comma-separated variants within one rank tie. The caller grades; Review Suite never promotes a winner automatically.

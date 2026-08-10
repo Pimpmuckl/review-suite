@@ -37,9 +37,9 @@ Omitting `--mode` creates a `normal` review. Pass `--mode fast` or `--mode deep`
 only when the risk warrants it. Review Suite detects the remote default branch;
 use `--base <ref>` only to override it explicitly.
 
-The first call creates or reconnects a review and prints one `Action.cmd`.
-Follow that command until the review is green or requires a code fix. After a
-review id exists, the normal continuation is:
+The first call creates or reconnects a review and prints an `Action`. Run its
+`cmd`, or classify the review output and run exactly one matching `choices`
+command. After a review id exists, the normal continuation is:
 
 ```powershell
 <python> <plugin-root>/scripts/review.py --id <id>
