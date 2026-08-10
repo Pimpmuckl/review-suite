@@ -3426,10 +3426,30 @@ def test_github_result_clean_and_waived_are_terminal_for_existing_cycle(
     stale_head = _commit_file(
         repo, "app.txt", "base\nnew work\n", "new work after github waiver"
     )
-    _, stale = _run_review(
-        monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)]
+    exit_code, stale = _run_review(
+        monkeypatch,
+        [
+            "--id",
+            public_id,
+            "--full-suite",
+            "passed",
+            "--ci",
+            "passed",
+            "--state-dir",
+            str(state_dir),
+        ],
     )
-    assert stale_head != reviewed_head and _cycle_payload(state_dir, public_id)["deslop"]["status"] == "tracked"  # fmt: skip
+    assert exit_code == 0
+    assert stale["done"] is False
+    assert stale["review_ladder"] == "pending"
+    assert stale["next_action"] == "continue"
+    assert "--full-suite" not in str(stale["Action"]["cmd"])
+    state = _cycle_payload(state_dir, public_id)
+    assert stale_head != reviewed_head and state["identity"]["head"] == stale_head
+    assert state["github_review"] == {"status": "unknown"}
+    assert state["validation"]["full_suite"] == "unknown"
+    assert state["validation"]["ci"] == "unknown"
+    assert state["deslop"]["status"] == "tracked"
 
 
 def test_github_result_findings_does_not_auto_start_followup_when_fix_already_committed(

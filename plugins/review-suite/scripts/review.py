@@ -1614,6 +1614,7 @@ def _resume_progress(
             base_drift=base_drift,
         )
         next_state = _with_equivalent_base_drift_review_head(next_state, base_drift)
+        next_state["github_review"] = {"status": "unknown"}
         return mark_latest_profile_step_rerun_needed(next_state, head=head)
     if stage != STAGE_FIX_PENDING:
         return state
@@ -3013,6 +3014,15 @@ def main() -> int:
                     )
                     return 0
             if has_validation_status and not args.decision:
+                resumed = (
+                    _resume_progress(state, state_dir=state_dir)
+                    if _github_review_status(state) in {"clean", "waived"}
+                    else state
+                )
+                if resumed != state:
+                    saved = save_cycle(state_dir, resumed)
+                    _render(saved, state_dir=state_dir)
+                    return 0
                 state = _record_validation_status(state, args)
             elif not args.decision:
                 state = (

@@ -203,6 +203,20 @@ def _run_deslop_once(state: dict[str, Any]) -> OrchestratorRunnerResult:
     cwd = cwd_path_from_normalized(_identity_text(state, "cwd"))
     expected_head = _identity_text(state, "head")
     expected_merge_base = _identity_text(state, "merge_base")
+    expected_branch = dict(state.get("identity") or {}).get("branch")
+    dirty = dirty_worktree_scope(cwd, "HEAD")["dirty_paths"]
+    if current_branch(cwd) != expected_branch:
+        _print_step_output(
+            label="closure",
+            status="blocked",
+            body=f"expected {expected_branch or 'detached HEAD'}",
+        )
+        return OrchestratorRunnerResult(state, ran_step=False, step="blocked")
+    if dirty:
+        _print_step_output(
+            label="closure", status="blocked", body="clean worktree required"
+        )
+        return OrchestratorRunnerResult(state, ran_step=False, step="blocked")
     scope = _review_scope(state, cwd)
     actual_head = str(scope["reviewed_head"])
     actual_merge_base = str(scope["merge_base"])
@@ -210,10 +224,6 @@ def _run_deslop_once(state: dict[str, Any]) -> OrchestratorRunnerResult:
         _print_step_output(label="closure", status="blocked", body="merge-base drift")
         return OrchestratorRunnerResult(state, ran_step=False, step="deslop-blocked")
     if actual_head != expected_head:
-        branch = dict(state.get("identity") or {}).get("branch")
-        dirty = dirty_worktree_scope(cwd, "HEAD")["dirty_paths"]
-        if current_branch(cwd) != branch or dirty:
-            return OrchestratorRunnerResult(state, ran_step=False, step="blocked")
         state = mark_latest_profile_step_rerun_needed(state, head=actual_head)
         state["identity"]["head"] = actual_head
         return OrchestratorRunnerResult(state, ran_step=True, step="deslop-rerun")

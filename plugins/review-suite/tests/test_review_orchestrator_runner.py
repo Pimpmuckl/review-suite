@@ -31,6 +31,16 @@ from review_suite_core.orchestrator_state import (
 from review_suite_local import write_round
 
 
+@pytest.fixture
+def clean_worktree(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        orchestrator_runner, "current_branch", lambda cwd: "feature/orchestrator"
+    )
+    monkeypatch.setattr(
+        orchestrator_runner, "dirty_worktree_scope", lambda *_: {"dirty_paths": []}
+    )
+
+
 def _cycle(
     tmp_path: Path,
     *,
@@ -227,7 +237,7 @@ def _stub_gate(monkeypatch, *round_ids: str) -> list[dict[str, object]]:
 
 
 def test_runner_runs_bounded_closure_after_clean_correctness(
-    monkeypatch, tmp_path: Path
+    monkeypatch, clean_worktree: None, tmp_path: Path
 ) -> None:
     calls: list[tuple[list[str], Path]] = []
     review_calls = _stub_review(monkeypatch)
@@ -254,6 +264,8 @@ def test_runner_runs_bounded_closure_after_clean_correctness(
         reviewed_head="head-1",
     )
     green["review_brief"] = "- frozen"
+    green["identity"]["branch"] = None
+    monkeypatch.setattr(orchestrator_runner, "current_branch", lambda cwd: None)
     orchestrator_runner.run_one_expensive_step(green)
 
     command, cwd = calls[0]
@@ -262,7 +274,7 @@ def test_runner_runs_bounded_closure_after_clean_correctness(
 
 
 def test_runner_blocks_stale_exact_head_before_closure(
-    monkeypatch, tmp_path: Path
+    monkeypatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     green = _cycle(tmp_path)
     green.update(stage=STAGE_RETRY_REQUESTED, pending_action={"kind": "run-deslop"})
@@ -279,6 +291,23 @@ def test_runner_blocks_stale_exact_head_before_closure(
     assert result.state["deslop"]["status"] == "tracked"
     monkeypatch.setattr(runner, "current_branch", lambda cwd: "other")
     assert runner.run_one_expensive_step(green).state is green
+    monkeypatch.setattr(runner, "current_head", lambda cwd: "head-1")
+    calls: list[object] = []
+    monkeypatch.setattr(
+        runner, "run_deslop_subprocess", lambda **kwargs: calls.append(kwargs)
+    )
+    assert runner.run_one_expensive_step(green).step == "blocked"
+    assert "expected feature/orchestrator" in capsys.readouterr().out
+    monkeypatch.setattr(runner, "current_branch", lambda cwd: "feature/orchestrator")
+    monkeypatch.setattr(
+        runner, "dirty_worktree_scope", lambda *_: {"dirty_paths": ["dirty.py"]}
+    )
+    assert runner.run_one_expensive_step(green).step == "blocked"
+    assert "clean worktree required" in capsys.readouterr().out
+    monkeypatch.setattr(runner, "dirty_worktree_scope", lambda *_: {"dirty_paths": []})
+    monkeypatch.setattr(runner, "merge_base", lambda cwd, base, head: "different-base")
+    assert runner.run_one_expensive_step(green).step == "deslop-blocked"
+    assert calls == []
 
 
 def test_deslop_subprocess_emits_parent_progress_without_leaking_child_stderr(
@@ -1224,7 +1253,7 @@ def test_runner_rejects_mismatched_arena_lane_and_task_class(
 
 
 def test_runner_fast_mode_uses_same_post_clean_closure(
-    monkeypatch, tmp_path: Path
+    monkeypatch, clean_worktree: None, tmp_path: Path
 ) -> None:
     review_calls = _stub_review(monkeypatch)
     deslop_calls: list[list[str]] = []
@@ -1263,7 +1292,7 @@ def test_runner_fast_mode_uses_same_post_clean_closure(
 
 
 def test_runner_retry_completes_closure_with_conformance(
-    monkeypatch, tmp_path: Path
+    monkeypatch, clean_worktree: None, tmp_path: Path
 ) -> None:
     _stub_review(monkeypatch)
     outputs = iter(
