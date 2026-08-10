@@ -31,6 +31,7 @@ from review_suite_core import (
     format_command,
     lens_model_config,
     resolve_repo_root,
+    resolve_ref,
     run_codex,
     validated_linear_review_range,
     write_text,
@@ -258,6 +259,10 @@ def _start_static_cleanup_scan(
     commit_end: str | None,
 ) -> StaticCleanupScan | None:
     if commit and not commit_end:
+        return None
+    if commit_end and resolve_ref(review_root, commit_end) != resolve_ref(
+        review_root, "HEAD"
+    ):
         return None
     diff_range = (
         f"{commit}..{commit_end}" if commit else f"{base}...HEAD" if base else None

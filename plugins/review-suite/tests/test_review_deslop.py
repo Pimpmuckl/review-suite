@@ -115,16 +115,31 @@ def test_static_cleanup_scan_skips_single_commit(
     )
 
 
-def test_static_cleanup_scan_uses_two_commit_range(
+def test_static_cleanup_scan_only_uses_current_head_range(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     diff_ranges: list[str] = []
+    current_head = ["head789"]
+    monkeypatch.setattr(
+        review_deslop,
+        "resolve_ref",
+        lambda repo, ref: current_head[0] if ref == "HEAD" else ref,
+    )
     monkeypatch.setattr(
         review_deslop,
         "_changed_python_lines",
         lambda **kwargs: diff_ranges.append(kwargs["diff_range"]) or {},
     )
 
+    assert (
+        review_deslop._start_static_cleanup_scan(
+            review_root=tmp_path, base=None, commit="abc123", commit_end="def456"
+        )
+        is None
+    )
+    assert diff_ranges == []
+
+    current_head[0] = "def456"
     assert (
         review_deslop._start_static_cleanup_scan(
             review_root=tmp_path, base=None, commit="abc123", commit_end="def456"

@@ -92,6 +92,17 @@ def _run_review(
     return exit_code, emitted[0]
 
 
+def _assert_decision_action(action: object) -> dict[str, str]:
+    payload = dict(action)  # type: ignore[arg-type]
+    assert set(payload) == {"choices", "note"}
+    assert payload["note"] == (
+        "Classify the reviewer output, then record clean or findings."
+    )
+    choices = dict(payload["choices"])
+    assert set(choices) == {"clean", "findings"}
+    return choices
+
+
 def _without_state_dir_args(
     monkeypatch: pytest.MonkeyPatch, args: list[str]
 ) -> list[str]:
@@ -1194,11 +1205,11 @@ def test_create_resume_and_id_reprint_use_one_pending_action(
     assert "mode" not in payload
     assert "selection" not in payload
     assert "grading" not in payload
-    assert set(dict(payload["Action"])) == {"cmd", "alt"}
-    assert f"--id {public_id}" in str(payload["Action"]["cmd"])
-    assert "--state-dir" not in str(payload["Action"]["cmd"])
-    assert str(state_dir) not in str(payload["Action"]["cmd"])
-    assert "--decision clean" in str(payload["Action"]["cmd"])
+    choices = _assert_decision_action(payload["Action"])
+    assert f"--id {public_id}" in choices["clean"]
+    assert "--state-dir" not in choices["clean"]
+    assert str(state_dir) not in choices["clean"]
+    assert "--decision clean" in choices["clean"]
     assert len(deslop_calls) == 0
     assert not (state_dir / "orchestrator" / "state_dirs.json").exists()
     state = _cycle_payload(state_dir, public_id)
@@ -1216,13 +1227,13 @@ def test_create_resume_and_id_reprint_use_one_pending_action(
     assert exit_code == 0
     assert resumed["review"] == public_id
     assert "stage" not in resumed
-    assert set(dict(resumed["Action"])) == {"cmd", "alt"}
-    assert "--decision clean" in str(resumed["Action"]["cmd"])
-    assert "--decision findings" in str(resumed["Action"]["alt"])
-    assert "--state-dir" not in str(resumed["Action"]["cmd"])
-    assert "--state-dir" not in str(resumed["Action"]["alt"])
-    assert str(state_dir) not in str(resumed["Action"]["cmd"])
-    assert str(state_dir) not in str(resumed["Action"]["alt"])
+    choices = _assert_decision_action(resumed["Action"])
+    assert "--decision clean" in choices["clean"]
+    assert "--decision findings" in choices["findings"]
+    assert "--state-dir" not in choices["clean"]
+    assert "--state-dir" not in choices["findings"]
+    assert str(state_dir) not in choices["clean"]
+    assert str(state_dir) not in choices["findings"]
     assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 1
     state = _cycle_payload(state_dir, public_id)
     assert len(state["rounds"]) == 1
@@ -1275,7 +1286,7 @@ def test_create_resume_and_id_reprint_use_one_pending_action(
     assert exit_code == 0
     assert second_step["review"] == public_id
     assert "stage" not in second_step
-    assert "--decision clean" in str(second_step["Action"]["cmd"])
+    assert "--decision clean" in _assert_decision_action(second_step["Action"])["clean"]
     assert len(review_calls) == 2
 
     assert review_calls[0]["step_name"] == "broad-discovery"
@@ -1491,9 +1502,6 @@ def test_create_with_skip_deslop_runs_review_without_sidecar(
     assert exit_code == 0
     public_id = str(payload["review"])
     assert resumed["review"] == public_id
-    assert set(dict(payload["Action"])) == {"cmd", "alt"}
-    assert "--decision clean" in str(payload["Action"]["cmd"])
-    assert "--decision findings" in str(payload["Action"]["alt"])
     assert len(deslop_calls) == 0
     assert len(review_calls) == 1
     assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 1
@@ -1698,6 +1706,8 @@ def test_id_auto_records_structured_findings_before_fix_loop(
         [
             "--mode",
             "normal",
+            "--review-brief",
+            "# Goal\n\nKeep the implementation within the frozen contract.",
             "--cd",
             str(repo),
             "--base",
@@ -1715,7 +1725,9 @@ def test_id_auto_records_structured_findings_before_fix_loop(
     assert exit_code == 0
     assert (
         findings["Action"]["note"]
-        == "Commit/amend valid fixes, then rerun this command."
+        == "Commit/amend valid fixes, then rerun this command. If a finding "
+        "conflicts with the frozen contract, rerun this review id with "
+        "--contract-conflict <dimension> instead."
     )
     state = _cycle_payload(state_dir, public_id)
     assert state["decisions"][0]["command"] == "findings"
@@ -1751,7 +1763,11 @@ def test_auto_decision_requires_terminal_command(tmp_path: Path) -> None:
                 "status": "decision-pending",
                 "review_status": "completed",
                 "runs": [
-                    {"slot": "alpha", "status": "completed", "summary": "No findings."}
+                    {
+                        "slot": "alpha",
+                        "status": "completed",
+                        "reviewer_output": "Review decision: clean",
+                    }
                 ],
             }
         ],
@@ -2143,10 +2159,7 @@ def test_id_show_status_reports_cycle_without_advancing(
         "head": str(dict(before_state["identity"])["head"])[:12],
         "dirty": True,
     }
-    action = dict(payload["Action"])
-    assert set(action) == {"cmd", "alt"}
-    assert f"--id {public_id}" in str(action["cmd"])
-    assert "--state-dir" not in str(action["cmd"])
+    assert payload["Action"] == created["Action"]
     assert len(review_calls) == before_calls
     assert _cycle_payload(state_dir, public_id) == before_state
 
@@ -2267,7 +2280,6 @@ def test_id_collects_running_round_without_spawning_duplicate(
 
     assert exit_code == 0
     assert payload["review"] == public_id
-    assert "--decision clean" in str(payload["Action"]["cmd"])
     assert len(review_calls) == 1
     assert len(resume_calls) == 1
     assert resume_calls[0]["round_id"] == round_id
@@ -2328,7 +2340,7 @@ def test_restart_mode_supersedes_cycle_and_starts_fresh_deep_ladder(
     new_id = str(restarted["review"])
     assert exit_code == 0
     assert new_id != old_id
-    assert f"--id {new_id}" in str(restarted["Action"]["cmd"])
+    assert f"--id {new_id}" in _assert_decision_action(restarted["Action"])["clean"]
     assert len(review_calls) == 2
     assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 2
 
@@ -2403,7 +2415,6 @@ def test_restart_mode_supersedes_cycle_and_starts_fresh_deep_ladder(
     _, deep_review = _run_review(
         monkeypatch, ["--id", new_id, "--state-dir", str(state_dir)]
     )
-    assert "--decision clean" in str(deep_review["Action"]["cmd"])
     assert len(review_calls) == 2
     assert review_calls[1]["step_name"] == "broad-discovery"
     assert review_calls[1]["allow_unsafe_windows_wsl_fallback"] is True
@@ -3267,7 +3278,6 @@ def test_github_result_findings_reenters_existing_cycle_for_final_signoff(
     _, signoff = _run_review(
         monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)]
     )
-    assert "--decision clean" in str(signoff["Action"]["cmd"])
     assert len(followup_calls) == 0
     assert len(review_calls) == 2
     assert review_calls[1]["step_name"] == "precision-signoff"
@@ -3621,7 +3631,6 @@ def test_pending_github_review_after_amend_reuses_same_id_for_signoff(
         monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)]
     )
 
-    assert "--decision clean" in str(rerun["Action"]["cmd"])
     assert len(review_calls) == 2
     assert review_calls[1]["step_name"] == "precision-signoff"
     assert review_calls[1]["review_scope"]["reviewed_head"] == amended_head
@@ -3698,7 +3707,6 @@ def test_mode_rerun_after_pending_github_head_change_reuses_same_id_for_signoff(
 
     assert exit_code == 0
     assert resumed["review"] == public_id
-    assert "--decision clean" in str(resumed["Action"]["cmd"])
     assert len(review_calls) == 2
     assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 1
     state = _cycle_payload(state_dir, public_id)
@@ -3764,7 +3772,6 @@ def test_patch_equivalent_rebase_after_closed_deslop_reopens_local_closure(
 
     assert exit_code == 0
     assert resumed["review"] == public_id
-    assert "--decision clean" in str(resumed["Action"]["cmd"])
     assert len(review_calls) == 2
     assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 1
     state = _cycle_payload(state_dir, public_id)
@@ -3892,7 +3899,6 @@ def test_mode_rerun_after_pending_review_amend_reuses_existing_cycle(
 
     assert exit_code == 0
     assert resumed["review"] == public_id
-    assert "--decision clean" in str(resumed["Action"]["cmd"])
     assert len(deslop_calls) == 0
     assert len(review_calls) == 2
     assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 1
@@ -3972,7 +3978,6 @@ def test_mode_rerun_allows_non_overlapping_merge_base_drift_without_rerunning_de
 
     assert exit_code == 0
     assert resumed["review"] == public_id
-    assert "--decision clean" in str(resumed["Action"]["cmd"])
     assert len(deslop_calls) == 0
     assert len(review_calls) == 2
     assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 1
@@ -4260,7 +4265,6 @@ def test_id_rerun_after_pending_decision_amend_auto_verifies_same_cycle(
 
     assert exit_code == 0
     assert verification["review"] == public_id
-    assert "--decision clean" in str(verification["Action"]["cmd"])
     assert len(review_calls) == 2
     assert review_calls[1]["step_name"] == "precision-signoff"
     state = _cycle_payload(state_dir, public_id)
@@ -4316,7 +4320,6 @@ def test_id_rerun_after_pending_decision_equivalent_base_drift_updates_reviewed_
 
     assert exit_code == 0
     assert reprint["review"] == public_id
-    assert "--decision clean" in str(reprint["Action"]["cmd"])
     assert len(review_calls) == 1
     state = _cycle_payload(state_dir, public_id)
     assert state["stage"] == "decision-pending"
@@ -4390,7 +4393,6 @@ def test_id_rerun_after_findings_fix_allows_non_overlapping_merge_base_drift(
 
     assert exit_code == 0
     assert verification["review"] == public_id
-    assert "--decision clean" in str(verification["Action"]["cmd"])
     assert len(review_calls) == 2
     assert review_calls[1]["step_name"] == "precision-signoff"
     state = _cycle_payload(state_dir, public_id)
@@ -4474,7 +4476,6 @@ def test_id_rerun_after_findings_fix_allows_overlapping_base_drift(
 
     assert exit_code == 0
     assert verification["review"] == public_id
-    assert "--decision clean" in str(verification["Action"]["cmd"])
     assert len(review_calls) == 2
     assert review_calls[1]["step_name"] == "precision-signoff"
     assert review_calls[1]["review_scope"]["reviewed_head"] == fixed_head
@@ -4578,7 +4579,6 @@ def test_id_rerun_after_gate_pending_amend_records_gate_findings(
 
     assert exit_code == 0
     assert verification["review"] == public_id
-    assert "--decision clean" in str(verification["Action"]["cmd"])
     assert len(gate_calls) == 2
     state = _cycle_payload(state_dir, public_id)
     assert state["active_findings"]["status"] == "decision-pending"
@@ -4806,7 +4806,6 @@ def test_fast_mode_runs_same_bounded_closure_after_review(
 
     assert exit_code == 0
     assert "stage" not in payload
-    assert set(dict(payload["Action"])) == {"cmd", "alt"}
     assert len(review_calls) == 1
     public_id = str(payload["review"])
 
@@ -4896,7 +4895,7 @@ def test_fast_manual_github_findings_keeps_re_review_action(
     _, signoff = _run_review(
         monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)]
     )
-    assert "--decision clean" in str(signoff["Action"]["cmd"])
+    assert "--decision clean" in _assert_decision_action(signoff["Action"])["clean"]
     assert len(review_calls) == 2
     assert review_calls[1]["step_name"] == "fast-signoff"
 
