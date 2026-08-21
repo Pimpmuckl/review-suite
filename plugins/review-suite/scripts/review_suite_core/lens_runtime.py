@@ -194,6 +194,8 @@ def _codex_command_prefix(
     if subcommand == "exec-review":
         command.append("review")
     command.extend(_isolated_runtime_user_config_args())
+    if sys.platform == "win32":
+        command.extend(["-c", 'windows.sandbox="unelevated"'])
     effective_reasoning_effort = codex_reasoning_effort(model, reasoning_effort)
     command.extend(
         [

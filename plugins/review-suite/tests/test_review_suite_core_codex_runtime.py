@@ -119,9 +119,10 @@ wire_api = "responses"
     ) in overrides
 
 
-def test_codex_exec_command_includes_service_tier_when_configured(
+def test_codex_exec_command_includes_runtime_settings(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setattr(
         "review_suite_core.lens_runtime.shutil.which", lambda name: "codex"
     )
@@ -150,6 +151,8 @@ def test_codex_exec_command_includes_service_tier_when_configured(
     assert 'approval_policy="never"' in command
     assert command.index("--ignore-user-config") < command.index("-C")
     assert command.index('approval_policy="never"') < command.index("--color")
+    assert 'windows.sandbox="unelevated"' in command
+    assert command[command.index("-s") + 1] == "read-only"
 
 
 def test_codex_exec_command_can_skip_git_repo_check(
