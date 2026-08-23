@@ -1991,6 +1991,8 @@ def test_run_gate_round_resumes_partial_snapshot(monkeypatch, tmp_path: Path) ->
     state_dir = tmp_path / "state"
     review_cwd = tmp_path / "repo"
     review_cwd.mkdir()
+    cleanup_artifact = tmp_path / "cleanup.stdout"
+    cleanup_artifact.write_text("captured", encoding="utf-8")
     _write_json(
         state_dir / "operational_state.json",
         {
@@ -2070,15 +2072,24 @@ def test_run_gate_round_resumes_partial_snapshot(monkeypatch, tmp_path: Path) ->
                             "reasoning_effort": "xhigh",
                         },
                         "retry_attempts": 0,
+                        "cleanup_pending": True,
+                        "capture_processed": True,
+                        "stdout_path": str(cleanup_artifact),
                     }
                 ],
             }
         ),
         encoding="utf-8",
     )
+
+    def load_partial(path: Path) -> dict[str, object]:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["completed_runs"].append(dict(payload["completed_runs"][0]))
+        return payload
+
     monkeypatch.setattr(
         "review_gate._load_gate_partial",
-        lambda path: json.loads(partial_path.read_text(encoding="utf-8")),
+        load_partial,
     )
     monkeypatch.setattr("review_gate.utc_now_iso", lambda: "2026-04-14T00:00:30Z")
 
@@ -2155,7 +2166,7 @@ def test_run_gate_round_resumes_partial_snapshot(monkeypatch, tmp_path: Path) ->
         prompt="",
     )
 
-    assert launches == ["bravo"]
+    assert launches == [] and not cleanup_artifact.exists()
     assert exit_code == 0
     assert payload["status"] == "signoff_pending"
     records = [
@@ -2176,6 +2187,9 @@ def test_cleanup_stale_gate_partials_archives_non_live_partial(
         "review_gate.utc_now", lambda: datetime(2026, 5, 3, 12, 0, tzinfo=timezone.utc)
     )
     monkeypatch.setattr("review_gate._process_is_running", lambda pid: False)
+    artifacts = [tmp_path / name for name in ("stdout", "stderr", "final")]
+    for artifact in artifacts:
+        artifact.write_text("captured", encoding="utf-8")
     partial_path = tmp_path / "gate_partials" / "pr_gate-deadbeef.json"
     _write_json(
         partial_path,
@@ -2183,7 +2197,15 @@ def test_cleanup_stale_gate_partials_archives_non_live_partial(
             "round_id": "old-gate-round",
             "gate_task_class": "pr_gate",
             "round_started_at": "2026-05-02T11:59:00Z",
-            "active": [{"slot": "alpha", "pid": 12345}],
+            "active": [
+                {
+                    "slot": "alpha",
+                    "pid": 12345,
+                    "stdout_path": str(artifacts[0]),
+                    "stderr_path": str(artifacts[1]),
+                    "final_message_path": str(artifacts[2]),
+                }
+            ],
             "pending": [],
             "waiting_retry": [],
             "completed_runs": [],
@@ -2202,6 +2224,8 @@ def test_cleanup_stale_gate_partials_archives_non_live_partial(
     payload = json.loads(archived[0].read_text(encoding="utf-8"))
     assert payload["status"] == "dismissed"
     assert payload["dismissed_reason"] == "auto_stale_gate_partial_24h"
+    assert not any(path.exists() for path in artifacts)
+    assert not any(key.endswith("_path") for key in payload["active"][0])
 
 
 def test_cleanup_stale_gate_partials_keeps_live_partial(
@@ -2226,6 +2250,29 @@ def test_cleanup_stale_gate_partials_keeps_live_partial(
     )
 
     assert cleanup_stale_gate_partials(tmp_path) == []
+    assert partial_path.exists()
+
+
+def test_cleanup_stale_gate_partials_retries_failed_artifact_cleanup(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        "review_gate.utc_now", lambda: datetime(2026, 5, 3, 12, 0, tzinfo=timezone.utc)
+    )
+    monkeypatch.setattr("review_gate._process_is_running", lambda pid: False)
+    artifact = tmp_path / "locked"
+    artifact.mkdir()
+    partial_path = tmp_path / "gate_partials" / "pr_gate-locked.json"
+    _write_json(
+        partial_path,
+        {
+            "round_id": "old-gate-round",
+            "round_started_at": "2026-05-02T11:59:00Z",
+            "active": [{"stdout_path": str(artifact)}],
+        },
+    )
+    with pytest.raises(OSError, match="gate artifact cleanup incomplete"):
+        cleanup_stale_gate_partials(tmp_path)
     assert partial_path.exists()
 
 

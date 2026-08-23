@@ -25,6 +25,7 @@ from review_suite_arena import (
     _record_grade_result,
     cmd_close_gate,
     cmd_costs,
+    cmd_dismiss_round,
     cmd_prune_state,
     cmd_resume_round,
     cmd_show_last,
@@ -81,6 +82,31 @@ def test_print_findings_prints_final_reviewer_output(capsys) -> None:
     assert "full body" in captured.out
     assert "Bravo:" in captured.out
     assert "Bravo body" in captured.out
+
+
+def test_cmd_dismiss_round_removes_reviewer_artifacts(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    artifacts: list[Path] = []
+    run = {"variant_id": "reviewer"}
+    for name in ("stdout", "stderr", "final_message"):
+        artifact = tmp_path / name
+        artifact.write_text("captured", encoding="utf-8")
+        artifacts.append(artifact)
+        run[f"{name}_path"] = str(artifact)
+    write_round(
+        tmp_path,
+        {"round_id": "interrupted", "status": "running", "runs": [run]},
+    )
+    monkeypatch.setattr("review_suite_arena.emit_toon", lambda payload: None)
+    args = Namespace(
+        state_dir=str(tmp_path),
+        round_id="interrupted",
+        caller_id=None,
+        reason="manual_dismiss",
+    )
+    assert cmd_dismiss_round(args) == 0
+    assert not any(path.exists() for path in artifacts)
 
 
 def test_public_round_result_does_not_repeat_streamed_output() -> None:

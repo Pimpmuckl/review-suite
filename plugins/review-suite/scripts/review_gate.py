@@ -30,6 +30,7 @@ from review_suite_local import (
     STALE_REVIEW_STATE_TTL_SECONDS,
     _active_cooldowns,
     _apply_capacity_cooldowns,
+    _cleanup_run_artifacts,
     _parse_timestamp,
     _progress_status_line,
     _print_stall_warnings,
@@ -203,7 +204,13 @@ def _snapshot_queue_item(item: dict[str, Any]) -> dict[str, Any]:
         "variant": dict(item["variant"]),
         "retry_attempts": int(item.get("retry_attempts", 0) or 0),
     }
-    for key in ("fallback_attempts", "fallback_for_variant_id", "fallback_reason"):
+    for key in (
+        "fallback_attempts",
+        "fallback_for_variant_id",
+        "fallback_reason",
+        "cleanup_pending",
+        "capture_processed",
+    ):
         if item.get(key) is not None:
             snapshot[key] = item[key]
     for key in (
@@ -276,7 +283,7 @@ def _gate_partial_has_live_process(payload: dict[str, Any]) -> bool:
 
 def _archive_gate_partial(
     path: Path, payload: dict[str, Any], *, dismissed_at: str, reason: str
-) -> Path:
+) -> Path | None:
     dismissed_dir = path.parent / "dismissed"
     dismissed_dir.mkdir(parents=True, exist_ok=True)
     base = f"{path.stem}-stale-{dismissed_at.replace('-', '').replace(':', '')}{path.suffix}"
@@ -288,12 +295,29 @@ def _archive_gate_partial(
             / f"{path.stem}-stale-{counter}-{dismissed_at.replace('-', '').replace(':', '')}{path.suffix}"
         )
         counter += 1
-    payload = dict(payload)
-    payload["status"] = "dismissed"
-    payload["dismissed_at"] = dismissed_at
-    payload["dismissed_reason"] = reason
-    payload["dismissed_previous_path"] = str(path)
-    write_json(destination, payload)
+    archived = dict(payload)
+    archived["status"] = "dismissed"
+    archived["dismissed_at"] = dismissed_at
+    archived["dismissed_reason"] = reason
+    archived["dismissed_previous_path"] = str(path)
+    for key in ("active", "pending", "waiting_retry"):
+        archived[key] = []
+        for run in list(payload.get(key) or []):
+            archived_run = dict(run)
+            archived[key].append(archived_run)
+    write_json(destination, archived)
+    cleanup_succeeded = True
+    for key in ("active", "pending", "waiting_retry"):
+        for run in list(payload.get(key) or []):
+            cleanup_succeeded = _cleanup_run_artifacts(run) and cleanup_succeeded
+    if not cleanup_succeeded:
+        destination.unlink(missing_ok=True)
+        return None
+    for key in ("active", "pending", "waiting_retry"):
+        for run in archived[key]:
+            for path_key in ("stdout_path", "stderr_path", "final_message_path"):
+                run.pop(path_key, None)
+    write_json(destination, archived)
     path.unlink(missing_ok=True)
     return destination
 
@@ -339,6 +363,8 @@ def cleanup_stale_gate_partials(
             destination = _archive_gate_partial(
                 path, payload, dismissed_at=dismissed_at, reason=reason
             )
+            if destination is None:
+                raise OSError(f"gate artifact cleanup incomplete: {path.name}")
             cleaned.append(
                 {
                     "file": path.name,
@@ -567,19 +593,6 @@ def _gate_run_title(
     if retry_attempts <= 0:
         return title
     return f"{title}::retry{retry_attempts}"
-
-
-def _cleanup_paths(run: dict[str, Any]) -> None:
-    for key in ("stdout_path", "stderr_path", "final_message_path"):
-        path = run.get(key)
-        if isinstance(path, str):
-            path = Path(path)
-        if not isinstance(path, Path):
-            continue
-        try:
-            path.unlink(missing_ok=True)
-        except OSError:
-            pass
 
 
 def _timed_out(run: dict[str, Any], *, timeout_seconds: int) -> bool:
@@ -1479,9 +1492,16 @@ def run_gate_round(
     max_active_reviewers = _gate_max_active_reviewers(
         gate_task_class, target_reviewer_count, state_dir=state_dir
     )
+    resumed_active = (
+        [dict(item) for item in list(partial.get("active") or [])] if partial else []
+    )
+    for item in list(resumed_active):
+        if item.pop("cleanup_pending", False) and not _cleanup_run_artifacts(item):
+            raise OSError("gate reviewer artifact cleanup incomplete")
+        if item.pop("capture_processed", False):
+            resumed_active.remove(item)
     pending = (
-        [dict(item) for item in list(partial.get("pending") or [])]
-        + [dict(item) for item in list(partial.get("active") or [])]
+        [dict(item) for item in list(partial.get("pending") or [])] + resumed_active
         if partial
         else [
             {"slot": slot, "variant": variant, "retry_attempts": 0}
@@ -1529,6 +1549,13 @@ def run_gate_round(
 
     if not partial:
         persist_partial()
+
+    def finish_artifact_cleanup(run: dict[str, Any]) -> None:
+        run.update(cleanup_pending=True, capture_processed=True)
+        persist_partial()
+        if not _cleanup_run_artifacts(run):
+            raise OSError("gate reviewer artifact cleanup incomplete")
+        active.remove(run)
 
     def _queue_to_active(queued: dict[str, Any]) -> dict[str, Any]:
         launched = _launch_gate_run(
@@ -1626,8 +1653,6 @@ def run_gate_round(
                 timed_out=bool(run.get("timed_out")),
                 transport_stalled=bool(run.get("transport_stalled")),
             )
-            _cleanup_paths(run)
-            active.remove(run)
             block_reason = str(capture.get("grade_block_reason") or "")
             if (
                 block_reason in RETRYABLE_GATE_BLOCK_REASONS
@@ -1650,7 +1675,7 @@ def run_gate_round(
                         "retry_after": time.monotonic() + retry_delay_seconds,
                     }
                 )
-                persist_partial()
+                finish_artifact_cleanup(run)
                 continue
             if (
                 block_reason in RETRYABLE_GATE_BLOCK_REASONS
@@ -1694,10 +1719,10 @@ def run_gate_round(
                             "fallback_reason": block_reason,
                         }
                     )
-                    persist_partial()
+                    finish_artifact_cleanup(run)
                     continue
             completed.append(capture)
-            persist_partial()
+            finish_artifact_cleanup(run)
             _print_live_gate_completed_run(capture)
         if len(completed) >= target_reviewer_count:
             break

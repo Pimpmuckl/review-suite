@@ -1157,7 +1157,7 @@ def test_collect_round_results_stops_transport_stalled_live_reviewer(
     monkeypatch.setattr(
         "review_suite_local._apply_capacity_cooldowns", lambda **kwargs: []
     )
-    monkeypatch.setattr("review_suite_local._cleanup_run_artifacts", lambda run: None)
+    monkeypatch.setattr("review_suite_local._cleanup_run_artifacts", lambda run: True)
 
     result = collect_round_results(
         round_payload={
@@ -1228,7 +1228,7 @@ def test_collect_round_results_stops_transport_hung_after_output_as_completed(
     monkeypatch.setattr(
         "review_suite_local._apply_capacity_cooldowns", lambda **kwargs: []
     )
-    monkeypatch.setattr("review_suite_local._cleanup_run_artifacts", lambda run: None)
+    monkeypatch.setattr("review_suite_local._cleanup_run_artifacts", lambda run: True)
 
     result = collect_round_results(
         round_payload={
@@ -1685,7 +1685,7 @@ def test_maybe_retry_capacity_run_emits_retry_notice(
         "review_suite_local._summarize_live_run",
         lambda run: {"grade_block_reason": "selected_model_at_capacity"},
     )
-    monkeypatch.setattr("review_suite_local._cleanup_run_artifacts", lambda run: None)
+    monkeypatch.setattr("review_suite_local._cleanup_run_artifacts", lambda run: True)
     monkeypatch.setattr("review_suite_local.time.sleep", lambda seconds: None)
     monkeypatch.setattr(
         "review_suite_local._launch_reviewer_process",
@@ -1705,8 +1705,22 @@ def test_maybe_retry_capacity_run_emits_retry_notice(
 
     captured = capsys.readouterr()
     assert "alpha hit capacity; retrying in 10s (attempt 1/1)" in captured.err
-    assert run["capacity_retry_attempts"] == 1
-    assert launches
+    assert run["capacity_retry_attempts"] == 1 and launches
+    launches.clear()
+    monkeypatch.setattr("review_suite_local._cleanup_run_artifacts", lambda run: False)
+    retry_args = {
+        "round_payload": {"status": "running", "requested_prompt": ""},
+        "run": {"slot": "alpha", "variant_id": "model-a"},
+        "indexed": {"model-a": {}},
+        "state_dir": tmp_path,
+        "review_cwd": tmp_path,
+    }
+    with pytest.raises(OSError, match="artifact cleanup incomplete"):
+        _maybe_retry_capacity_run(**retry_args)
+    assert not launches and retry_args["round_payload"]["status"] == "running"
+    monkeypatch.setattr("review_suite_local._cleanup_run_artifacts", lambda run: True)
+    assert _maybe_retry_capacity_run(**retry_args)
+    assert retry_args["run"]["capacity_retry_attempts"] == 1 and len(launches) == 1
 
 
 def test_launch_reviewer_process_writes_prompt_for_prompted_base_mode(
@@ -2181,6 +2195,8 @@ def test_cleanup_stale_ungraded_rounds_dismisses_old_non_live_round(
         lambda: datetime(2026, 5, 3, 12, 0, tzinfo=timezone.utc),
     )
     monkeypatch.setattr("review_suite_local._process_is_running", lambda pid: False)
+    artifact = tmp_path / "stdout"
+    artifact.write_text("captured", encoding="utf-8")
     write_round(
         tmp_path,
         {
@@ -2188,7 +2204,13 @@ def test_cleanup_stale_ungraded_rounds_dismisses_old_non_live_round(
             "task_class": "pr_review",
             "status": "running",
             "sampled_at": "2026-05-02T11:59:00Z",
-            "runs": [{"variant_id": "gpt-5.5-high", "pid": 12345}],
+            "runs": [
+                {
+                    "variant_id": "gpt-5.5-high",
+                    "pid": 12345,
+                    "stdout_path": str(artifact),
+                }
+            ],
         },
     )
 
@@ -2207,6 +2229,53 @@ def test_cleanup_stale_ungraded_rounds_dismisses_old_non_live_round(
     assert payload["status"] == "dismissed"
     assert payload["dismissed_previous_status"] == "running"
     assert "_round_file_path" not in payload
+    assert not artifact.exists()
+
+
+def test_write_round_keeps_artifacts_when_dismissal_persistence_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    artifact = tmp_path / "stdout"
+    artifact.write_text("captured", encoding="utf-8")
+
+    def fail_write(path: Path, payload: dict[str, object]) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr("review_suite_local.write_json", fail_write)
+    with pytest.raises(OSError, match="disk full"):
+        write_round(
+            tmp_path,
+            {
+                "round_id": "interrupted",
+                "status": "dismissed",
+                "runs": [{"stdout_path": str(artifact)}],
+            },
+        )
+
+    assert artifact.exists()
+
+
+def test_write_round_retains_artifact_path_when_cleanup_fails(tmp_path: Path) -> None:
+    cleaned = tmp_path / "cleaned"
+    cleaned.write_text("captured", encoding="utf-8")
+    artifact = tmp_path / "locked"
+    artifact.mkdir()
+    with pytest.raises(OSError, match="artifact cleanup incomplete"):
+        write_round(
+            tmp_path,
+            {
+                "round_id": "interrupted",
+                "status": "dismissed",
+                "dismissed_previous_status": "running",
+                "runs": [{"stdout_path": str(cleaned), "stderr_path": str(artifact)}],
+            },
+        )
+    assert cleanup_stale_ungraded_rounds(tmp_path, stale_seconds=0) == []
+    saved = review_suite_local.load_round(tmp_path, "interrupted")
+    assert saved["status"] == "cleanup_pending"
+    assert saved["dismissed_previous_status"] == "running"
+    assert saved["runs"][0] == {"stderr_path": str(artifact)}
+    assert not cleaned.exists()
 
 
 def test_ungraded_round_exposure_records_auto_skips_stale_rounds(
