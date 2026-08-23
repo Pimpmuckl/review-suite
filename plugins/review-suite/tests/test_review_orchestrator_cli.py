@@ -103,6 +103,25 @@ def _assert_decision_action(action: object) -> dict[str, str]:
     return choices
 
 
+def test_main_emits_structured_runtime_error_for_artifact_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    def fail_artifact_cleanup(_args: object) -> int:
+        raise OSError("gate artifact cleanup incomplete")
+
+    monkeypatch.setattr(review, "default_state_dir", lambda: tmp_path)
+    monkeypatch.setattr(review, "cmd_branch_status", fail_artifact_cleanup)
+    monkeypatch.setattr(sys, "argv", ["review.py", "--status"])
+
+    assert review.main() == 1
+    output = capsys.readouterr()
+    assert "status: error" in output.out
+    assert "gate artifact cleanup incomplete" in output.out
+    assert "Traceback" not in output.err
+
+
 def _without_state_dir_args(
     monkeypatch: pytest.MonkeyPatch, args: list[str]
 ) -> list[str]:

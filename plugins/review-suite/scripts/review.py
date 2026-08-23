@@ -3075,6 +3075,8 @@ def main() -> int:
         return 0
     except ValueError as exc:
         return emit_error(str(exc), status="usage_error", help_items=[_help_command()])
+    except OSError as exc:
+        return emit_error(str(exc), status="error")
 
 
 if __name__ == "__main__":

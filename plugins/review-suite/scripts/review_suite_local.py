@@ -1106,6 +1106,13 @@ def _compact_round_file(path: Path, *, apply: bool) -> tuple[int, int, bool] | N
     changed = compacted != payload
     after = _json_bytes(compacted) if changed else before
     if changed and apply:
+        cleanup_succeeded = True
+        for run in list(payload.get("runs") or []):
+            if isinstance(run, dict):
+                cleanup_succeeded = _cleanup_run_artifacts(run) and cleanup_succeeded
+        if not cleanup_succeeded:
+            write_json(path, payload)
+            raise OSError(f"reviewer artifact cleanup incomplete: {path.name}")
         write_json(path, compacted)
     return before, after, changed
 
@@ -1299,7 +1306,12 @@ def round_is_stale_ungraded(
     now: datetime | None = None,
     stale_seconds: int = STALE_REVIEW_STATE_TTL_SECONDS,
 ) -> bool:
-    if str(payload.get("status") or "") not in {"sampled", "running", "completed"}:
+    if str(payload.get("status") or "") not in {
+        "sampled",
+        "running",
+        "completed",
+        "cleanup_pending",
+    }:
         return False
     if _round_has_recorded_grade(payload):
         return False
@@ -1327,9 +1339,14 @@ def cleanup_stale_ungraded_rounds(
         payload["status"] = "dismissed"
         payload["dismissed_at"] = dismissed_at
         payload["dismissed_reason"] = reason
-        payload["dismissed_previous_status"] = previous_status
+        payload["dismissed_previous_status"] = str(
+            payload.get("dismissed_previous_status") or previous_status
+        )
         payload.pop("_round_file_path", None)
-        write_round(state_dir, payload)
+        try:
+            write_round(state_dir, payload)
+        except OSError:
+            continue
         cleaned.append(
             {
                 "round_id": str(payload.get("round_id") or ""),
@@ -3046,6 +3063,19 @@ def build_reroll_slot_payload(
 def write_round(state_dir: Path, payload: dict[str, Any]) -> Path:
     path = round_path(state_dir, payload["round_id"])
     with state_lock(state_dir, f"round-{payload['round_id']}"):
+        if str(payload.get("status") or "") == "dismissed":
+            retry_payload = deepcopy(payload)
+            retry_payload["status"] = "cleanup_pending"
+            write_json(path, retry_payload)
+            cleanup_succeeded = True
+            for run in list(retry_payload.get("runs") or []):
+                if isinstance(run, dict):
+                    cleanup_succeeded = (
+                        _cleanup_run_artifacts(run) and cleanup_succeeded
+                    )
+            if not cleanup_succeeded:
+                write_json(path, retry_payload)
+                raise OSError("reviewer artifact cleanup incomplete")
         write_json(path, compact_round_payload_for_storage(payload))
     return path
 
@@ -3620,7 +3650,8 @@ def _launch_reviewer_process(
     return run
 
 
-def _cleanup_run_artifacts(run: dict[str, Any]) -> None:
+def _cleanup_run_artifacts(run: dict[str, Any]) -> bool:
+    succeeded = True
     for path_key in ("stdout_path", "stderr_path", "final_message_path"):
         path_value = str(run.get(path_key) or "").strip()
         if not path_value:
@@ -3628,7 +3659,15 @@ def _cleanup_run_artifacts(run: dict[str, Any]) -> None:
         try:
             Path(path_value).unlink(missing_ok=True)
         except OSError:
-            pass
+            succeeded = False
+        else:
+            run.pop(path_key, None)
+    return succeeded
+
+
+def _persist_cleanup_failure(state_dir: Path, payload: dict[str, Any]) -> None:
+    write_round(state_dir, payload)
+    raise OSError("reviewer artifact cleanup incomplete")
 
 
 def _strip_live_run_transient_fields(run: dict[str, Any]) -> dict[str, Any]:
@@ -3678,21 +3717,28 @@ def _maybe_retry_capacity_run(
     state_dir: Path,
     review_cwd: Path,
 ) -> bool:
-    summary = _summarize_live_run(run)
-    if summary.get("grade_block_reason") != "selected_model_at_capacity":
+    summary = (
+        {}
+        if (cleanup_pending := bool(run.get("capacity_cleanup_pending")))
+        else _summarize_live_run(run)
+    )
+    if summary and summary.get("grade_block_reason") != "selected_model_at_capacity":
         return False
     retry_attempts = int(run.get("capacity_retry_attempts", 0) or 0)
-    if retry_attempts >= CAPACITY_RETRY_MAX_ATTEMPTS:
+    if not cleanup_pending and retry_attempts >= CAPACITY_RETRY_MAX_ATTEMPTS:
         return False
-    next_attempt = retry_attempts + 1
+    next_attempt = retry_attempts if cleanup_pending else retry_attempts + 1
     print(
         f"[review-suite] {public_reviewer_label(str(run['slot']))} hit capacity; retrying in {CAPACITY_RETRY_DELAY_SECONDS}s "
         f"(attempt {next_attempt}/{CAPACITY_RETRY_MAX_ATTEMPTS})",
         file=sys.stderr,
         flush=True,
     )
-    _cleanup_run_artifacts(run)
-    run["capacity_retry_attempts"] = next_attempt
+    run.update(capacity_retry_attempts=next_attempt, capacity_cleanup_pending=True)
+    write_round(state_dir, round_payload)
+    if _cleanup_run_artifacts(run) is False:
+        _persist_cleanup_failure(state_dir, round_payload)
+    run.pop("capacity_cleanup_pending", None)
     for transient_key in (
         "pid",
         "session_id",
@@ -3913,7 +3959,9 @@ def collect_round_results(
             if _run_is_finalized(item):
                 announced_terminal_states.add(slot)
                 continue
-            if not item.get("stderr_path") or not item.get("stdout_path"):
+            if not item.get("capacity_cleanup_pending") and (
+                not item.get("stderr_path") or not item.get("stdout_path")
+            ):
                 announced_terminal_states.add(slot)
                 continue
             if any(alive_item["slot"] == slot for alive_item in alive):
@@ -4011,24 +4059,26 @@ def collect_round_results(
             completed_runs.append(
                 _strip_live_run_transient_fields(_finalized_run_summary(item))
             )
-            _cleanup_run_artifacts(item)
+            if _cleanup_run_artifacts(item) is False:
+                _persist_cleanup_failure(state_dir, round_payload)
             continue
         if not item.get("stderr_path") or not item.get("stdout_path"):
             completed_runs.append(
                 _strip_live_run_transient_fields(_finalized_run_summary(item))
             )
             continue
-        completed_runs.append(
-            _collect_completed_run_from_artifacts(
-                item=item,
-                indexed=indexed,
-                sqlite_path=sqlite_path,
-                review_cwd=review_cwd,
-                transport_stalled=bool(item.get("transport_stalled")),
-                timed_out=bool(item.get("timed_out")),
-            )
+        captured = _collect_completed_run_from_artifacts(
+            item=item,
+            indexed=indexed,
+            sqlite_path=sqlite_path,
+            review_cwd=review_cwd,
+            transport_stalled=bool(item.get("transport_stalled")),
+            timed_out=bool(item.get("timed_out")),
         )
-        _cleanup_run_artifacts(item)
+        item.update(captured)
+        completed_runs.append(captured)
+        if _cleanup_run_artifacts(item) is False:
+            _persist_cleanup_failure(state_dir, round_payload)
     reject_duplicate_review_references(completed_runs)
     round_payload = deepcopy(round_payload)
     round_payload["status"] = "completed"

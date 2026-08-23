@@ -2515,6 +2515,7 @@ def cmd_dismiss_round(args: argparse.Namespace) -> int:
     payload["status"] = "dismissed"
     payload["dismissed_at"] = dismissed_at
     payload["dismissed_reason"] = str(args.reason or "").strip() or "manual_dismiss"
+    payload.setdefault("dismissed_previous_status", previous_status)
     if caller_id:
         payload["dismissed_by_caller_id"] = caller_id
         payload["dismissed_by_caller_id_source"] = caller_id_source
@@ -2739,6 +2740,12 @@ def main() -> int:
         return emit_error(
             str(exc),
             status="usage_error",
+            help_items=[f"{_script_command()} --help"],
+        )
+    except OSError as exc:
+        return emit_error(
+            str(exc),
+            status="error",
             help_items=[f"{_script_command()} --help"],
         )
     raise SystemExit(f"unknown command: {args.command}")
