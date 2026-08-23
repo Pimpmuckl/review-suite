@@ -1,0 +1,22 @@
+{
+  "name": "review-suite",
+  "interface": {
+    "displayName": "Review Suite"
+  },
+  "plugins": [
+    {
+      "name": "review-suite",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/Pimpmuckl/review-suite.git",
+        "path": "plugins/review-suite",
+        "ref": "main"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_USE"
+      },
+      "category": "Coding"
+    }
+  ]
+}
