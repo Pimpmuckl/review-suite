@@ -195,7 +195,10 @@ def _codex_command_prefix(
         command.append("review")
     command.extend(_isolated_runtime_user_config_args())
     if sys.platform == "win32":
-        command.extend(["-c", 'windows.sandbox="unelevated"'])
+        command.extend([
+            "-c", 'windows.sandbox="unelevated"',
+            "-c", "windows.sandbox_private_desktop=false",
+        ])
     effective_reasoning_effort = codex_reasoning_effort(model, reasoning_effort)
     command.extend(
         [
