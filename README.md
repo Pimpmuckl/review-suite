@@ -58,6 +58,16 @@ focused validation before review dispatch, then track the full suite and CI on
 the review id. Review green does not mean merge-ready while required validation
 is pending or unknown.
 
+To dismiss an erroneous bounded closure verdict on the same clean head:
+
+```powershell
+<python> <plugin-root>/scripts/review.py --id <id> --deslop-done --reason "why the findings are dismissed"
+```
+
+The reason is saved alongside the unchanged reviewer verdict and findings.
+This closes only the completed closure pass, not other review or validation gates.
+Without a reason, a materially drifted closure remains blocked.
+
 To replace an active review with a stricter one:
 
 ```powershell
