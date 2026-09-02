@@ -1399,20 +1399,32 @@ def mark_deslop_done(
     return next_state
 
 
-def mark_deslop_closed(state: dict[str, Any]) -> dict[str, Any]:
+def mark_deslop_closed(
+    state: dict[str, Any], *, reason: str | None = None
+) -> dict[str, Any]:
     next_state = _copy_state(state)
     deslop = dict(next_state.get("deslop") or {})
     if not bool(deslop.get("tracked")):
         return next_state
     if str(deslop.get("status") or "") != DESLOP_STATUS_DONE:
         raise ValueError("cleanup can only close after the bounded closure pass")
-    if deslop.get("conformance") == "MATERIALLY_DRIFTED":
-        raise ValueError("materially drifted closure cannot close; revise the head")
+    dismissal_reason = (
+        _required_text(reason, field="closure dismissal reason")
+        if reason is not None
+        else None
+    )
+    if deslop.get("conformance") == "MATERIALLY_DRIFTED" and not dismissal_reason:
+        raise ValueError(
+            "materially drifted closure requires fixes or explicit dismissal; "
+            "use --deslop-done --reason '<why the findings are dismissed>'"
+        )
     next_state["deslop"] = {
         **deslop,
         "tracked": False,
         "status": DESLOP_STATUS_CLOSED,
     }
+    if dismissal_reason:
+        next_state["deslop"]["dismissal_reason"] = dismissal_reason
     if (
         next_state.get("stage") == STAGE_RETRY_REQUESTED
         and dict(next_state.get("pending_action") or {}).get("kind") == "run-deslop"

@@ -157,12 +157,12 @@ def test_create_cycle_preserves_exact_optional_review_brief(tmp_path: Path) -> N
     assert briefless["review_brief"] is None
 
 
-def test_mark_deslop_closed_requires_completed_conforming_closure(
+def test_mark_deslop_closed_requires_completion_and_explicit_drift_dismissal(
     tmp_path: Path,
 ) -> None:
     tracked = _cycle(tmp_path)
     with pytest.raises(ValueError, match="only close after"):
-        mark_deslop_closed(tracked)
+        mark_deslop_closed(tracked, reason="not completed")
 
     done = mark_deslop_done(
         tracked,
@@ -182,9 +182,23 @@ def test_mark_deslop_closed_requires_completed_conforming_closure(
         command="review-deslop",
         conformance="MATERIALLY_DRIFTED",
         reviewed_head="head-1",
+        decision="findings",
+        findings="Reviewer claims the implementation violates scope.",
     )
     with pytest.raises(ValueError, match="materially drifted"):
         mark_deslop_closed(drifted)
+    with pytest.raises(ValueError, match="dismissal reason is required"):
+        mark_deslop_closed(drifted, reason="  ")
+
+    dismissed = mark_deslop_closed(drifted, reason="  The contract permits this.  ")
+    assert dismissed["deslop"] == {
+        **drifted["deslop"],
+        "tracked": False,
+        "status": "closed",
+        "dismissal_reason": "The contract permits this.",
+    }
+    assert {**dismissed, "deslop": drifted["deslop"]} == drifted
+    assert mark_deslop_closed(dismissed, reason="another reason") == dismissed
 
 
 def test_failed_closure_cannot_be_skipped(tmp_path: Path) -> None:
@@ -195,7 +209,7 @@ def test_failed_closure_cannot_be_skipped(tmp_path: Path) -> None:
     assert failed["stage"] == STAGE_RETRY_REQUESTED
     assert failed["pending_action"] == {"kind": "run-deslop"}
     with pytest.raises(ValueError, match="only close after"):
-        mark_deslop_closed(failed)
+        mark_deslop_closed(failed, reason="not completed")
 
 
 def test_wait_states_are_idle_and_transitions_are_idempotent(tmp_path: Path) -> None:

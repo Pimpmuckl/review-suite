@@ -151,7 +151,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--convergence-decision",
         choices=tuple(sorted(decision.lower() for decision in CONVERGENCE_DECISIONS)),
     )
-    parser.add_argument("--reason")
+    parser.add_argument("--reason", help="Reason for restart or closure dismissal")
     parser.add_argument("--cd")
     parser.add_argument("--base", help="Override the detected default branch ref.")
     parser.add_argument(
@@ -1213,6 +1213,8 @@ def _show_status(state: dict[str, Any], *, state_dir: Path) -> int:
         payload["deslop"] = deslop_status
     if conformance := str(deslop.get("conformance") or "").strip():
         payload["conformance"] = conformance
+    if reason := deslop.get("dismissal_reason"):
+        payload["closure_dismissal_reason"] = reason
     if validation := _validation_summary(state):
         payload["validation"] = validation
     github_review = dict(state.get("github_review") or {})
@@ -2547,7 +2549,22 @@ def _with_deslop_done_action(
 ) -> dict[str, Any] | None:
     if not _deslop_is_open(state):
         return action
-    findings = dict(state.get("deslop") or {}).get("decision") == "findings"
+    deslop = dict(state.get("deslop") or {})
+    if deslop.get("conformance") == "MATERIALLY_DRIFTED":
+        return {
+            "choices": {
+                "revise": _review_command(public_id, state_dir=state_dir),
+                "dismiss": _review_command(
+                    public_id,
+                    "--deslop-done",
+                    "--reason",
+                    "<why the findings are dismissed>",
+                    state_dir=state_dir,
+                ),
+            },
+            "note": "Revise valid findings and commit before rerunning, or dismiss them with a reason.",
+        }
+    findings = deslop.get("decision") == "findings"
     return {
         "cmd": _deslop_done_command(public_id, state_dir=state_dir),
         "note": (
@@ -2668,11 +2685,6 @@ def _action_payload(state: dict[str, Any], *, state_dir: Path) -> dict[str, Any]
         return _with_deslop_done_action(state, action, public_id, state_dir=state_dir)
     if stage in {STAGE_REVIEW_GREEN, STAGE_LOCAL_GREEN_HANDOFF}:
         deslop = dict(state.get("deslop") or {})
-        if deslop.get("conformance") == "MATERIALLY_DRIFTED":
-            return {
-                "cmd": _review_command(public_id, state_dir=state_dir),
-                "note": "Revise the materially drifted implementation, then rerun this review id.",
-            }
         if bool(deslop.get("tracked")) and str(deslop.get("status") or "") in {
             "tracked",
             "failed",
@@ -2728,6 +2740,8 @@ def _render(state: dict[str, Any], *, state_dir: Path) -> None:
         dict(state.get("deslop") or {}).get("conformance") or ""
     ).strip():
         payload["conformance"] = conformance
+    if reason := dict(state.get("deslop") or {}).get("dismissal_reason"):
+        payload["closure_dismissal_reason"] = reason
     if convergence := _public_convergence(state):
         payload["convergence"] = convergence
     if validation := _validation_summary(state):
@@ -2868,8 +2882,8 @@ def main() -> int:
             raise ValueError(
                 "--skip-deslop/--no-deslop can only be used when creating a review cycle"
             )
-        if args.reason and not args.restart_mode:
-            raise ValueError("--reason requires --restart-mode")
+        if args.reason and not (args.restart_mode or args.deslop_done):
+            raise ValueError("--reason requires --restart-mode or --deslop-done")
         if args.deslop_done and not args.id:
             raise ValueError("--deslop-done requires --id")
         if args.deslop_done and (
@@ -2986,7 +3000,7 @@ def main() -> int:
                     raise ValueError(
                         "--deslop-done requires the exact clean branch, HEAD, and merge-base"
                     )
-                state = mark_deslop_closed(state)
+                state = mark_deslop_closed(state, reason=args.reason)
                 saved = save_cycle(state_dir, state)
                 _render(saved, state_dir=state_dir)
                 return 0

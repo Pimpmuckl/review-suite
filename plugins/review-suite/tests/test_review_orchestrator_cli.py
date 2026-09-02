@@ -2904,9 +2904,11 @@ def test_review_orchestrator_help_hides_internal_selection() -> None:
     assert "--state-dir" not in help_text
 
 
-def test_deslop_done_rechecks_exact_head_before_closing(
+@pytest.mark.parametrize("changed_identity", ["head", "merge_base"])
+def test_closure_dismissal_persists_without_bypassing_gates_or_identity(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    changed_identity: str,
 ) -> None:
     deslop_calls = _stub_deslop(monkeypatch)
     review_calls = _stub_review(monkeypatch, "phase_review-round-1")
@@ -2938,11 +2940,69 @@ def test_deslop_done_rechecks_exact_head_before_closing(
     assert "--deslop-done" in str(completed["Action"]["cmd"])
     assert len(deslop_calls) == 1
     drifted = _cycle_payload(state_dir, public_id)
-    drifted["deslop"]["conformance"] = "MATERIALLY_DRIFTED"
-    assert "Revise" in review._action_payload(drifted, state_dir=state_dir)["note"]
+    drifted["deslop"].update(
+        conformance="MATERIALLY_DRIFTED",
+        decision="findings",
+        findings="Reviewer claims the implementation violates scope.",
+    )
+    _write_cycle_payload(state_dir, public_id, drifted)
+    _, pending = _run_review(monkeypatch, ["--id", public_id, "--show-status"])
+    assert "--deslop-done --reason" in pending["Action"]["choices"]["dismiss"]
 
-    _git(repo, "branch", "-f", "main", advanced_base)
-    exit_code, resumed = _run_review(monkeypatch, ["--id", public_id, "--deslop-done"])
+    reason = "The contract permits this implementation."
+    dismiss_args = ["--id", public_id, "--deslop-done", "--reason", reason]
+    with monkeypatch.context() as dirty:
+        errors: list[str] = []
+        dirty.setattr(
+            review, "emit_error", lambda message, **kw: errors.append(message) or 2
+        )
+        dirty.setattr(sys, "argv", ["review.py", *dismiss_args])
+        (repo / "app.txt").write_text("dirty\n", encoding="utf-8")
+        assert review.main() == 2
+        assert "exact clean branch, HEAD, and merge-base" in errors[-1]
+        assert _cycle_payload(state_dir, public_id) == drifted
+    (repo / "app.txt").write_text("base\nstep\nhead\n", encoding="utf-8")
+
+    exit_code, dismissed = _run_review(monkeypatch, dismiss_args)
+    assert exit_code == 0
+    assert dismissed["review"] == public_id
+    assert dismissed["done"] is False
+    assert dismissed["conformance"] == "MATERIALLY_DRIFTED"
+    assert dismissed["closure_dismissal_reason"] == reason
+    _assert_github_handoff(
+        dismissed["Action"],
+        public_id=public_id,
+        state_dir=state_dir,
+        blocked_by=["full_suite:unknown", "ci:unknown"],
+    )
+    closed = _cycle_payload(state_dir, public_id)
+    assert closed["deslop"] == {
+        **drifted["deslop"],
+        "tracked": False,
+        "status": "closed",
+        "dismissal_reason": reason,
+    }
+    assert {**closed, "deslop": drifted["deslop"]} == drifted
+    _, waived = _run_review(
+        monkeypatch,
+        ["--id", public_id, "--github-result", "waived", "--github-note", "local test"],
+    )
+    assert waived["done"] is False
+    _run_review(
+        monkeypatch, ["--id", public_id, "--full-suite", "passed", "--ci", "passed"]
+    )
+    _, status = _run_review(monkeypatch, ["--id", public_id, "--show-status"])
+    assert status["done"] is True
+    assert status["deslop"] == "closed"
+    assert status["conformance"] == "MATERIALLY_DRIFTED"
+    assert status["closure_dismissal_reason"] == reason
+
+    if changed_identity == "merge_base":
+        _git(repo, "branch", "-f", "main", advanced_base)
+    else:
+        head = _commit_file(repo, "app.txt", "changed\n", "changed head")
+        advanced_base = _git(repo, "rev-parse", "main")
+    exit_code, resumed = _run_review(monkeypatch, dismiss_args)
 
     assert exit_code == 0
     assert resumed["review"] == public_id
@@ -2952,6 +3012,7 @@ def test_deslop_done_rechecks_exact_head_before_closing(
     assert state["stage"] == "created"
     assert state["pending_action"]["kind"] == "run-review-step"
     assert state["deslop"]["status"] == "tracked"
+    assert "dismissal_reason" not in state["deslop"]
     assert len(deslop_calls) == 1
     assert len(review_calls) == 1
 
