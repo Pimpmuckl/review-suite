@@ -2571,9 +2571,15 @@ def test_contract_conflict_and_one_use_continue_are_durable(
     assert len(review_calls) == 3
 
 
-def test_continue_consumes_material_fix_head_created_after_breaker(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+@pytest.mark.parametrize("fix_before_classification", [False, True])
+@pytest.mark.parametrize("fourth_decision", ["clean", "findings"])
+def test_continue_consumes_material_fix_head_at_budget_stop(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    fix_before_classification: bool,
+    fourth_decision: str,
 ) -> None:
+    deslop_calls = _stub_deslop(monkeypatch)
     review_calls = _stub_review(
         monkeypatch, "round-1", "round-2", "round-3", "authorized-round"
     )
@@ -2618,15 +2624,24 @@ def test_continue_consumes_material_fix_head_created_after_breaker(
         )
         _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
 
+    if fix_before_classification:
+        _commit_file(
+            repo, "app.txt", "feature\nfix-1\nfix-2\nclosure-fix\n", "closure fix"
+        )
     _, breaker = _run_review(
         monkeypatch,
-        ["--id", public_id, "--decision", "findings", "--state-dir", str(state_dir)],
+        ["--id", public_id, "--state-dir", str(state_dir)]
+        + ([] if fix_before_classification else ["--decision", "findings"]),
     )
     assert breaker["convergence"]["reason"] == "budget_exhausted"
     assert len(review_calls) == 3
 
-    authorized_head = _commit_file(
-        repo, "app.txt", "feature\nfix-1\nfix-2\nclosure-fix\n", "closure fix"
+    authorized_head = (
+        _git(repo, "rev-parse", "HEAD")
+        if fix_before_classification
+        else _commit_file(
+            repo, "app.txt", "feature\nfix-1\nfix-2\nclosure-fix\n", "closure fix"
+        )
     )
     _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
     blocked_state = _cycle_payload(state_dir, public_id)
@@ -2653,11 +2668,105 @@ def test_continue_consumes_material_fix_head_created_after_breaker(
 
     _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
     assert review_calls[-1]["review_scope"]["reviewed_head"] == authorized_head
-    _, exhausted = _run_review(
+    _, classified = _run_review(
         monkeypatch,
-        ["--id", public_id, "--decision", "findings", "--state-dir", str(state_dir)],
+        [
+            "--id",
+            public_id,
+            "--decision",
+            fourth_decision,
+            "--state-dir",
+            str(state_dir),
+        ],
     )
-    assert set(exhausted["Action"]["choices"]) == {"REPLAN", "RESLICE"}
+    if fourth_decision == "findings":
+        assert set(classified["Action"]["choices"]) == {"REPLAN", "RESLICE"}
+    else:
+        clean = _cycle_payload(state_dir, public_id)
+        assert deslop_calls == []
+        assert clean["deslop"]["status"] == "tracked"
+        assert classified["done"] is False
+        assert clean["validation"]["full_suite"] == "unknown"
+        assert len(clean["convergence"]["accepted_findings_heads"]) == 3
+        _, closure = _run_review(
+            monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)]
+        )
+        assert "--deslop-done" in closure["Action"]["cmd"]
+        assert closure["done"] is False
+        assert len(deslop_calls) == 1
+
+
+def test_repeat_continue_restores_completed_unclassified_round(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    review_calls = _stub_review(monkeypatch, "round-4")
+    deslop_calls = _stub_deslop(monkeypatch)
+    repo, state_dir = tmp_path / "repo", tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/continue")
+    _commit_file(repo, "app.txt", "feature\n", "feature")
+    _, opened = _run_review(
+        monkeypatch,
+        [
+            "--mode",
+            "fast",
+            "--cd",
+            str(repo),
+            "--base",
+            "main",
+            "--state-dir",
+            str(state_dir),
+        ],
+    )
+    public_id = str(opened["review"])
+    args = ["--id", public_id, "--state-dir", str(state_dir)]
+    pending = _cycle_payload(state_dir, public_id)
+    legacy = deepcopy(pending)
+    for index in range(3):
+        legacy = review.record_findings_decision(
+            legacy,
+            round_id=f"round-{index}",
+            lane="review_t1",
+            reviewed_head=f"head-{index}",
+        )
+    legacy = review.record_convergence_decision(legacy, decision="CONTINUE")
+    legacy["active_findings"] = None
+    legacy["review_heads"] = pending["review_heads"]
+    legacy["rounds"] = [*legacy["rounds"][1:], legacy["rounds"][0]]
+    legacy["pending_action"] = {"kind": "fix-findings", "round_id": None}
+    orchestrator_store.save_cycle(state_dir, legacy)
+
+    for _ in range(2):
+        code, output = _run_review(
+            monkeypatch, [*args, "--convergence-decision", "continue"]
+        )
+        assert code == 0
+        _assert_decision_action(output["Action"])
+        recovered = _cycle_payload(state_dir, public_id)
+        assert recovered["stage"] == pending["stage"]
+        assert recovered["pending_action"] == pending["pending_action"]
+        for key in (
+            "rounds",
+            "decisions",
+            "convergence",
+            "identity",
+            "deslop",
+            "validation",
+            "review_heads",
+        ):
+            assert recovered[key] == legacy[key]
+    assert len(review_calls) == 1
+    assert deslop_calls == []
+    code, _ = _run_review(monkeypatch, [*args, "--decision", "clean"])
+    assert code == 0
+    clean = _cycle_payload(state_dir, public_id)
+    assert clean["decisions"][-1]["round_id"] == "round-4"
+    assert clean["decisions"][-1]["command"] == "clean"
+    assert len(clean["convergence"]["decisions"]) == 1
+    assert clean["validation"]["full_suite"] == "unknown"
+    assert clean["deslop"]["status"] == "tracked"
 
 
 def test_fast_review_can_restart_into_deep_without_becoming_a_restart_target(
