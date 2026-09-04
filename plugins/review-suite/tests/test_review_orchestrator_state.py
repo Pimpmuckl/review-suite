@@ -36,6 +36,7 @@ from review_suite_core.orchestrator_state import (
     mark_retry_requested,
     mark_running,
     mark_review_step_pending,
+    mark_review_step_running,
     mark_review_step_retry,
     no_work_stage_is_idle,
     record_clean_decision,
@@ -877,6 +878,10 @@ def test_distinct_accepted_finding_trees_require_one_use_caller_decision(
         ("round-2", "head-2", "tree-2"),
         ("round-3", "head-3", "tree-3"),
     ):
+        if round_id == "round-3":
+            clean = record_followup_clean(state, round_id=round_id, reviewed_head=head)
+            assert clean["convergence"]["status"] == "ACTIVE"
+            assert len(clean["convergence"]["accepted_findings_heads"]) == 2
         state = record_findings_decision(
             state,
             round_id=round_id,
@@ -889,6 +894,7 @@ def test_distinct_accepted_finding_trees_require_one_use_caller_decision(
     assert state["convergence"]["status"] == "DECISION_REQUIRED"
     assert state["convergence"]["reason"] == "budget_exhausted"
     assert len(state["convergence"]["accepted_findings_heads"]) == 3
+    assert mark_fix_detected(state, head="head-4") == state
 
     continued = record_convergence_decision(state, decision="CONTINUE")
     assert continued["stage"] == STAGE_FIX_PENDING
@@ -908,6 +914,39 @@ def test_distinct_accepted_finding_trees_require_one_use_caller_decision(
     assert resliced["stage"] == "convergence-decided"
     assert resliced["convergence"]["status"] == "DECIDED"
     assert resliced["convergence"]["decision"] == "RESLICE"
+
+
+@pytest.mark.parametrize("running", [False, True])
+def test_continue_preserves_existing_reviewer_work(
+    tmp_path: Path, running: bool
+) -> None:
+    state = _cycle(tmp_path)
+    for index in range(3):
+        state = record_findings_decision(
+            state,
+            round_id=f"round-{index}",
+            lane="review_t1",
+            reviewed_head=f"head-{index}",
+        )
+    # The old fix transition dispatched another round while convergence was stopped.
+    state["active_findings"] = None
+    mark_step = mark_review_step_running if running else mark_review_step_pending
+    state = mark_step(
+        state,
+        round_id="round-4",
+        lane="review_t1",
+        step_index=0,
+        step_name="precision-signoff",
+        reviewed_head="head-4",
+        grading_required=True,
+        arena_round=True,
+    )
+    continued = record_convergence_decision(state, decision="CONTINUE")
+    assert continued["stage"] == state["stage"]
+    assert continued["pending_action"] == state["pending_action"]
+    assert continued["rounds"] == state["rounds"]
+    assert continued["decisions"] == state["decisions"]
+    assert record_convergence_decision(continued, decision="CONTINUE") == continued
 
 
 def test_blocked_retries_do_not_consume_accepted_findings_budget(

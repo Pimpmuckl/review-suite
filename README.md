@@ -68,6 +68,15 @@ The reason is saved alongside the unchanged reviewer verdict and findings.
 This closes only the completed closure pass, not other review or validation gates.
 Without a reason, a materially drifted closure remains blocked.
 
+If an earlier `CONTINUE` left a completed review asking for a fix with no
+findings, repeat the same decision to restore its pending classification:
+
+```powershell
+<python> <plugin-root>/scripts/review.py --id <id> --convergence-decision continue
+```
+
+This does not grant another extension or bypass review and validation gates.
+
 To replace an active review with a stricter one:
 
 ```powershell

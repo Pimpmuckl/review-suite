@@ -681,6 +681,33 @@ def record_convergence_decision(
         "ACTIVE",
         True,
     ):
+        if (
+            next_state.get("stage") == STAGE_FIX_PENDING
+            and next_state.get("active_findings") is None
+        ):
+            current = _review_progress(next_state).get("current_step") or {}
+            for round_record in next_state.get("rounds", []):
+                if (
+                    round_record.get("round_id") == current.get("round_id")
+                    and round_record.get("kind") == "review"
+                    and round_record.get("status") == STAGE_DECISION_PENDING
+                    and not round_record.get("command")
+                ):
+                    # Earlier CONTINUE versions erased this completed round's action.
+                    profile = _profile_step_for_round(
+                        next_state, round_record["round_id"]
+                    )
+                    return mark_review_step_pending(
+                        next_state,
+                        round_id=round_record["round_id"],
+                        lane=round_record["lane"],
+                        step_index=profile["index"],
+                        step_name=profile["name"],
+                        reviewed_head=round_record["reviewed_head"],
+                        grading_required=bool(profile.get("grading_required")),
+                        arena_round=bool(profile.get("arena_round")),
+                        post_findings_rerun=bool(profile.get("post_findings_rerun")),
+                    )
         return next_state
     if (
         convergence.get("status") == "DECIDED"
@@ -697,7 +724,10 @@ def record_convergence_decision(
     convergence["decision"] = resolved
     if resolved == "CONTINUE":
         convergence.update(status="ACTIVE", continue_used=True, continue_pending=True)
-        _set_stage(next_state, STAGE_FIX_PENDING)
+        if next_state.get("stage") == "decision-required" and isinstance(
+            next_state.get("active_findings"), dict
+        ):
+            _set_stage(next_state, STAGE_FIX_PENDING)
     else:
         convergence["status"] = "DECIDED"
         _set_stage(next_state, "convergence-decided")
@@ -1662,6 +1692,8 @@ def mark_fix_detected(
     head: str,
 ) -> dict[str, Any]:
     next_state = _copy_state(state)
+    if _convergence(next_state).get("status") == "DECISION_REQUIRED":
+        return next_state
     active = _active_findings(next_state)
     fix_head = _required_text(head, field="head")
     active["fix_head"] = fix_head
