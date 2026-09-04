@@ -530,8 +530,8 @@ def test_profile_resolution_serializes_configured_arena_pool(tmp_path: Path) -> 
     assert arena_step["name"] == "arena-phase-review"
     assert arena_step["rating_pool_id"] == "arena-phase-gpt-5.6-v1"
     assert arena_step["reporting_pool"] is True
-    assert len(arena_step["variant_groups"]) == 13
-    assert len(arena_step["variant_ids"]) == 13
+    assert len(arena_step["variant_groups"]) == 15
+    assert len(arena_step["variant_ids"]) == 15
 
 
 def _gate_signoff_decisions(state_dir: Path) -> list[dict[str, object]]:

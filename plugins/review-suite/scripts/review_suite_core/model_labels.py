@@ -9,7 +9,6 @@ GPT56_MODELS = {"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"}
 MODEL_REASONING_EFFORT_FALLBACKS = {
     "gpt-5.5": {"low", "medium", "high", "xhigh"},
     "gpt-5.4": {"low", "medium", "high", "xhigh"},
-    "gpt-5.4-mini": {"medium", "high", "xhigh"},
 }
 
 

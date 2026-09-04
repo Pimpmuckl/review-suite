@@ -351,7 +351,7 @@ def test_variant_service_tier_rejects_unsupported_config() -> None:
     with pytest.raises(ValueError, match="does not support"):
         variant_service_tier(
             {
-                "id": "gpt-5.4-mini-medium",
+                "id": "gpt-5.5-medium",
                 "service_tier": "fast",
                 "supported_service_tiers": [],
             }
@@ -1767,8 +1767,8 @@ def test_launch_reviewer_process_writes_prompt_for_prompted_base_mode(
 
     launched = _launch_reviewer_process(
         round_payload={"round_id": "round-1"},
-        run={"slot": "alpha", "variant_id": "gpt-5.4-mini-xhigh"},
-        variant={"model": "gpt-5.4-mini", "reasoning_effort": "xhigh"},
+        run={"slot": "alpha", "variant_id": "gpt-5.5-xhigh"},
+        variant={"model": "gpt-5.5", "reasoning_effort": "xhigh"},
         review_cwd=tmp_path,
         prompt="manual prompt",
         review_scope={"base": "main"},
@@ -2792,11 +2792,9 @@ def test_write_reports_includes_recent_match_history_and_model_header(
     records = []
     for idx in range(11):
         task_class = "phase_review" if idx % 2 == 0 else "pr_review"
-        alpha = "gpt-5.4-mini-xhigh" if task_class == "phase_review" else "gpt-5.4-low"
+        alpha = "gpt-5.5-medium" if task_class == "phase_review" else "gpt-5.4-low"
         beta = (
-            "gpt-5.3-codex-medium"
-            if task_class == "phase_review"
-            else "gpt-5.4-mini-high"
+            "gpt-5.3-codex-medium" if task_class == "phase_review" else "gpt-5.5-high"
         )
         tied = idx % 3 == 0
         round_id = f"{task_class}-round-{idx}"
@@ -2823,10 +2821,10 @@ def test_write_reports_includes_recent_match_history_and_model_header(
     roster = {
         "settings": {"elo_k_factor": 24},
         "variants": [
-            _variant("gpt-5.4-mini-xhigh", task_classes=["phase_review"]),
+            _variant("gpt-5.5-medium", task_classes=["phase_review"]),
             _variant("gpt-5.3-codex-medium", task_classes=["phase_review"]),
             _variant("gpt-5.4-low", task_classes=["pr_review"]),
-            _variant("gpt-5.4-mini-high", task_classes=["pr_review"]),
+            _variant("gpt-5.5-high", task_classes=["pr_review"]),
         ],
     }
     operational_state = {
@@ -2834,8 +2832,8 @@ def test_write_reports_includes_recent_match_history_and_model_header(
         "task_classes": {
             "phase_review": {
                 "mode": "champion",
-                "champion_variant_id": "gpt-5.4-mini-xhigh",
-                "champion_variant_ids": ["gpt-5.4-mini-xhigh"],
+                "champion_variant_id": "gpt-5.5-medium",
+                "champion_variant_ids": ["gpt-5.5-medium"],
                 "probation_variant_ids": [],
                 "stable_variant_ids": [],
                 "cooldowns": {},
@@ -2866,16 +2864,14 @@ def test_write_reports_includes_recent_match_history_and_model_header(
     assert "| review | repo | rating pool | placements and Elo |" in leaderboard
     assert "## review_t1" in leaderboard
     assert "## review_t3" in leaderboard
-    assert (
-        "| review_t1 | repo-10 | phase_review-v1 | 1. gpt-5.4-mini-xhigh" in leaderboard
-    )
+    assert "| review_t1 | repo-10 | phase_review-v1 | 1. gpt-5.5-medium" in leaderboard
     repo_9_line = next(
         line
         for line in leaderboard.splitlines()
         if line.startswith("| review_t3 | repo-9 |")
     )
     assert "1. gpt-5.4-low" in repo_9_line
-    assert " = gpt-5.4-mini-high" in repo_9_line
+    assert " = gpt-5.5-high" in repo_9_line
     assert "repo-0" not in leaderboard
 
 
@@ -2943,7 +2939,7 @@ def test_write_reports_match_history_uses_configured_k_factor(tmp_path: Path) ->
         recorded_at="2026-04-12T13:00:00Z",
         round_id=round_id,
         task_class="phase_review",
-        alpha="gpt-5.4-mini-xhigh",
+        alpha="gpt-5.5-medium",
         beta="gpt-5.3-codex-medium",
     )
     record["repo_name"] = "repo-k"
@@ -2956,7 +2952,7 @@ def test_write_reports_match_history_uses_configured_k_factor(tmp_path: Path) ->
     roster = {
         "settings": {"elo_k_factor": 10},
         "variants": [
-            _variant("gpt-5.4-mini-xhigh", task_classes=["phase_review"]),
+            _variant("gpt-5.5-medium", task_classes=["phase_review"]),
             _variant("gpt-5.3-codex-medium", task_classes=["phase_review"]),
         ],
     }
@@ -2965,8 +2961,8 @@ def test_write_reports_match_history_uses_configured_k_factor(tmp_path: Path) ->
         "task_classes": {
             "phase_review": {
                 "mode": "champion",
-                "champion_variant_id": "gpt-5.4-mini-xhigh",
-                "champion_variant_ids": ["gpt-5.4-mini-xhigh"],
+                "champion_variant_id": "gpt-5.5-medium",
+                "champion_variant_ids": ["gpt-5.5-medium"],
                 "probation_variant_ids": [],
                 "stable_variant_ids": [],
                 "cooldowns": {},
@@ -2991,5 +2987,5 @@ def test_write_reports_match_history_uses_configured_k_factor(tmp_path: Path) ->
     escaped_pool = "pool\\|v1 next &lt;!-- &amp; --&gt;"
     assert f"- Rating pool: {escaped_pool}" in leaderboard
     assert f"| review_t1 | repo-k | {escaped_pool} |" in leaderboard
-    assert "gpt-5.4-mini-xhigh 1500.0 -> 1505.0 (+5.0)" in leaderboard
+    assert "gpt-5.5-medium 1500.0 -> 1505.0 (+5.0)" in leaderboard
     assert "gpt-5.3-codex-medium 1500.0 -> 1495.0 (-5.0)" in leaderboard

@@ -915,7 +915,14 @@ def test_default_roster_includes_current_model_pricing() -> None:
         for variant in index.values()
         if variant["model"] == "gpt-5.6-sol"
     }
-    assert astra_layout == sol_layout
+    assert astra_layout == {
+        "low": (["phase_review", "pr_review"], "active"),
+        "medium": (["phase_review", "pr_review"], "active"),
+        "high": (["pr_review"], "active"),
+        "xhigh": (["pr_review"], "active"),
+        "max": (["pr_review"], "active"),
+    }
+    assert set(astra_layout) == set(sol_layout)
 
     expected_pricing = {
         "gpt-6-astra": {
@@ -1024,19 +1031,19 @@ def test_collect_completed_review_capture_does_not_use_title_fallback(
     monkeypatch.setattr(review_suite_local, "enrich_thread_record", lambda thread: {})
 
     variant = {
-        "id": "gpt-5.4-mini-medium",
-        "model": "gpt-5.4-mini",
+        "id": "gpt-5.5-medium",
+        "model": "gpt-5.5",
         "reasoning_effort": "medium",
         "pricing": {
-            "input_per_million_usd": 0.75,
-            "cached_input_per_million_usd": 0.075,
-            "output_per_million_usd": 4.5,
+            "input_per_million_usd": 5.0,
+            "cached_input_per_million_usd": 0.5,
+            "output_per_million_usd": 30.0,
         },
     }
     started_at = "2026-04-13T10:00:00Z"
     review_suite_local.collect_completed_review_capture(
         slot="review-1",
-        variant_id="gpt-5.4-mini-medium",
+        variant_id="gpt-5.5-medium",
         variant=variant,
         title="local-review::repo::review-1",
         command=["codex", "review"],
@@ -1109,19 +1116,19 @@ def test_collect_completed_review_capture_prefers_final_message_path(
     monkeypatch.setattr(review_suite_local.time, "sleep", lambda _: None)
 
     variant = {
-        "id": "gpt-5.4-mini-medium",
-        "model": "gpt-5.4-mini",
+        "id": "gpt-5.5-medium",
+        "model": "gpt-5.5",
         "reasoning_effort": "medium",
         "pricing": {
-            "input_per_million_usd": 0.75,
-            "cached_input_per_million_usd": 0.075,
-            "output_per_million_usd": 4.5,
+            "input_per_million_usd": 5.0,
+            "cached_input_per_million_usd": 0.5,
+            "output_per_million_usd": 30.0,
         },
     }
 
     capture = review_suite_local.collect_completed_review_capture(
         slot="review-1",
-        variant_id="gpt-5.4-mini-medium",
+        variant_id="gpt-5.5-medium",
         variant=variant,
         title="local-review::repo::review-1",
         command=["codex", "exec"],
