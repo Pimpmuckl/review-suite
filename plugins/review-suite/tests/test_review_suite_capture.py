@@ -923,6 +923,11 @@ def test_default_roster_includes_current_model_pricing() -> None:
         "max": (["pr_review"], "active"),
     }
     assert set(astra_layout) == set(sol_layout)
+    assert not any(
+        variant["model"] == "gpt-5.4-mini"
+        for task_class in ("phase_review", "pr_review")
+        for variant in review_suite_local.eligible_variants(roster, task_class)
+    )
 
     expected_pricing = {
         "gpt-6-astra": {
