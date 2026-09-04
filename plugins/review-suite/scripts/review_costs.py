@@ -57,6 +57,12 @@ FOLDER_REPO_OVERRIDES = {
 }
 DEFAULT_CODEX_SQLITE_FILENAME = "state_5.sqlite"
 MODEL_PRICING_PER_MILLION = {
+    "gpt-6-astra": {
+        "input": 10.00,
+        "output": 50.00,
+        "cached_input": 1.00,
+        "cache_write": 12.50,
+    },
     "gpt-5.6-sol": {
         "input": 5.00,
         "output": 30.00,
