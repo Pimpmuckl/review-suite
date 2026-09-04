@@ -900,12 +900,30 @@ def test_compute_cost_splits_cache_write_tokens() -> None:
     )
 
 
-def test_default_roster_includes_gpt_5_6_pricing() -> None:
+def test_default_roster_includes_current_model_pricing() -> None:
     roster_path = Path(__file__).resolve().parents[1] / "references" / "roster.json"
     roster = review_suite_local.load_roster(roster_path)
     index = review_suite_local.variant_index(roster)
 
+    astra_layout = {
+        variant["reasoning_effort"]: (variant["task_classes"], variant["state"])
+        for variant in index.values()
+        if variant["model"] == "gpt-6-astra"
+    }
+    sol_layout = {
+        variant["reasoning_effort"]: (variant["task_classes"], variant["state"])
+        for variant in index.values()
+        if variant["model"] == "gpt-5.6-sol"
+    }
+    assert astra_layout == sol_layout
+
     expected_pricing = {
+        "gpt-6-astra": {
+            "input_per_million_usd": 10.0,
+            "cached_input_per_million_usd": 1.0,
+            "cache_write_input_per_million_usd": 12.5,
+            "output_per_million_usd": 50.0,
+        },
         "gpt-5.6-sol": {
             "input_per_million_usd": 5.0,
             "cached_input_per_million_usd": 0.5,

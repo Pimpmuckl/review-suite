@@ -83,6 +83,7 @@ def test_price_from_usage_splits_cache_write_tokens() -> None:
     }
 
     assert _price_from_usage("gpt-5.6-sol", usage) == pytest.approx(0.0007475)
+    assert _price_from_usage("gpt-6-astra", usage) == pytest.approx(0.001395)
 
 
 def test_rollout_usage_line_preserves_cache_write_tokens() -> None:
