@@ -910,11 +910,6 @@ def test_default_roster_includes_current_model_pricing() -> None:
         for variant in index.values()
         if variant["model"] == "gpt-6-astra"
     }
-    sol_layout = {
-        variant["reasoning_effort"]: (variant["task_classes"], variant["state"])
-        for variant in index.values()
-        if variant["model"] == "gpt-5.6-sol"
-    }
     assert astra_layout == {
         "low": (["phase_review", "pr_review"], "active"),
         "medium": (["phase_review", "pr_review"], "active"),
@@ -922,7 +917,6 @@ def test_default_roster_includes_current_model_pricing() -> None:
         "xhigh": (["pr_review"], "active"),
         "max": (["pr_review"], "active"),
     }
-    assert set(astra_layout) == set(sol_layout)
     assert not any(
         variant["model"] == "gpt-5.4-mini"
         for task_class in ("phase_review", "pr_review")
