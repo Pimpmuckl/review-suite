@@ -40,6 +40,10 @@ def clean_worktree(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         orchestrator_runner, "dirty_worktree_scope", lambda *_: {"dirty_paths": []}
     )
+    monkeypatch.setattr(orchestrator_runner, "current_head", lambda cwd: "head-1")
+    monkeypatch.setattr(
+        orchestrator_runner, "merge_base", lambda cwd, base, head: "base-1"
+    )
 
 
 def _cycle(
