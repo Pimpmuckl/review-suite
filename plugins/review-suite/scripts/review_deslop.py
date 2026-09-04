@@ -146,9 +146,15 @@ def build_prompt(
         else "No frozen review brief is available; report NOT_APPLICABLE for conformance.\n\n"
     )
     cleanup = (
-        "Do not perform another cleanup review or report cleanup findings; this is the post-edit conformance rerun. You must still emit the required final review decision.\n"
+        "Skip cleanup; this is the post-edit conformance rerun.\n"
         if conformance_only
-        else "Inspect only for concrete redundant code, dead code, duplicate logic, and needless wrappers.\n"
+        else (
+            "For cleanup, review over-engineering only, not correctness. "
+            "One line per finding: `<file>:L<line>: <tag>: <what to cut>. <replacement>.` "
+            "Tags: `delete` dead or speculative code; `stdlib` reinvented standard library; "
+            "`native` platform replacements; `yagni` unused abstractions or flexibility; "
+            "`shrink` same behavior in fewer lines.\n"
+        )
     )
     return (
         target_block
@@ -157,7 +163,7 @@ def build_prompt(
         + "Do not redesign ownership, add abstractions, broaden scope, or change behavior.\n"
         + focus_block
         + "\nBegin with exactly `Conformance: CONFORMS`, `Conformance: MATERIALLY_DRIFTED`, or `Conformance: NOT_APPLICABLE`.\n"
-        + "Return only concrete cleanup findings with severity, file path, and fix suggestion. Skip style-only comments.\n"
+        + "Report only concrete cleanup findings. Skip style-only comments.\n"
         + "Always finish with exactly `Review decision: clean` or `Review decision: findings`."
     )
 
