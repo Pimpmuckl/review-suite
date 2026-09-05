@@ -2390,6 +2390,7 @@ def test_configured_selection_uses_only_its_fresh_pool_schedule() -> None:
 
     assert payload["selection_mode"] == "configured"
     assert payload["rating_pool_id"] == "fresh-pool"
+    assert payload["rating_pool_variant_ids"] == ["a", "b", "c", "d", "e"]
     assert payload["schedule_index"] == 1
     assert [run["variant_id"] for run in payload["runs"]] == ["b", "c", "d", "e"]
 
@@ -2781,6 +2782,128 @@ def test_configured_reroll_preserves_four_model_cohort() -> None:
     assert [run["variant_id"] for run in payload["runs"]] == ["a", "b", "c", "d"]
     assert payload["runs"][2]["rerolled_from_variant_id"] == "c"
     assert payload["rating_pool_id"] == "fresh-pool"
+
+
+def test_configured_reroll_replaces_unsupported_model() -> None:
+    variants = [_variant(name) for name in ("a", "b", "c", "d", "e", "g")]
+    unsupported_peer = _variant("c-high")
+    unsupported_peer["model"] = "c"
+    outsider = _variant("f")
+    runs = [
+        {
+            "slot": slot,
+            "variant_id": variant["id"],
+            "model": variant["model"],
+            "reasoning_effort": variant["reasoning_effort"],
+            "review_status": "unsupported_model" if slot == "charlie" else "completed",
+            "grade_blocked": slot == "charlie",
+            "grade_block_reason": "selected_model_not_supported"
+            if slot == "charlie"
+            else None,
+            "reviewer_output": "" if slot == "charlie" else "No findings.",
+        }
+        for slot, variant in zip(("alpha", "bravo", "charlie", "delta"), variants)
+    ]
+
+    payload = build_reroll_slot_payload(
+        round_payload={
+            "round_id": "round-1",
+            "status": "completed",
+            "task_class": "phase_review",
+            "selection_mode": "configured",
+            "selection_pairing": "configured_schedule",
+            "rating_pool_id": "fresh-pool",
+            "rating_pool_variant_ids": ["a", "b", "c", "d", "e", "g"],
+            "runs": runs,
+        },
+        roster=_roster(*variants, unsupported_peer, outsider),
+        operational_state=_operational_state(
+            champion_ids=[], probation_ids=[], cooling={}
+        ),
+        records=[],
+        slot="charlie",
+        seed=None,
+    )
+
+    first_replacement = payload["runs"][2]["variant_id"]
+    assert first_replacement in {"e", "g"}
+    assert payload["runs"][2]["rerolled_from_variant_id"] == "c"
+    assert "c-high" in payload["excluded_variant_ids"]
+    assert "f" in payload["excluded_variant_ids"]
+    assert payload["rating_pool_variant_ids"] == ["a", "b", "c", "d", "e", "g"]
+
+    payload["status"] = "completed"
+    payload["runs"][2].update(
+        review_status="unsupported_model",
+        grade_blocked=True,
+        grade_block_reason="selected_model_not_supported",
+    )
+    second = build_reroll_slot_payload(
+        round_payload=payload,
+        roster=_roster(*variants, unsupported_peer, outsider),
+        operational_state=_operational_state(
+            champion_ids=[], probation_ids=[], cooling={}
+        ),
+        records=[],
+        slot="charlie",
+        seed=None,
+    )
+
+    assert {first_replacement, second["runs"][2]["variant_id"]} == {"e", "g"}
+    assert second["rating_pool_variant_ids"] == ["a", "b", "c", "d", "e", "g"]
+
+
+def test_unconfigured_reroll_replaces_unsupported_model_family() -> None:
+    failed = _variant("failed-medium")
+    failed["model"] = "unsupported"
+    unsupported_peer = _variant("failed-high")
+    unsupported_peer["model"] = "unsupported"
+    survivor = _variant("survivor")
+    replacement = _variant("replacement")
+
+    payload = build_reroll_slot_payload(
+        round_payload={
+            "round_id": "round-1",
+            "status": "completed",
+            "task_class": "phase_review",
+            "selection_mode": "true_scramble",
+            "selection_pairing": "true_scramble",
+            "runs": [
+                {
+                    "slot": "alpha",
+                    "variant_id": failed["id"],
+                    "model": failed["model"],
+                    "reasoning_effort": failed["reasoning_effort"],
+                    "review_status": "unsupported_model",
+                    "grade_blocked": True,
+                    "grade_block_reason": "selected_model_not_supported",
+                    "reviewer_output": "",
+                },
+                {
+                    "slot": "bravo",
+                    "variant_id": survivor["id"],
+                    "model": survivor["model"],
+                    "reasoning_effort": survivor["reasoning_effort"],
+                    "review_status": "completed",
+                    "grade_blocked": False,
+                    "grade_block_reason": None,
+                    "reviewer_output": "No findings.",
+                },
+            ],
+        },
+        roster=_roster(failed, unsupported_peer, survivor, replacement),
+        operational_state=_operational_state(
+            champion_ids=[], probation_ids=[], cooling={}
+        ),
+        records=[],
+        slot="alpha",
+        seed=None,
+    )
+
+    assert [run["variant_id"] for run in payload["runs"]] == [
+        "replacement",
+        "survivor",
+    ]
 
 
 def test_write_reports_includes_recent_match_history_and_model_header(

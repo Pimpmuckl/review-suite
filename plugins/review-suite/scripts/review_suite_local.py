@@ -2337,6 +2337,12 @@ def select_pair(
         payload.update(
             {
                 "rating_pool_id": str(rating_pool_id).strip(),
+                "rating_pool_variant_ids": list(
+                    variant_ids
+                    or dict.fromkeys(
+                        variant_id for group in variant_groups for variant_id in group
+                    )
+                ),
                 "schedule_length": len(variant_groups),
             }
         )
@@ -2905,14 +2911,56 @@ def build_reroll_slot_payload(
     indexed_runs = {str(run["slot"]): run for run in round_payload.get("runs", [])}
     if slot not in indexed_runs:
         raise ValueError(f"unknown slot for round {round_payload['round_id']}: {slot}")
+    replacement_source = indexed_runs[slot]
+    prior_excluded_variant_ids = {
+        str(variant_id) for variant_id in round_payload.get("excluded_variant_ids", [])
+    }
+    unsupported_variant_ids: set[str] = set()
+    if replacement_source.get("grade_block_reason") == "selected_model_not_supported":
+        unsupported_variant_ids = {
+            str(variant["id"])
+            for variant in roster.get("variants", [])
+            if variant.get("model") == replacement_source.get("model")
+        }
     if round_payload.get("selection_mode") == "configured":
-        replacement_source = indexed_runs[slot]
+        replacement_variant = {
+            "id": replacement_source["variant_id"],
+            "model": replacement_source["model"],
+            "reasoning_effort": replacement_source["reasoning_effort"],
+        }
+        excluded_variant_ids = set(prior_excluded_variant_ids)
+        if unsupported_variant_ids:
+            rating_pool_variant_ids = {
+                str(variant_id)
+                for variant_id in round_payload.get("rating_pool_variant_ids", [])
+            }
+            if not rating_pool_variant_ids:
+                raise ValueError(
+                    "configured unsupported-model reroll requires rating-pool variant ids"
+                )
+            excluded_variant_ids.update(
+                str(run["variant_id"]) for run in round_payload.get("runs", [])
+            )
+            excluded_variant_ids.update(unsupported_variant_ids)
+            excluded_variant_ids.update(
+                str(variant["id"])
+                for variant in roster.get("variants", [])
+                if str(variant["id"]) not in rating_pool_variant_ids
+            )
+            replacement_variant = select_replacement_variant(
+                roster=roster,
+                operational_state=operational_state,
+                records=records,
+                task_class=str(round_payload["task_class"]),
+                excluded_variant_ids=excluded_variant_ids,
+                seed=seed,
+            )
         runs = [
             {
                 "slot": slot,
-                "variant_id": replacement_source["variant_id"],
-                "model": replacement_source["model"],
-                "reasoning_effort": replacement_source["reasoning_effort"],
+                "variant_id": replacement_variant["id"],
+                "model": replacement_variant["model"],
+                "reasoning_effort": replacement_variant["reasoning_effort"],
                 "rerolled_from_round_id": round_payload["round_id"],
                 "rerolled_from_variant_id": replacement_source["variant_id"],
             }
@@ -2931,13 +2979,16 @@ def build_reroll_slot_payload(
             "selection_mode": "configured",
             "selection_pairing": round_payload.get("selection_pairing"),
             "rating_pool_id": round_payload.get("rating_pool_id"),
+            "rating_pool_variant_ids": list(
+                round_payload.get("rating_pool_variant_ids", [])
+            ),
             "schedule_index": round_payload.get("schedule_index"),
             "schedule_length": round_payload.get("schedule_length"),
             "sampled_at": utc_now_iso(),
             "caller_id": round_payload.get("caller_id"),
             "caller_id_source": round_payload.get("caller_id_source"),
             "review_cwd_normalized": round_payload.get("review_cwd_normalized"),
-            "excluded_variant_ids": [],
+            "excluded_variant_ids": sorted(excluded_variant_ids),
             "status": "sampled",
             "runs": runs,
             "rerolled_from_round_id": round_payload["round_id"],
@@ -2945,14 +2996,13 @@ def build_reroll_slot_payload(
         }
     if slot not in {"alpha", "bravo"}:
         raise ValueError("reroll-slot currently supports alpha or bravo only")
-    replacement_source = indexed_runs[slot]
     survivor_slot = "bravo" if slot == "alpha" else "alpha"
     survivor = indexed_runs.get(survivor_slot)
     if survivor is None:
         raise ValueError(
             f"round {round_payload['round_id']} is missing {survivor_slot}"
         )
-    excluded_variant_ids: set[str] = set()
+    excluded_variant_ids = prior_excluded_variant_ids | unsupported_variant_ids
     if not bool(replacement_source.get("grade_blocked")):
         excluded_variant_ids.add(str(replacement_source["variant_id"]))
     if survivor.get("variant_id"):
@@ -3228,14 +3278,26 @@ def _classify_review_result(
     stderr_text: str,
     session_id: str | None,
     thread_id: str | None,
+    rollout_error: str = "",
 ) -> dict[str, Any]:
     output = (reviewer_output or "").strip()
+    unsupported_model = (
+        "model is not supported when using codex with a chatgpt account"
+        in (rollout_error or "").lower()
+    )
     capacity = _capacity_interruption_detected(
         stderr_text=stderr_text, reviewer_output=output
     )
     interrupted = _review_interrupted_detected(
         stderr_text=stderr_text, reviewer_output=output
     )
+    if unsupported_model and (not output or interrupted):
+        return {
+            "review_status": "unsupported_model",
+            "status_summary": "Selected model is not supported by Codex for this ChatGPT account.",
+            "grade_blocked": True,
+            "grade_block_reason": "selected_model_not_supported",
+        }
     if capacity and (
         not output or interrupted or "selected model is at capacity" in output.lower()
     ):
@@ -3289,6 +3351,7 @@ def classify_review_capture(
     stderr_text: str,
     session_id: str | None,
     thread_id: str | None,
+    rollout_error: str = "",
     timed_out: bool = False,
     transport_stalled: bool = False,
 ) -> dict[str, Any]:
@@ -3315,6 +3378,7 @@ def classify_review_capture(
         stderr_text=stderr_text,
         session_id=session_id,
         thread_id=thread_id,
+        rollout_error=rollout_error,
     )
 
 
@@ -3436,6 +3500,7 @@ def collect_completed_review_capture(
         stderr_text=stderr_text,
         session_id=session_id,
         thread_id=str(enriched.get("id") or "") or None,
+        rollout_error=str(enriched.get("task_error") or ""),
         timed_out=timed_out,
         transport_stalled=transport_stalled,
     )

@@ -208,6 +208,7 @@ def _snapshot_queue_item(item: dict[str, Any]) -> dict[str, Any]:
         "fallback_attempts",
         "fallback_for_variant_id",
         "fallback_reason",
+        "unsupported_models",
         "cleanup_pending",
         "capture_processed",
     ):
@@ -668,6 +669,7 @@ def _inline_gate_fallback_variant(
     gate_task_class: str,
     arena_task_class: str,
     failed_variant_id: str,
+    excluded_models: set[str],
     cooling: dict[str, dict[str, Any]],
     state_dir: Path | None = None,
 ) -> dict[str, Any] | None:
@@ -681,7 +683,10 @@ def _inline_gate_fallback_variant(
         cooling=cooling,
         state_dir=state_dir,
     ):
-        if str(fallback.get("id") or "") != failed_variant_id:
+        if (
+            str(fallback.get("id") or "") != failed_variant_id
+            and str(fallback.get("model") or "") not in excluded_models
+        ):
             return dict(fallback)
     return None
 
@@ -1569,7 +1574,12 @@ def run_gate_round(
             allow_unsafe_windows_wsl_fallback=allow_unsafe_windows_wsl_fallback,
             retry_attempts=int(queued.get("retry_attempts", 0) or 0),
         )
-        for key in ("fallback_attempts", "fallback_for_variant_id", "fallback_reason"):
+        for key in (
+            "fallback_attempts",
+            "fallback_for_variant_id",
+            "fallback_reason",
+            "unsupported_models",
+        ):
             if queued.get(key) is not None:
                 launched[key] = queued[key]
         return launched
@@ -1673,16 +1683,37 @@ def run_gate_round(
                         "variant": variant,
                         "retry_attempts": retry_attempts,
                         "retry_after": time.monotonic() + retry_delay_seconds,
+                        **{
+                            key: run[key]
+                            for key in (
+                                "fallback_attempts",
+                                "fallback_for_variant_id",
+                                "fallback_reason",
+                                "unsupported_models",
+                            )
+                            if run.get(key) is not None
+                        },
                     }
                 )
                 finish_artifact_cleanup(run)
                 continue
             if (
-                block_reason in RETRYABLE_GATE_BLOCK_REASONS
+                (
+                    block_reason in RETRYABLE_GATE_BLOCK_REASONS
+                    or block_reason == "selected_model_not_supported"
+                )
                 and selection.allow_inline_fallback
-                and int(run.get("fallback_attempts", 0) or 0)
-                < INLINE_GATE_FALLBACK_MAX_ATTEMPTS_PER_SLOT
+                and (
+                    block_reason == "selected_model_not_supported"
+                    or int(run.get("fallback_attempts", 0) or 0)
+                    < INLINE_GATE_FALLBACK_MAX_ATTEMPTS_PER_SLOT
+                )
             ):
+                unsupported_models = {
+                    str(model) for model in run.get("unsupported_models", [])
+                }
+                if block_reason == "selected_model_not_supported":
+                    unsupported_models.add(str(variant.get("model") or ""))
                 operational_state = load_operational_state(
                     state_dir / OPERATIONAL_STATE_FILENAME
                 )
@@ -1692,6 +1723,7 @@ def run_gate_round(
                     gate_task_class=gate_task_class,
                     arena_task_class=selection.arena_task_class,
                     failed_variant_id=str(variant.get("id") or ""),
+                    excluded_models=unsupported_models,
                     cooling=_active_cooldowns(
                         operational_state, selection.arena_task_class
                     ),
@@ -1717,6 +1749,7 @@ def run_gate_round(
                             "fallback_attempts": fallback_attempts,
                             "fallback_for_variant_id": str(variant.get("id") or ""),
                             "fallback_reason": block_reason,
+                            "unsupported_models": sorted(unsupported_models),
                         }
                     )
                     finish_artifact_cleanup(run)

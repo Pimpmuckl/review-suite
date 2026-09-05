@@ -260,9 +260,9 @@ def test_select_gate_variants_uses_pr_gate_discovery_variant_before_champions(
             "generated_at": "2026-04-14T00:00:00Z",
             "task_classes": {
                 "pr_review": {
-                    "champion_variant_ids": ["gpt-5.5-xhigh"],
+                    "champion_variant_ids": ["gpt-5.4-xhigh"],
                     "cooldowns": {
-                        "gpt-5.5-xhigh": {
+                        "gpt-5.4-xhigh": {
                             "until": "2099-01-01T00:00:00Z",
                             "failure_count": 1,
                         }
@@ -289,6 +289,7 @@ def test_select_gate_variants_uses_pr_gate_discovery_variant_before_champions(
                 "arena_eligible": False,
                 "task_classes": ["pr_review"],
             },
+            {"id": "gpt-5.5-xhigh", "state": "active", "task_classes": ["pr_review"]},
             {"id": "gpt-5.4-xhigh", "state": "active", "task_classes": ["pr_review"]},
         ]
     }
@@ -299,10 +300,10 @@ def test_select_gate_variants_uses_pr_gate_discovery_variant_before_champions(
 
     assert selection.mode == "configured_discovery_double_pass"
     assert [variant["id"] for variant in selection.variants] == [
-        "gpt-5.4-xhigh",
-        "gpt-5.4-xhigh",
+        "gpt-5.5-xhigh",
+        "gpt-5.5-xhigh",
     ]
-    assert selection.champion_ids == ("gpt-5.4-xhigh",)
+    assert selection.champion_ids == ("gpt-5.5-xhigh",)
 
 
 def test_select_gate_variants_uses_configured_discovery_without_champions(
@@ -373,10 +374,10 @@ def test_select_gate_variants_uses_configured_discovery_without_champions(
 
     assert selection.mode == "configured_discovery_4_pass"
     assert [variant["id"] for variant in selection.variants] == [
-        "gpt-5.4-medium",
-        "gpt-5.4-medium",
-        "gpt-5.4-medium",
-        "gpt-5.4-medium",
+        "gpt-5.5-medium",
+        "gpt-5.5-medium",
+        "gpt-5.5-medium",
+        "gpt-5.5-medium",
     ]
 
 
@@ -583,7 +584,7 @@ def test_pr_gate_uses_configured_discovery_then_signoff_variant(tmp_path: Path) 
                 "arena_eligible": False,
                 "task_classes": ["pr_review"],
             },
-            {"id": "gpt-5.4-xhigh", "state": "active", "task_classes": ["pr_review"]},
+            {"id": "gpt-5.5-xhigh", "state": "active", "task_classes": ["pr_review"]},
         ]
     }
 
@@ -597,8 +598,8 @@ def test_pr_gate_uses_configured_discovery_then_signoff_variant(tmp_path: Path) 
 
     assert first.mode == "configured_discovery_double_pass"
     assert [variant["id"] for variant in first.variants] == [
-        "gpt-5.4-xhigh",
-        "gpt-5.4-xhigh",
+        "gpt-5.5-xhigh",
+        "gpt-5.5-xhigh",
     ]
 
     (state_dir / "gate_runs.jsonl").write_text(
@@ -807,7 +808,7 @@ def test_select_gate_variants_falls_through_provisional_backup_order_when_primar
                 "phase_review": {
                     "champion_variant_ids": [],
                     "cooldowns": {
-                        "gpt-5.4-medium": {
+                        "gpt-5.5-medium": {
                             "until": "2099-01-01T00:00:00Z",
                             "failure_count": 1,
                         }
@@ -834,7 +835,7 @@ def test_select_gate_variants_falls_through_provisional_backup_order_when_primar
                 "task_classes": ["phase_review"],
             },
             {
-                "id": "gpt-5.4-medium",
+                "id": "gpt-5.6-sol-medium",
                 "state": "active",
                 "task_classes": ["phase_review"],
             },
@@ -848,10 +849,10 @@ def test_select_gate_variants_falls_through_provisional_backup_order_when_primar
 
     assert selection.mode == "provisional_backup_4_pass"
     assert [variant["id"] for variant in selection.variants] == [
-        "gpt-5.5-medium",
-        "gpt-5.5-medium",
-        "gpt-5.5-medium",
-        "gpt-5.5-medium",
+        "gpt-5.6-sol-medium",
+        "gpt-5.6-sol-medium",
+        "gpt-5.6-sol-medium",
+        "gpt-5.6-sol-medium",
     ]
 
 
@@ -926,7 +927,7 @@ def test_select_gate_variants_uses_pr_gate_configured_discovery_without_champion
                 "pr_review": {
                     "champion_variant_ids": [],
                     "cooldowns": {
-                        "gpt-5.5-xhigh": {
+                        "gpt-5.4-xhigh": {
                             "until": "2099-01-01T00:00:00Z",
                             "failure_count": 1,
                         }
@@ -952,8 +953,8 @@ def test_select_gate_variants_uses_pr_gate_configured_discovery_without_champion
 
     assert selection.mode == "configured_discovery_double_pass"
     assert [variant["id"] for variant in selection.variants] == [
-        "gpt-5.4-xhigh",
-        "gpt-5.4-xhigh",
+        "gpt-5.5-xhigh",
+        "gpt-5.5-xhigh",
     ]
 
 
@@ -1598,8 +1599,34 @@ def test_run_gate_round_retries_operational_block_once(
     assert "xhigh" not in captured.err
 
 
-def test_run_gate_round_replaces_exhausted_gate_reviewer_with_inline_fallback(
-    monkeypatch, tmp_path: Path
+@pytest.mark.parametrize(
+    (
+        "scenario",
+        "failed_launches",
+        "final_fallback",
+        "expected_status",
+        "expected_exit_code",
+    ),
+    [
+        ("review_interrupted", 2, "gpt-5.5-medium", "signoff_pending", 0),
+        (
+            "selected_model_not_supported",
+            1,
+            "gpt-5.6-sol-medium",
+            "signoff_pending",
+            0,
+        ),
+        ("unsupported_then_interrupted", 1, "gpt-5.5-medium", "blocked", 1),
+    ],
+)
+def test_run_gate_round_replaces_blocked_gate_reviewer_with_inline_fallback(
+    monkeypatch,
+    tmp_path: Path,
+    scenario: str,
+    failed_launches: int,
+    final_fallback: str,
+    expected_status: str,
+    expected_exit_code: int,
 ) -> None:
     state_dir = tmp_path / "state"
     review_cwd = tmp_path / "repo"
@@ -1651,6 +1678,12 @@ def test_run_gate_round_replaces_exhausted_gate_reviewer_with_inline_fallback(
                 "task_classes": ["phase_review"],
             },
             {
+                "id": "gpt-5.6-sol-medium",
+                "model": "gpt-5.6-sol",
+                "reasoning_effort": "medium",
+                "task_classes": ["phase_review"],
+            },
+            {
                 "id": "bravo-model",
                 "model": "gpt-5.5",
                 "reasoning_effort": "medium",
@@ -1672,7 +1705,7 @@ def test_run_gate_round_replaces_exhausted_gate_reviewer_with_inline_fallback(
             gate_task_class="phase_gate",
             arena_task_class="phase_review",
             mode="double_pass",
-            variants=(roster["variants"][0], roster["variants"][2]),
+            variants=(roster["variants"][0], roster["variants"][3]),
             champion_ids=("gpt-5.4-medium", "bravo-model"),
         ),
     )
@@ -1712,14 +1745,32 @@ def test_run_gate_round_replaces_exhausted_gate_reviewer_with_inline_fallback(
     def fake_collect_completed_review_capture(
         *, slot: str, variant_id: str, **kwargs
     ) -> dict[str, object]:
-        blocked = slot == "alpha" and variant_id == "gpt-5.4-medium"
+        blocked_reasons = {
+            "review_interrupted": {"gpt-5.4-medium": "review_interrupted"},
+            "selected_model_not_supported": {
+                "gpt-5.4-medium": "selected_model_not_supported",
+                "gpt-5.5-medium": "selected_model_not_supported",
+            },
+            "unsupported_then_interrupted": {
+                "gpt-5.4-medium": "selected_model_not_supported",
+                "gpt-5.5-medium": "review_interrupted",
+            },
+        }[scenario]
+        detected_reason = blocked_reasons.get(variant_id) if slot == "alpha" else None
+        blocked = detected_reason is not None
         return {
             "slot": slot,
             "variant_id": variant_id,
-            "review_status": "interrupted" if blocked else "completed",
+            "review_status": (
+                "unsupported_model"
+                if detected_reason == "selected_model_not_supported"
+                else "interrupted"
+                if blocked
+                else "completed"
+            ),
             "status_summary": "interrupted" if blocked else "No findings.",
             "grade_blocked": blocked,
-            "grade_block_reason": "review_interrupted" if blocked else None,
+            "grade_block_reason": detected_reason,
             "reviewer_output": "" if blocked else "No findings.",
             "reviewer_output_ref": None,
             "usage": {},
@@ -1752,9 +1803,16 @@ def test_run_gate_round_replaces_exhausted_gate_reviewer_with_inline_fallback(
         prompt="",
     )
 
-    assert exit_code == 0
-    assert payload["status"] == "signoff_pending"
-    assert ("alpha", "gpt-5.5-medium", 0) in launches
+    assert exit_code == expected_exit_code
+    assert payload["status"] == expected_status
+    assert ("alpha", final_fallback, 0) in launches
+    assert (
+        sum(
+            slot == "alpha" and variant_id == "gpt-5.4-medium"
+            for slot, variant_id, _ in launches
+        )
+        == failed_launches
+    )
     stored = [
         json.loads(line)
         for line in (state_dir / "gate_runs.jsonl")
@@ -1764,15 +1822,18 @@ def test_run_gate_round_replaces_exhausted_gate_reviewer_with_inline_fallback(
     ]
     assert [run["variant_id"] for run in stored[0]["runs"]] == [
         "bravo-model",
-        "gpt-5.5-medium",
+        final_fallback,
     ]
     assert len(stored[0]["retry_runs"]) == 2
-    assert stored[0]["retry_runs"][-1]["cooldown_eligible"] is True
+    assert any(run.get("cooldown_eligible") for run in stored[0]["retry_runs"])
     op_state = json.loads(
         (state_dir / "operational_state.json").read_text(encoding="utf-8")
     )
-    cooldown = op_state["task_classes"]["phase_review"]["cooldowns"]["gpt-5.4-medium"]
-    assert cooldown["last_reason"] == "review_interrupted"
+    cooldowns = op_state["task_classes"]["phase_review"]["cooldowns"]
+    if scenario == "review_interrupted":
+        assert cooldowns["gpt-5.4-medium"]["last_reason"] == scenario
+    else:
+        assert "gpt-5.4-medium" not in cooldowns
 
 
 def test_run_gate_round_inline_fallback_skips_cooling_backup(

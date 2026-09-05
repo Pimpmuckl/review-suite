@@ -1143,6 +1143,67 @@ def test_collect_completed_review_capture_prefers_final_message_path(
     assert capture["reviewer_output"] == "No findings from output file."
 
 
+def test_collect_completed_review_capture_maps_unsupported_model_error(
+    tmp_path: Path,
+) -> None:
+    rollout_path = tmp_path / "unsupported-model.jsonl"
+    _write_jsonl(
+        rollout_path,
+        [
+            {"type": "session_meta", "payload": {}},
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "task_complete",
+                    "error": {
+                        "message": json.dumps(
+                            {
+                                "detail": "The 'gpt-example' model is not supported when using Codex with a ChatGPT account."
+                            }
+                        )
+                    },
+                },
+            },
+        ],
+    )
+    sqlite_path = tmp_path / "state_5.sqlite"
+    con = sqlite3.connect(sqlite_path)
+    con.execute(THREAD_SCHEMA)
+    _insert_thread(
+        con,
+        thread_id="unsupported-model",
+        rollout_path=rollout_path,
+        cwd=str(tmp_path),
+        source=rollout_capture.REVIEW_SUBAGENT_SOURCE,
+        created_at=1,
+        updated_at=1,
+        tokens_used=0,
+        title="unsupported model",
+    )
+    con.commit()
+    con.close()
+    stdout_path = tmp_path / "review.stdout.txt"
+    stderr_path = tmp_path / "review.stderr.txt"
+    stdout_path.write_text("", encoding="utf-8")
+    stderr_path.write_text("Session ID: unsupported-model\n", encoding="utf-8")
+
+    capture = review_suite_local.collect_completed_review_capture(
+        slot="alpha",
+        variant_id="gpt-5.4-xhigh",
+        variant=_minimal_roster()["variants"][0],
+        title="unsupported model",
+        command=["codex", "exec"],
+        stdout_path=stdout_path,
+        stderr_path=stderr_path,
+        started_at=None,
+        sqlite_path=sqlite_path,
+        review_cwd=tmp_path,
+    )
+
+    assert capture["review_status"] == "unsupported_model"
+    assert capture["grade_block_reason"] == "selected_model_not_supported"
+
+
 def test_rollout_capture_missing_threads_table_returns_none(tmp_path: Path) -> None:
     sqlite_path = tmp_path / "state_5.sqlite"
     sqlite3.connect(sqlite_path).close()

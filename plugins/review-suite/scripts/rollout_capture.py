@@ -57,11 +57,19 @@ def read_rollout_summary(path: Path) -> dict[str, Any]:
     first_last: dict[str, int] | None = None
     final_total: dict[str, int] | None = None
     final_text = ""
+    task_error = ""
     for row in rows[last_turn_context_index:]:
         row_type = row.get("type")
         if row_type == "event_msg":
             payload = row.get("payload", {})
-            if not isinstance(payload, dict) or payload.get("type") != "token_count":
+            if not isinstance(payload, dict):
+                continue
+            if payload.get("type") == "task_complete":
+                error = payload.get("error")
+                if isinstance(error, dict):
+                    task_error = str(error.get("message") or "")
+                continue
+            if payload.get("type") != "token_count":
                 continue
             info = payload.get("info", {})
             if not isinstance(info, dict):
@@ -129,7 +137,11 @@ def read_rollout_summary(path: Path) -> dict[str, Any]:
                 or first_total.get(metric, 0)
                 or first_last.get(metric, 0)
             }
-    summary = {"usage": usage, "reviewer_output": final_text}
+    summary = {
+        "usage": usage,
+        "reviewer_output": final_text,
+        "task_error": task_error,
+    }
     _ROLLOUT_SUMMARY_CACHE[key] = summary
     return summary
 
@@ -380,4 +392,5 @@ def enrich_thread_record(thread_row: dict[str, Any]) -> dict[str, Any]:
     enriched = dict(thread_row)
     enriched["usage"] = summary.get("usage") or {}
     enriched["reviewer_output"] = summary.get("reviewer_output") or ""
+    enriched["task_error"] = summary.get("task_error") or ""
     return enriched
