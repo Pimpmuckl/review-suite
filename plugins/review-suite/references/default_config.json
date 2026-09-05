@@ -20,19 +20,19 @@
     "enabled": false,
     "pools": {
       "discovery_phase": {
-        "rating_pool_id": "discovery-phase-gpt-5.6-v2",
+        "rating_pool_id": "discovery-phase-gpt-5.6-v1",
         "variant_groups": [
           ["gpt-5.5-medium", "gpt-5.6-sol-medium", "gpt-5.6-terra-medium", "gpt-5.6-luna-medium"]
         ]
       },
       "discovery_deep": {
-        "rating_pool_id": "discovery-deep-gpt-5.6-v2",
+        "rating_pool_id": "discovery-deep-gpt-5.6-v1",
         "variant_groups": [
           ["gpt-5.5-xhigh", "gpt-5.6-sol-xhigh", "gpt-5.6-terra-xhigh", "gpt-5.6-luna-xhigh"]
         ]
       },
       "arena_phase": {
-        "rating_pool_id": "arena-phase-gpt-5.6-v2",
+        "rating_pool_id": "arena-phase-gpt-5.6-v1",
         "reporting": true,
         "variant_ids": [
           "gpt-5.5-low",
@@ -66,7 +66,7 @@
         ]
       },
       "arena_deep": {
-        "rating_pool_id": "arena-deep-gpt-5.6-v2",
+        "rating_pool_id": "arena-deep-gpt-5.6-v1",
         "reporting": true,
         "variant_ids": [
           "gpt-5.5-medium",
