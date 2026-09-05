@@ -218,10 +218,10 @@ def test_default_arena_pool_schedules_are_balanced(tmp_path: Path) -> None:
     config = load_config(tmp_path / "state")
     pools = config["arena"]["pools"]
     assert {pool["rating_pool_id"] for pool in pools.values()} == {
-        "discovery-phase-gpt-5.6-v1",
-        "discovery-deep-gpt-5.6-v1",
-        "arena-phase-gpt-5.6-v1",
-        "arena-deep-gpt-5.6-v1",
+        "discovery-phase-gpt-5.6-v2",
+        "discovery-deep-gpt-5.6-v2",
+        "arena-phase-gpt-5.6-v2",
+        "arena-deep-gpt-5.6-v2",
     }
     assert {name for name, pool in pools.items() if pool.get("reporting")} == {
         "arena_phase",

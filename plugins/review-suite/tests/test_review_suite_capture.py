@@ -918,7 +918,7 @@ def test_default_roster_includes_current_model_pricing() -> None:
         "max": (["pr_review"], "active"),
     }
     assert not any(
-        variant["model"] == "gpt-5.4-mini"
+        variant["model"].startswith("gpt-5.4")
         for task_class in ("phase_review", "pr_review")
         for variant in review_suite_local.eligible_variants(roster, task_class)
     )

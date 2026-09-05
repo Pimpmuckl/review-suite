@@ -20,23 +20,21 @@
     "enabled": false,
     "pools": {
       "discovery_phase": {
-        "rating_pool_id": "discovery-phase-gpt-5.6-v1",
+        "rating_pool_id": "discovery-phase-gpt-5.6-v2",
         "variant_groups": [
-          ["gpt-5.4-medium", "gpt-5.5-medium", "gpt-5.6-sol-medium", "gpt-5.6-terra-medium"]
+          ["gpt-5.5-medium", "gpt-5.6-sol-medium", "gpt-5.6-terra-medium", "gpt-5.6-luna-medium"]
         ]
       },
       "discovery_deep": {
-        "rating_pool_id": "discovery-deep-gpt-5.6-v1",
+        "rating_pool_id": "discovery-deep-gpt-5.6-v2",
         "variant_groups": [
-          ["gpt-5.4-xhigh", "gpt-5.5-xhigh", "gpt-5.6-sol-xhigh", "gpt-5.6-terra-xhigh"]
+          ["gpt-5.5-xhigh", "gpt-5.6-sol-xhigh", "gpt-5.6-terra-xhigh", "gpt-5.6-luna-xhigh"]
         ]
       },
       "arena_phase": {
-        "rating_pool_id": "arena-phase-gpt-5.6-v1",
+        "rating_pool_id": "arena-phase-gpt-5.6-v2",
         "reporting": true,
         "variant_ids": [
-          "gpt-5.4-low",
-          "gpt-5.4-medium",
           "gpt-5.5-low",
           "gpt-5.5-medium",
           "gpt-5.6-luna-medium",
@@ -52,30 +50,25 @@
           "gpt-6-astra-medium"
         ],
         "variant_groups": [
-          ["gpt-5.4-low", "gpt-5.4-medium", "gpt-5.5-medium", "gpt-5.6-terra-high"],
-          ["gpt-5.4-medium", "gpt-5.5-low", "gpt-5.6-luna-medium", "gpt-5.6-terra-xhigh"],
           ["gpt-5.5-low", "gpt-5.5-medium", "gpt-5.6-luna-high", "gpt-5.6-sol-low"],
           ["gpt-5.5-medium", "gpt-5.6-luna-medium", "gpt-5.6-luna-xhigh", "gpt-5.6-sol-medium"],
           ["gpt-5.6-luna-medium", "gpt-5.6-luna-high", "gpt-5.6-luna-max", "gpt-6-astra-low"],
           ["gpt-5.6-luna-high", "gpt-5.6-luna-xhigh", "gpt-5.6-terra-medium", "gpt-6-astra-medium"],
-          ["gpt-5.6-luna-xhigh", "gpt-5.6-luna-max", "gpt-5.6-terra-high", "gpt-5.4-low"],
-          ["gpt-5.6-luna-max", "gpt-5.6-terra-medium", "gpt-5.6-terra-xhigh", "gpt-5.4-medium"],
+          ["gpt-5.6-luna-xhigh", "gpt-5.6-luna-max", "gpt-5.6-terra-high", "gpt-5.6-luna-medium"],
+          ["gpt-5.6-luna-max", "gpt-5.6-terra-medium", "gpt-5.6-terra-xhigh", "gpt-5.6-terra-high"],
           ["gpt-5.6-terra-medium", "gpt-5.6-terra-high", "gpt-5.6-sol-low", "gpt-5.5-low"],
           ["gpt-5.6-terra-high", "gpt-5.6-terra-xhigh", "gpt-5.6-sol-medium", "gpt-5.5-medium"],
           ["gpt-5.6-terra-xhigh", "gpt-5.6-sol-low", "gpt-6-astra-low", "gpt-5.6-luna-medium"],
           ["gpt-5.6-sol-low", "gpt-5.6-sol-medium", "gpt-6-astra-medium", "gpt-5.6-luna-high"],
-          ["gpt-5.6-sol-medium", "gpt-6-astra-low", "gpt-5.4-low", "gpt-5.6-luna-xhigh"],
-          ["gpt-6-astra-low", "gpt-6-astra-medium", "gpt-5.4-medium", "gpt-5.6-luna-max"],
-          ["gpt-6-astra-medium", "gpt-5.4-low", "gpt-5.5-low", "gpt-5.6-terra-medium"]
+          ["gpt-5.6-sol-medium", "gpt-6-astra-low", "gpt-5.5-low", "gpt-5.6-luna-xhigh"],
+          ["gpt-6-astra-low", "gpt-6-astra-medium", "gpt-5.6-terra-xhigh", "gpt-5.6-luna-max"],
+          ["gpt-6-astra-medium", "gpt-5.5-medium", "gpt-5.5-low", "gpt-5.6-terra-medium"]
         ]
       },
       "arena_deep": {
-        "rating_pool_id": "arena-deep-gpt-5.6-v1",
+        "rating_pool_id": "arena-deep-gpt-5.6-v2",
         "reporting": true,
         "variant_ids": [
-          "gpt-5.4-medium",
-          "gpt-5.4-high",
-          "gpt-5.4-xhigh",
           "gpt-5.5-medium",
           "gpt-5.5-high",
           "gpt-5.5-xhigh",
@@ -98,9 +91,6 @@
           "gpt-6-astra-max"
         ],
         "variant_groups": [
-          ["gpt-5.4-medium", "gpt-5.4-high", "gpt-5.5-high", "gpt-5.6-sol-medium"],
-          ["gpt-5.4-high", "gpt-5.4-xhigh", "gpt-5.5-xhigh", "gpt-5.6-sol-high"],
-          ["gpt-5.4-xhigh", "gpt-5.5-medium", "gpt-5.6-terra-medium", "gpt-5.6-sol-xhigh"],
           ["gpt-5.5-medium", "gpt-5.5-high", "gpt-5.6-terra-high", "gpt-5.6-sol-max"],
           ["gpt-5.5-high", "gpt-5.5-xhigh", "gpt-5.6-terra-xhigh", "gpt-5.6-luna-medium"],
           ["gpt-5.5-xhigh", "gpt-5.6-terra-medium", "gpt-5.6-terra-max", "gpt-5.6-luna-high"],
@@ -111,16 +101,16 @@
           ["gpt-5.6-sol-medium", "gpt-5.6-sol-high", "gpt-5.6-luna-medium", "gpt-6-astra-high"],
           ["gpt-5.6-sol-high", "gpt-5.6-sol-xhigh", "gpt-5.6-luna-high", "gpt-6-astra-xhigh"],
           ["gpt-5.6-sol-xhigh", "gpt-5.6-sol-max", "gpt-5.6-luna-xhigh", "gpt-6-astra-max"],
-          ["gpt-5.6-sol-max", "gpt-5.6-luna-medium", "gpt-5.6-luna-max", "gpt-5.4-medium"],
-          ["gpt-5.6-luna-medium", "gpt-5.6-luna-high", "gpt-6-astra-low", "gpt-5.4-high"],
-          ["gpt-5.6-luna-high", "gpt-5.6-luna-xhigh", "gpt-6-astra-medium", "gpt-5.4-xhigh"],
+          ["gpt-5.6-sol-max", "gpt-5.6-luna-medium", "gpt-5.6-luna-max", "gpt-5.5-high"],
+          ["gpt-5.6-luna-medium", "gpt-5.6-luna-high", "gpt-6-astra-low", "gpt-5.6-sol-medium"],
+          ["gpt-5.6-luna-high", "gpt-5.6-luna-xhigh", "gpt-6-astra-medium", "gpt-5.5-xhigh"],
           ["gpt-5.6-luna-xhigh", "gpt-5.6-luna-max", "gpt-6-astra-high", "gpt-5.5-medium"],
           ["gpt-5.6-luna-max", "gpt-6-astra-low", "gpt-6-astra-xhigh", "gpt-5.5-high"],
           ["gpt-6-astra-low", "gpt-6-astra-medium", "gpt-6-astra-max", "gpt-5.5-xhigh"],
-          ["gpt-6-astra-medium", "gpt-6-astra-high", "gpt-5.4-medium", "gpt-5.6-terra-medium"],
-          ["gpt-6-astra-high", "gpt-6-astra-xhigh", "gpt-5.4-high", "gpt-5.6-terra-high"],
-          ["gpt-6-astra-xhigh", "gpt-6-astra-max", "gpt-5.4-xhigh", "gpt-5.6-terra-xhigh"],
-          ["gpt-6-astra-max", "gpt-5.4-medium", "gpt-5.5-medium", "gpt-5.6-terra-max"]
+          ["gpt-6-astra-medium", "gpt-6-astra-high", "gpt-5.6-sol-high", "gpt-5.6-terra-medium"],
+          ["gpt-6-astra-high", "gpt-6-astra-xhigh", "gpt-5.5-medium", "gpt-5.6-terra-high"],
+          ["gpt-6-astra-xhigh", "gpt-6-astra-max", "gpt-5.6-terra-medium", "gpt-5.6-terra-xhigh"],
+          ["gpt-6-astra-max", "gpt-5.6-sol-xhigh", "gpt-5.5-medium", "gpt-5.6-terra-max"]
         ]
       }
     }
@@ -131,8 +121,8 @@
       "auto_promotion_enabled": false
     },
     "stable_defaults": {
-      "discovery_phase_model": "gpt-5.4-medium",
-      "discovery_deep_model": "gpt-5.4-xhigh",
+      "discovery_phase_model": "gpt-5.5-medium",
+      "discovery_deep_model": "gpt-5.5-xhigh",
       "discovery_loops": 1,
       "normal_arena_loops": 13,
       "deep_arena_loops": 13,
@@ -169,7 +159,7 @@
       "signoff_model_ref": "signoff_normal_model",
       "signoff_reviewer_count": 2,
       "discovery_loops_ref": "discovery_loops",
-      "backup_variant_ids": ["gpt-5.5-medium", "gpt-5.4-medium", "gpt-5.4-high"],
+      "backup_variant_ids": ["gpt-5.5-medium", "gpt-5.6-sol-medium", "gpt-5.6-terra-medium"],
       "max_active_reviewers": 4
     },
     "pr_gate": {
@@ -178,7 +168,7 @@
       "signoff_model_ref": "signoff_deep_model",
       "signoff_reviewer_count": 2,
       "discovery_loops_ref": "discovery_loops",
-      "backup_variant_ids": ["gpt-5.5-xhigh", "gpt-5.4-xhigh", "gpt-5.4-high"],
+      "backup_variant_ids": ["gpt-5.5-xhigh", "gpt-5.6-sol-xhigh", "gpt-5.6-terra-xhigh"],
       "max_active_reviewers": 2
     }
   }

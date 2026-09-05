@@ -34,7 +34,7 @@ def test_default_public_config_loads(tmp_path: Path) -> None:
     )
     assert (
         gate_config("phase_gate", state_dir=state_dir).discovery_variant_id
-        == "gpt-5.4-medium"
+        == "gpt-5.5-medium"
     )
     assert gate_config("phase_gate", state_dir=state_dir).discovery_reviewer_count == 4
     assert (
@@ -45,7 +45,7 @@ def test_default_public_config_loads(tmp_path: Path) -> None:
     assert gate_config("phase_gate", state_dir=state_dir).discovery_loops == 1
     assert (
         gate_config("pr_gate", state_dir=state_dir).discovery_variant_id
-        == "gpt-5.4-xhigh"
+        == "gpt-5.5-xhigh"
     )
     assert (
         gate_config("pr_gate", state_dir=state_dir).signoff_variant_id
@@ -53,8 +53,8 @@ def test_default_public_config_loads(tmp_path: Path) -> None:
     )
     assert config["orchestrator"]["selection"] == "auto"
     assert config["orchestrator"]["stable_defaults"] == {
-        "discovery_phase_model": "gpt-5.4-medium",
-        "discovery_deep_model": "gpt-5.4-xhigh",
+        "discovery_phase_model": "gpt-5.5-medium",
+        "discovery_deep_model": "gpt-5.5-xhigh",
         "discovery_loops": 1,
         "normal_arena_loops": 13,
         "deep_arena_loops": 13,
@@ -98,14 +98,14 @@ def test_user_config_overrides_defaults(tmp_path: Path) -> None:
 
     assert lens.model == "gpt-5.4"
     assert lens.reasoning_effort == "high"
-    assert phase_gate.discovery_variant_id == "gpt-5.4-medium"
+    assert phase_gate.discovery_variant_id == "gpt-5.5-medium"
     assert phase_gate.discovery_reviewer_count == 3
     assert phase_gate.signoff_variant_id == "gpt-5.4-high"
     assert phase_gate.discovery_loops == 2
     assert pr_gate.signoff_variant_id == "gpt-5.6-sol-xhigh"
     assert (
         config["orchestrator"]["stable_defaults"]["discovery_phase_model"]
-        == "gpt-5.4-medium"
+        == "gpt-5.5-medium"
     )
     assert (
         config["orchestrator"]["stable_defaults"]["signoff_normal_model"]
