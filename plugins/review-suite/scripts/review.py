@@ -69,6 +69,7 @@ from review_suite_core.orchestrator_state import (
     STAGE_REVIEW_GREEN,
     STAGE_ABORTED,
     DESLOP_STATUS_DONE,
+    DESLOP_STATUS_CLOSED,
     DESLOP_STATUS_SKIPPED,
     create_cycle,
     deslop_is_ready,
@@ -180,7 +181,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-deslop",
         dest="skip_deslop",
         action="store_true",
-        help="Skip bounded exact-head closure when creating a review cycle.",
+        help="Skip cleanup before final signoff when creating a review cycle.",
     )
     parser.add_argument(
         "--show-findings",
@@ -962,7 +963,7 @@ def _show_findings(state: dict[str, Any], *, state_dir: Path) -> int:
     closure_findings = str(
         dict(state.get("deslop") or {}).get("findings") or ""
     ).strip()
-    if closure_findings:
+    if closure_findings and _deslop_is_open(state):
         write_text(f"review: {public_id}")
         write_text("")
         write_text("Output:")
@@ -1209,6 +1210,8 @@ def _identity_head(state: dict[str, Any]) -> str | None:
 
 
 def _base_drift_reviewed_head(state: dict[str, Any]) -> str | None:
+    if _deslop_is_open(state):
+        return str(dict(state.get("deslop") or {}).get("reviewed_head") or "") or None
     active = dict(state.get("active_findings") or {})
     reviewed_head = str(active.get("reviewed_head") or "").strip()
     if reviewed_head:
@@ -1475,6 +1478,39 @@ def _resume_progress(
     state: dict[str, Any], *, state_dir: Path | None = None
 ) -> dict[str, Any]:
     stage = state.get("stage")
+    if stage == STAGE_CREATED and dict(state.get("deslop") or {}).get("status") in {
+        DESLOP_STATUS_DONE,
+        DESLOP_STATUS_CLOSED,
+    }:
+        identity = _current_cycle_identity_if_compatible(state)
+        if identity and identity["head"] != dict(state.get("identity") or {}).get(
+            "head"
+        ):
+            cleanup_head = str(
+                dict(state.get("deslop") or {}).get("reviewed_head") or ""
+            )
+            fixes_applied = _is_material_fix_head(
+                state, head=identity["head"], reviewed_head=cleanup_head
+            ) and not bool(
+                dict(identity.get("base_drift") or {}).get("patch_equivalent")
+            )
+            state = _with_current_identity(
+                state,
+                head=identity["head"],
+                merge_base_head=identity["merge_base"],
+                base_drift=identity.get("base_drift"),
+            )
+            state = _with_equivalent_base_drift_review_head(
+                state, identity.get("base_drift")
+            )
+            state["validation"] = {
+                key: "unknown"
+                for key in ("focused", "full_suite", "ci", "review_green")
+            }
+            if _deslop_is_open(state) and fixes_applied:
+                return mark_deslop_closed(state, fixes_applied=True)
+            return state
+        return state
     if stage in {STAGE_CREATED, STAGE_FOLLOWUP_PENDING}:
         return state
     if stage == STAGE_DECISION_PENDING:
@@ -1636,6 +1672,9 @@ def _with_equivalent_base_drift_review_head(
     if not old_head or not new_head or old_head == new_head:
         return state
     next_state = dict(state)
+    deslop = dict(next_state.get("deslop") or {})
+    if deslop.get("reviewed_head") == old_head:
+        next_state["deslop"] = {**deslop, "reviewed_head": new_head}
     rounds = []
     for item in list(next_state.get("rounds") or []):
         if not isinstance(item, dict):
@@ -1729,6 +1768,11 @@ def _continuation_head_match_kind(
         return "exact"
     stage = str(state.get("stage") or "")
     if stage == STAGE_CREATED:
+        if dict(state.get("deslop") or {}).get("status") in {
+            DESLOP_STATUS_DONE,
+            DESLOP_STATUS_CLOSED,
+        }:
+            return "changed"
         if not _deslop_is_done_or_skipped(state):
             return None
         try:
@@ -1848,6 +1892,10 @@ def _compatible_continuation_cycle(
     selected_base_drift = selected_candidates[0][3]
     selected_state = selected_candidates[0][2]
     _reject_review_brief_replacement(selected_state, review_brief)
+    if selected_state.get("stage") == STAGE_CREATED and dict(
+        selected_state.get("deslop") or {}
+    ).get("status") in {DESLOP_STATUS_DONE, DESLOP_STATUS_CLOSED}:
+        return _resume_progress(selected_state, state_dir=state_dir)
     resumed = _with_current_identity(
         selected_state,
         head=head,
@@ -2139,7 +2187,7 @@ def _advance_without_decision(
         return saved
 
     for _ in range(6):
-        if deslop_is_ready(ready_state):
+        if deslop_is_ready(ready_state) or _deslop_is_open(ready_state):
             resumed = _resume_progress(ready_state, state_dir=state_dir)
             resumed = _blocked_decision_recovery_state(resumed, state_dir=state_dir)
         else:
@@ -2385,8 +2433,8 @@ def _github_pending_head_change_identity(
     head = str(identity.get("head") or "").strip()
     current_merge_base = str(identity.get("merge_base") or "").strip()
     deslop = dict(state.get("deslop") or {})
-    closure_head = str(
-        deslop.get("reviewed_head")
+    signoff_head = str(
+        dict(state.get("review_heads") or {}).get("last_reviewed_head")
         or dict(state.get("identity") or {}).get("head")
         or ""
     ).strip()
@@ -2394,7 +2442,7 @@ def _github_pending_head_change_identity(
     if (
         str(deslop.get("status") or "").strip() != DESLOP_STATUS_SKIPPED or terminal
     ) and (
-        closure_head != head
+        signoff_head != head
         or str(dict(state.get("identity") or {}).get("merge_base") or "").strip()
         != current_merge_base
     ):

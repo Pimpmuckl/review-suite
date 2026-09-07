@@ -20,9 +20,9 @@ codex plugin marketplace upgrade review-suite
 
 | Mode | Use it for | Local review |
 | --- | --- | --- |
-| `fast` | UI-only, local presentation, and other small, well-tested changes | Dual normal-model signoff until green, then bounded exact-head closure; no GitHub review; at most two local rounds |
-| `normal` | Everything else | Dual normal-model signoff until green, bounded exact-head closure, then GitHub review |
-| `deep` | Billing, login/auth, security, business-critical systems, database integrity/migrations, concurrency, and similarly critical logic | Dual normal-model signoff until green, a second dual signoff until green, bounded exact-head closure, then GitHub review |
+| `fast` | UI-only, local presentation, and other small, well-tested changes | One cleanup pass, dual normal-model signoff until green; no GitHub review; at most two local rounds |
+| `normal` | Everything else | Optional Arena rounds, one cleanup pass, dual normal-model signoff until green, then GitHub review |
+| `deep` | Billing, login/auth, security, business-critical systems, database integrity/migrations, concurrency, and similarly critical logic | Dual normal-model signoff until green, optional Arena rounds, one cleanup pass, dual deep-model signoff until green, then GitHub review |
 
 These are risk heuristics, not permission to downgrade a UI-looking change that
 crosses a trust or data-integrity boundary.
@@ -58,15 +58,19 @@ focused validation before review dispatch, then track the full suite and CI on
 the review id. Review green does not mean merge-ready while required validation
 is pending or unknown.
 
-To dismiss an erroneous bounded closure verdict on the same clean head:
+Cleanup runs once per review cycle, immediately before the final signoff. Apply
+accepted simplifications before continuing; final signoff reviews the resulting
+code. Later review fixes do not restart cleanup.
+
+To dismiss an erroneous cleanup/conformance verdict on the same clean head:
 
 ```powershell
 <python> <plugin-root>/scripts/review.py --id <id> --deslop-done --reason "why the findings are dismissed"
 ```
 
 The reason is saved alongside the unchanged reviewer verdict and findings.
-This closes only the completed closure pass, not other review or validation gates.
-Without a reason, a materially drifted closure remains blocked.
+This closes only the cleanup pass; final signoff and validation still apply.
+Without a reason, a materially drifted conformance verdict remains blocked.
 
 If an earlier `CONTINUE` left a completed review asking for a fix with no
 findings, repeat the same decision to restore its pending classification:

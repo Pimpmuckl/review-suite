@@ -41,7 +41,6 @@ from .orchestrator_state import (
     mark_deslop_failed,
     mark_recovery_resolved,
     mark_followup_review_pending,
-    mark_latest_profile_step_rerun_needed,
     mark_review_step_running,
     mark_review_step_pending,
     mark_review_step_retry,
@@ -115,8 +114,6 @@ def deslop_command(state: dict[str, Any]) -> list[str]:
     ]
     if brief := str(state.get("review_brief") or "").strip():
         command.append(f"--review-brief={brief}")
-    if bool(dict(state.get("deslop") or {}).get("conformance_only")):
-        command.append("--conformance-only")
     if _allow_unsafe_windows_wsl_fallback(state):
         command.append("--wsl")
     return command
@@ -210,10 +207,11 @@ def _run_deslop_once(state: dict[str, Any]) -> OrchestratorRunnerResult:
     actual_head = str(scope["reviewed_head"])
     actual_merge_base = str(scope["merge_base"])
     if actual_head != expected_head or actual_merge_base != expected_merge_base:
-        state = mark_latest_profile_step_rerun_needed(state, head=actual_head)
         state["identity"].update(head=actual_head, merge_base=actual_merge_base)
         state["review_heads"].update(head=actual_head, merge_base=actual_merge_base)
-        return OrchestratorRunnerResult(state, ran_step=True, step="deslop-rerun")
+        state["validation"] = {
+            key: "unknown" for key in ("focused", "full_suite", "ci", "review_green")
+        }
     command = deslop_command(state)
     command_text = format_command(command)
     try:

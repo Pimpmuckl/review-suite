@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from dataclasses import asdict
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,8 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from review_suite_core import orchestrator_runner
+from review_suite_core.config import load_config
+from review_suite_core.orchestrator_profiles import resolve_orchestrator_profile
 from review_suite_core.orchestrator_state import (
     STAGE_ABORTED,
     STAGE_CREATED,
@@ -21,6 +24,7 @@ from review_suite_core.orchestrator_state import (
     STAGE_RETRY_REQUESTED,
     abort_cycle,
     create_cycle,
+    mark_deslop_closed,
     mark_arena_recovery_requested,
     mark_fix_detected,
     mark_review_step_pending,
@@ -215,7 +219,7 @@ def _assert_review_brief_instructions(value: object) -> None:
     assert "non-blocking suggestions" in instructions
 
 
-def test_runner_runs_bounded_closure_after_clean_correctness(
+def test_runner_runs_cleanup_before_final_correctness_and_waits_for_acknowledgment(
     monkeypatch, clean_worktree: None, tmp_path: Path
 ) -> None:
     calls: list[tuple[list[str], Path]] = []
@@ -232,34 +236,93 @@ def test_runner_runs_bounded_closure_after_clean_correctness(
 
     monkeypatch.setattr(orchestrator_runner, "run_deslop_subprocess", fake_run)
 
-    reviewed = orchestrator_runner.run_one_expensive_step(_cycle(tmp_path))
-
-    assert calls == []
-
+    state = _cycle(tmp_path)
+    state["review_brief"] = "- frozen"
+    state["identity"]["branch"] = None
+    monkeypatch.setattr(orchestrator_runner, "current_branch", lambda cwd: None)
+    cleanup = orchestrator_runner.run_one_expensive_step(state)
+    assert cleanup.state["stage"] == STAGE_CREATED
+    assert cleanup.state["validation"]["review_green"] == "unknown"
+    assert review_calls == []
+    assert not orchestrator_runner.run_one_expensive_step(cleanup.state).ran_step
+    reviewed = orchestrator_runner.run_one_expensive_step(
+        mark_deslop_closed(cleanup.state)
+    )
     green = record_clean_decision(
         reviewed.state,
         round_id="phase_review-round-1",
         lane="review_t1",
         reviewed_head="head-1",
     )
-    green["review_brief"] = "- frozen"
-    green["identity"]["branch"] = None
-    monkeypatch.setattr(orchestrator_runner, "current_branch", lambda cwd: None)
-    orchestrator_runner.run_one_expensive_step(green)
+    assert green["stage"] == STAGE_REVIEW_GREEN
+    assert not orchestrator_runner.run_one_expensive_step(green).ran_step
+    assert len(calls) == 1
 
     command, cwd = calls[0]
     assert command[-4:-1] == ["--commit", "base-1", "head-1"]
     assert (len(review_calls), command[-1]) == (1, "--review-brief=- frozen")
 
 
-def test_runner_blocks_stale_exact_head_before_closure(
+@pytest.mark.parametrize(
+    ("mode", "expected"),
+    [
+        ("fast", ["deslop", "review"]),
+        ("normal", ["arena", "deslop", "review"]),
+        ("deep", ["review", "arena", "deslop", "review"]),
+    ],
+)
+def test_configured_profiles_run_cleanup_once_between_arena_and_final_signoff(
+    monkeypatch, clean_worktree: None, tmp_path: Path, mode: str, expected: list[str]
+) -> None:
+    config = load_config(tmp_path / "state")
+    config["arena"]["enabled"] = True
+    config["orchestrator"]["stable_defaults"].update(
+        normal_arena_loops=1, deep_arena_loops=1
+    )
+    profile = resolve_orchestrator_profile(config, mode=mode)
+    state = _cycle(tmp_path, mode=mode)
+    state["review_plan"]["steps"] = [asdict(step) for step in profile.steps]
+    reviews = _stub_review(monkeypatch, "review-1", "review-2")
+    _stub_arena(monkeypatch, "arena-1")
+    monkeypatch.setattr(
+        orchestrator_runner,
+        "run_deslop_subprocess",
+        lambda **kwargs: subprocess.CompletedProcess(
+            [], 0, "Conformance: NOT_APPLICABLE\nReview decision: clean", ""
+        ),
+    )
+    observed = []
+    while state["stage"] != STAGE_REVIEW_GREEN:
+        result = orchestrator_runner.run_one_expensive_step(
+            state, state_dir=tmp_path / "state"
+        )
+        assert result.ran_step
+        observed.append(result.step)
+        assert len(observed) <= len(expected)
+        state = result.state
+        if result.step == "deslop":
+            assert state["validation"]["review_green"] == "unknown"
+            state = mark_deslop_closed(state)
+        else:
+            pending = state["pending_action"]
+            state = record_clean_decision(
+                state,
+                round_id=pending["round_id"],
+                lane=pending["lane"],
+                reviewed_head="head-1",
+            )
+    assert observed == expected
+    assert reviews[-1]["reviewer_count"] == 2
+    assert reviews[-1]["reasoning_effort"] == ("xhigh" if mode == "deep" else "medium")
+    assert not orchestrator_runner.run_one_expensive_step(state).ran_step
+
+
+def test_runner_retries_cleanup_on_current_head_and_blocks_wrong_branch_or_dirty_tree(
     monkeypatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     green = _cycle(tmp_path)
     green.update(stage=STAGE_RETRY_REQUESTED, pending_action={"kind": "run-deslop"})
     green["deslop"]["status"] = "failed"
-    green["rounds"] = [{"round_id": "round-1", "profile_step": {"index": 0}}]
-    green["review_progress"]["completed_steps"] = [{"round_id": "round-1"}]
     runner = orchestrator_runner
     monkeypatch.setattr(runner, "current_branch", lambda cwd: "feature/orchestrator")
     monkeypatch.setattr(runner, "dirty_worktree_scope", lambda *_: {"dirty_paths": []})
@@ -267,19 +330,27 @@ def test_runner_blocks_stale_exact_head_before_closure(
     monkeypatch.setattr(runner, "merge_base", lambda cwd, base, head: "different-base")
     calls: list[object] = []
     monkeypatch.setattr(
-        runner, "run_deslop_subprocess", lambda **kwargs: calls.append(kwargs)
+        runner,
+        "run_deslop_subprocess",
+        lambda **kwargs: (
+            calls.append(kwargs)
+            or subprocess.CompletedProcess(
+                [], 0, "Conformance: NOT_APPLICABLE\nReview decision: clean", ""
+            )
+        ),
     )
 
     result = runner.run_one_expensive_step(green)
     assert result.ran_step is True
-    assert result.step == "deslop-rerun"
+    assert result.step == "deslop"
     assert result.state["stage"] == STAGE_CREATED
     assert result.state["pending_action"]["kind"] == "run-review-step"
     for mirror in ("identity", "review_heads"):
         assert result.state[mirror]["head"] == "head-2"
         assert result.state[mirror]["merge_base"] == "different-base"
-    assert result.state["deslop"]["status"] == "tracked"
-    assert calls == []
+    assert result.state["deslop"]["status"] == "done"
+    assert result.state["review_progress"]["completed_steps"] == []
+    assert calls[0]["command"][-3:] == ["--commit", "different-base", "head-2"]
     monkeypatch.setattr(runner, "current_branch", lambda cwd: "other")
     assert runner.run_one_expensive_step(green).state is green
     monkeypatch.setattr(runner, "current_head", lambda cwd: "head-1")
@@ -291,7 +362,7 @@ def test_runner_blocks_stale_exact_head_before_closure(
     )
     assert runner.run_one_expensive_step(green).step == "blocked"
     assert "clean worktree required" in capsys.readouterr().out
-    assert calls == []
+    assert len(calls) == 1
 
 
 def test_deslop_subprocess_emits_parent_progress_without_leaking_child_stderr(
@@ -1185,7 +1256,7 @@ def test_runner_rejects_mismatched_arena_lane_and_task_class(
         orchestrator_runner.run_one_expensive_step(state, state_dir=tmp_path / "state")
 
 
-def test_runner_fast_mode_uses_same_post_clean_closure(
+def test_runner_fast_mode_failed_cleanup_blocks_signoff(
     monkeypatch, clean_worktree: None, tmp_path: Path
 ) -> None:
     review_calls = _stub_review(monkeypatch)
@@ -1205,23 +1276,11 @@ def test_runner_fast_mode_uses_same_post_clean_closure(
     )
 
     assert result.ran_step is True
-    assert result.step == "review"
-    assert len(review_calls) == 1
-    assert result.state["deslop"]["status"] == "tracked"
-    assert deslop_calls == []
-
-    green = record_clean_decision(
-        result.state,
-        round_id="phase_review-round-1",
-        lane="review_t1",
-        reviewed_head="head-1",
-    )
-
-    assert green["stage"] == STAGE_REVIEW_GREEN
-    assert green["pending_action"] is None
-
-    closure = orchestrator_runner.run_one_expensive_step(green)
-    assert closure.state["deslop"]["status"] == "failed"
+    assert result.step == "deslop"
+    assert review_calls == []
+    assert result.state["deslop"]["status"] == "failed"
+    assert len(deslop_calls) == 1
+    assert result.state["stage"] == STAGE_RETRY_REQUESTED
 
 
 def test_runner_retry_completes_closure_with_conformance(
@@ -1240,14 +1299,13 @@ def test_runner_retry_completes_closure_with_conformance(
     monkeypatch.setattr(
         orchestrator_runner, "run_deslop_subprocess", lambda **kwargs: next(outputs)
     )
-    reviewed = orchestrator_runner.run_one_expensive_step(_cycle(tmp_path))
-    green = record_clean_decision(
-        reviewed.state,
-        round_id="phase_review-round-1",
-        lane="review_t1",
-        reviewed_head="head-1",
-    )
-    failed = orchestrator_runner.run_one_expensive_step(green)
+    state = _cycle(tmp_path)
+    fix_context = {"findings_reviewed_head": "head-0", "fix_head": "head-1"}
+    state["pending_action"] = {
+        "kind": "run-review-step",
+        "fix_verification": fix_context,
+    }
+    failed = orchestrator_runner.run_one_expensive_step(state)
     assert failed.state["deslop"]["status"] == "failed"
     failed_again = orchestrator_runner.run_one_expensive_step(failed.state)
     assert failed_again.state["deslop"]["status"] == "failed"
@@ -1256,6 +1314,7 @@ def test_runner_retry_completes_closure_with_conformance(
     retried = orchestrator_runner.run_one_expensive_step(failed_preamble.state)
 
     assert retried.state["deslop"]["status"] == "done"
+    assert retried.state["pending_action"]["fix_verification"] == fix_context
     assert retried.state["deslop"]["conformance"] == "NOT_APPLICABLE"
     assert retried.state["deslop"]["decision"] == "findings"
     assert retried.state["deslop"]["findings"] == (

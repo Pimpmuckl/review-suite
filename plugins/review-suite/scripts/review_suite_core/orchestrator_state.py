@@ -1221,23 +1221,6 @@ def _last_completed_profile_round_id(state: dict[str, Any]) -> str | None:
     return None
 
 
-def _mark_deslop_rerun_needed_inplace(state: dict[str, Any]) -> None:
-    deslop = dict(state.get("deslop") or {})
-    if str(deslop.get("status") or "") not in {
-        DESLOP_STATUS_FAILED,
-        DESLOP_STATUS_DONE,
-        DESLOP_STATUS_CLOSED,
-    }:
-        return
-    cleanup_completed = bool(deslop.get("cleanup_completed"))
-    state["deslop"] = {
-        "tracked": True,
-        "status": DESLOP_STATUS_TRACKED,
-        "cleanup_completed": cleanup_completed,
-        "conformance_only": cleanup_completed,
-    }
-
-
 def mark_latest_profile_step_rerun_needed(
     state: dict[str, Any], *, head: str
 ) -> dict[str, Any]:
@@ -1256,7 +1239,6 @@ def mark_latest_profile_step_rerun_needed(
     for key in ("focused", "full_suite", "ci"):
         validation[key] = "unknown"
     validation.pop("note", None)
-    _mark_deslop_rerun_needed_inplace(next_state)
     action = _rewind_profile_step_action(next_state, profile_step)
     _set_review_green(next_state, "unknown")
     _set_stage(next_state, STAGE_CREATED, action)
@@ -1276,12 +1258,8 @@ def deslop_is_ready(state: dict[str, Any]) -> bool:
     deslop = dict(state.get("deslop") or {})
     if not bool(deslop.get("tracked")):
         return True
-    status = str(deslop.get("status") or "")
-    if status in {DESLOP_STATUS_DONE, DESLOP_STATUS_CLOSED}:
-        return True
-    return not (
-        state.get("stage") in {STAGE_REVIEW_GREEN, STAGE_LOCAL_GREEN_HANDOFF}
-        or dict(state.get("pending_action") or {}).get("kind") == "run-deslop"
+    return deslop.get("status") == DESLOP_STATUS_TRACKED and not deslop_should_run(
+        state
     )
 
 
@@ -1295,10 +1273,14 @@ def deslop_should_run(state: dict[str, Any]) -> bool:
             state.get("stage") == STAGE_RETRY_REQUESTED
             and dict(state.get("pending_action") or {}).get("kind") == "run-deslop"
         )
-    return status == DESLOP_STATUS_TRACKED and state.get("stage") in {
-        STAGE_REVIEW_GREEN,
-        STAGE_LOCAL_GREEN_HANDOFF,
-    }
+    steps = _review_plan_steps(state)
+    return (
+        status == DESLOP_STATUS_TRACKED
+        and state.get("stage") == STAGE_CREATED
+        and bool(steps)
+        and int(_review_progress(state)["next_step_index"]) == len(steps) - 1
+        and _profile_step_kind(steps[-1]) == "review"
+    )
 
 
 def mark_deslop_done(
@@ -1323,8 +1305,6 @@ def mark_deslop_done(
         "returncode": 0,
         "conformance": verdict,
         "reviewed_head": _required_text(reviewed_head, field="reviewed_head"),
-        "cleanup_completed": bool(prior.get("cleanup_completed"))
-        or not bool(prior.get("conformance_only")),
     }
     next_state["deslop"].pop("findings", None)
     if decision is not None:
@@ -1339,13 +1319,15 @@ def mark_deslop_done(
         "status": "none",
         "retry_count": int(recovery.get("retry_count") or 0),
     }
-    next_state["pending_action"] = None
-    _set_stage(next_state, STAGE_REVIEW_GREEN)
+    action = _next_profile_step_action(next_state)
+    if context := dict(next_state.get("pending_action") or {}).get("fix_verification"):
+        action["fix_verification"] = context
+    _set_stage(next_state, STAGE_CREATED, action)
     return next_state
 
 
 def mark_deslop_closed(
-    state: dict[str, Any], *, reason: str | None = None
+    state: dict[str, Any], *, reason: str | None = None, fixes_applied: bool = False
 ) -> dict[str, Any]:
     next_state = _copy_state(state)
     deslop = dict(next_state.get("deslop") or {})
@@ -1358,7 +1340,11 @@ def mark_deslop_closed(
         if reason is not None
         else None
     )
-    if deslop.get("conformance") == "MATERIALLY_DRIFTED" and not dismissal_reason:
+    if (
+        deslop.get("conformance") == "MATERIALLY_DRIFTED"
+        and not dismissal_reason
+        and not fixes_applied
+    ):
         raise ValueError(
             "materially drifted closure requires fixes or explicit dismissal; "
             "use --deslop-done --reason '<why the findings are dismissed>'"
@@ -1370,16 +1356,6 @@ def mark_deslop_closed(
     }
     if dismissal_reason:
         next_state["deslop"]["dismissal_reason"] = dismissal_reason
-    if (
-        next_state.get("stage") == STAGE_RETRY_REQUESTED
-        and dict(next_state.get("pending_action") or {}).get("kind") == "run-deslop"
-    ):
-        recovery = dict(next_state.get("recovery") or {})
-        next_state["recovery"] = {
-            "status": "none",
-            "retry_count": int(recovery.get("retry_count") or 0),
-        }
-        _set_stage(next_state, STAGE_CREATED, {"kind": "resume-after-deslop"})
     return next_state
 
 
@@ -1401,7 +1377,10 @@ def mark_deslop_failed(
         "reason": _required_text(reason, field="reason"),
         "retry_count": int(recovery.get("retry_count") or 0) + 1,
     }
-    _set_stage(next_state, STAGE_RETRY_REQUESTED, {"kind": "run-deslop"})
+    action = {"kind": "run-deslop"}
+    if context := dict(next_state.get("pending_action") or {}).get("fix_verification"):
+        action["fix_verification"] = context
+    _set_stage(next_state, STAGE_RETRY_REQUESTED, action)
     return next_state
 
 
@@ -1597,7 +1576,6 @@ def mark_fix_detected(
     fix_head = _required_text(head, field="head")
     active["fix_head"] = fix_head
     next_state.setdefault("review_heads", {})["last_fix_head"] = fix_head
-    _mark_deslop_rerun_needed_inplace(next_state)
     if _findings_use_followup(next_state):
         active["status"] = STAGE_FOLLOWUP_PENDING
         _set_stage(

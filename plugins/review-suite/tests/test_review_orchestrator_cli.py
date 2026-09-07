@@ -35,6 +35,15 @@ _GIT_ENV = os.environ | {
 def _isolate_default_state_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(review, "default_state_dir", lambda: tmp_path / "default-state")
 
+    def unexpected_cleanup(**kwargs: object) -> None:
+        raise AssertionError(
+            "Test must stub cleanup or create the cycle with --skip-deslop"
+        )
+
+    monkeypatch.setattr(
+        orchestrator_runner, "run_deslop_subprocess", unexpected_cleanup
+    )
+
 
 def _git(repo: Path, *args: str) -> str:
     proc = subprocess.run(
@@ -90,6 +99,17 @@ def _run_review(
 
     assert len(emitted) == 1
     return exit_code, emitted[0]
+
+
+def _run_review_after_cleanup(
+    monkeypatch: pytest.MonkeyPatch, args: list[str]
+) -> tuple[int, dict[str, object]]:
+    result = _run_review(monkeypatch, args)
+    if "--deslop-done" in str(result[1].get("Action", {}).get("cmd", "")):
+        public_id = str(result[1]["review"])
+        _run_review(monkeypatch, ["--id", public_id, "--deslop-done"])
+        return _run_review(monkeypatch, ["--id", public_id])
+    return result
 
 
 def _assert_decision_action(action: object) -> dict[str, str]:
@@ -150,10 +170,15 @@ def _stub_deslop(monkeypatch: pytest.MonkeyPatch, *returncodes: int) -> list[lis
     def fake_run(*, command: list[str], cwd: Path) -> subprocess.CompletedProcess:
         calls.append(command)
         index = min(len(calls) - 1, len(codes) - 1)
+        verdict = (
+            "CONFORMS"
+            if any(arg.startswith("--review-brief=") for arg in command)
+            else "NOT_APPLICABLE"
+        )
         return subprocess.CompletedProcess(
             command,
             codes[index],
-            stdout="Conformance: NOT_APPLICABLE\nReview decision: clean\n",
+            stdout=f"Conformance: {verdict}\nReview decision: clean\n",
             stderr="",
         )
 
@@ -1167,6 +1192,9 @@ def test_create_resume_and_id_reprint_use_one_pending_action(
     exit_code, second_step = _run_review(
         monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)]
     )
+    assert "--deslop-done" in second_step["Action"]["cmd"]
+    _run_review(monkeypatch, ["--id", public_id, "--deslop-done"])
+    exit_code, second_step = _run_review(monkeypatch, ["--id", public_id])
     assert exit_code == 0
     assert second_step["review"] == public_id
     assert "stage" not in second_step
@@ -1316,7 +1344,7 @@ def test_head_change_waits_for_failed_deslop_retry(
         monkeypatch,
         [
             "--mode",
-            "normal",
+            "fast",
             "--cd",
             str(repo),
             "--base",
@@ -1331,12 +1359,15 @@ def test_head_change_waits_for_failed_deslop_retry(
     _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
 
     state = _cycle_payload(state_dir, public_id)
-    assert state["deslop"]["status"] == "tracked"
-    assert [decision["command"] for decision in state["decisions"]] == ["findings"]
-    assert state["review_heads"]["last_fix_head"] == fixed_head
-    assert state["pending_action"]["fix_verification"]["findings_reviewed_head"]
-    assert len(deslop_calls) == 0
-    assert len(review_calls) == 2
+    assert state["deslop"]["status"] == "done"
+    assert state["deslop"]["reviewed_head"] == fixed_head
+    assert state["review_progress"]["completed_steps"] == []
+    assert state["identity"]["head"] == fixed_head
+    assert len(deslop_calls) == 2
+    assert review_calls == []
+    _run_review(monkeypatch, ["--id", public_id, "--deslop-done"])
+    _run_review(monkeypatch, ["--id", public_id])
+    assert review_calls[0]["review_scope"]["reviewed_head"] == fixed_head
 
 
 @pytest.mark.parametrize("flag", ["--skip-deslop", "--no-deslop"])
@@ -1405,6 +1436,7 @@ def test_review_brief_is_frozen_and_public_output_reports_coverage(
     _, created = _run_review(
         monkeypatch,
         [
+            "--skip-deslop",
             "--mode",
             "fast",
             "--review-brief",
@@ -1436,6 +1468,7 @@ def test_review_brief_is_frozen_and_public_output_reports_coverage(
         "argv",
         [
             "review.py",
+            "--skip-deslop",
             "--mode",
             "fast",
             "--review-brief",
@@ -1529,7 +1562,7 @@ def test_id_auto_records_structured_clean_and_runs_next_step(
     _git(repo, "checkout", "-b", "feature/auto-clean")
     _commit_file(repo, "app.txt", "feature\n", "feature")
 
-    _, created = _run_review(
+    _, created = _run_review_after_cleanup(
         monkeypatch,
         [
             "--mode",
@@ -1552,14 +1585,18 @@ def test_id_auto_records_structured_clean_and_runs_next_step(
         "step": "precision-signoff",
     }
 
-    exit_code, final = _run_review(
+    exit_code, final = _run_review_after_cleanup(
         monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)]
     )
 
     assert exit_code == 0
     assert len(review_calls) == 2
-    _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
-    _, final = _run_review(monkeypatch, ["--id", public_id, "--deslop-done"])
+    _run_review_after_cleanup(
+        monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)]
+    )
+    _, final = _run_review_after_cleanup(
+        monkeypatch, ["--id", public_id, "--deslop-done"]
+    )
     _assert_github_handoff(
         final["Action"],
         public_id=public_id,
@@ -1584,7 +1621,7 @@ def test_id_auto_records_structured_findings_before_fix_loop(
     _git(repo, "checkout", "-b", "feature/auto-findings")
     _commit_file(repo, "app.txt", "feature\n", "feature")
 
-    _, created = _run_review(
+    _, created = _run_review_after_cleanup(
         monkeypatch,
         [
             "--mode",
@@ -1601,7 +1638,7 @@ def test_id_auto_records_structured_findings_before_fix_loop(
     )
     public_id = str(created["review"])
 
-    exit_code, findings = _run_review(
+    exit_code, findings = _run_review_after_cleanup(
         monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)]
     )
 
@@ -1618,7 +1655,7 @@ def test_id_auto_records_structured_findings_before_fix_loop(
     assert len(review_calls) == 1
 
     _commit_file(repo, "app.txt", "fixed\n", "fix findings")
-    exit_code, clean = _run_review(
+    exit_code, clean = _run_review_after_cleanup(
         monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)]
     )
 
@@ -1810,10 +1847,11 @@ def test_wsl_flag_persists_to_orchestrated_steps(
     public_id = str(payload["review"])
 
     assert exit_code == 0
-    assert deslop_calls == []
+    assert len(deslop_calls) == 1
     state = _cycle_payload(state_dir, public_id)
     assert state["runtime"] == {"allow_unsafe_windows_wsl_fallback": True}
 
+    _run_review(monkeypatch, ["--id", public_id, "--deslop-done"])
     exit_code, _resumed = _run_review(
         monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)]
     )
@@ -1882,7 +1920,7 @@ def test_public_id_allocation_preserves_index_updates_written_before_lock(
     }
 
 
-def test_id_show_findings_prefers_closure_over_round_payload_without_running(
+def test_id_show_findings_prefers_open_cleanup_then_latest_review_without_running(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -1906,9 +1944,9 @@ def test_id_show_findings_prefers_closure_over_round_payload_without_running(
         "--state-dir",
         str(state_dir),
     ]
-    _, created = _run_review(monkeypatch, args)
+    _, created = _run_review_after_cleanup(monkeypatch, args)
     public_id = str(created["review"])
-    _run_review(monkeypatch, args)
+    _run_review_after_cleanup(monkeypatch, args)
     state = _cycle_payload(state_dir, public_id)
     round_id = str(state["rounds"][0]["round_id"])
     round_state_dir = state_dir / "orchestrator" / "review-rounds"
@@ -1975,12 +2013,24 @@ def test_id_show_findings_prefers_closure_over_round_payload_without_running(
     assert "status:" not in captured.out
     assert "Alpha recovered finding" in captured.out
 
-    state["deslop"]["findings"] = "Closure recovered finding"
+    state["deslop"].update(
+        tracked=True, status="done", findings="Closure recovered finding"
+    )
     _write_cycle_payload(state_dir, public_id, state)
     assert review.main() == 0
     captured = capsys.readouterr()
     assert "Closure recovered finding" in captured.out
     assert "Alpha recovered finding" not in captured.out
+    state["deslop"].update(tracked=False, status="closed")
+    _write_cycle_payload(state_dir, public_id, state)
+    assert review.main() == 0
+    captured = capsys.readouterr()
+    assert "Alpha recovered finding" in captured.out
+    assert "Closure recovered finding" not in captured.out
+    assert (
+        _cycle_payload(state_dir, public_id)["deslop"]["findings"]
+        == "Closure recovered finding"
+    )
     assert len(review_calls) == before_calls
 
 
@@ -1992,7 +2042,7 @@ def test_id_show_status_reports_cycle_without_advancing(
     def fail_deslop(*, command: list[str], cwd: Path) -> subprocess.CompletedProcess:
         raise AssertionError("show-status fixture must not run deslop")
 
-    monkeypatch.setattr(orchestrator_runner, "run_deslop_subprocess", fail_deslop)
+    _stub_deslop(monkeypatch)
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
     _init_repo(repo)
@@ -2000,7 +2050,7 @@ def test_id_show_status_reports_cycle_without_advancing(
     _git(repo, "checkout", "-b", "feature/show-status")
     _commit_file(repo, "app.txt", "feature\n", "feature")
 
-    _, created = _run_review(
+    _, created = _run_review_after_cleanup(
         monkeypatch,
         [
             "--mode",
@@ -2014,6 +2064,7 @@ def test_id_show_status_reports_cycle_without_advancing(
         ],
     )
     public_id = str(created["review"])
+    monkeypatch.setattr(orchestrator_runner, "run_deslop_subprocess", fail_deslop)
     before_state = _cycle_payload(state_dir, public_id)
     before_calls = len(review_calls)
     (repo / "scratch.txt").write_text("dirty\n", encoding="utf-8")
@@ -2034,7 +2085,7 @@ def test_id_show_status_reports_cycle_without_advancing(
         payload["merge_base"] == str(dict(before_state["identity"])["merge_base"])[:12]
     )
     assert payload["rounds"] == 1
-    assert payload["deslop"] == "tracked"
+    assert payload["deslop"] == "closed"
     assert payload["review_brief"] == "unavailable"
     assert payload["design_conformance_context"] == "unavailable"
     assert dict(payload["worktree"]) == {
@@ -2114,9 +2165,9 @@ def test_id_collects_running_round_without_spawning_duplicate(
         "--state-dir",
         str(state_dir),
     ]
-    _, created = _run_review(monkeypatch, args)
+    _, created = _run_review_after_cleanup(monkeypatch, args)
     public_id = str(created["review"])
-    _run_review(monkeypatch, args)
+    _run_review_after_cleanup(monkeypatch, args)
 
     state = _cycle_payload(state_dir, public_id)
     round_id = str(state["rounds"][0]["round_id"])
@@ -2157,7 +2208,7 @@ def test_id_collects_running_round_without_spawning_duplicate(
 
     monkeypatch.setattr(orchestrator_runner, "resume_review_step", fake_resume)
 
-    exit_code, payload = _run_review(
+    exit_code, payload = _run_review_after_cleanup(
         monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)]
     )
 
@@ -2318,9 +2369,10 @@ def test_contract_conflict_and_one_use_continue_are_durable(
     _git(repo, "checkout", "-b", "feature/convergence")
     _commit_file(repo, "app.txt", "feature\n", "feature")
 
-    _, opened = _run_review(
+    _, opened = _run_review_after_cleanup(
         monkeypatch,
         [
+            "--skip-deslop",
             "--mode",
             "fast",
             "--cd",
@@ -2332,12 +2384,12 @@ def test_contract_conflict_and_one_use_continue_are_durable(
         ],
     )
     public_id = str(opened["review"])
-    _run_review(
+    _run_review_after_cleanup(
         monkeypatch,
         ["--id", public_id, "--decision", "findings", "--state-dir", str(state_dir)],
     )
 
-    _, conflict = _run_review(
+    _, conflict = _run_review_after_cleanup(
         monkeypatch,
         [
             "--id",
@@ -2352,7 +2404,7 @@ def test_contract_conflict_and_one_use_continue_are_durable(
     assert set(conflict["Action"]["choices"]) == {"CONTINUE", "REPLAN", "RESLICE"}
 
     _git(repo, "commit", "--allow-empty", "-m", "tree-identical head")
-    _run_review(
+    _run_review_after_cleanup(
         monkeypatch,
         [
             "--id",
@@ -2367,7 +2419,7 @@ def test_contract_conflict_and_one_use_continue_are_durable(
     assert continued_state["stage"] == "fix-pending"
     assert continued_state["review_heads"]["last_fix_head"] is None
     assert len(review_calls) == 1
-    _run_review(
+    _run_review_after_cleanup(
         monkeypatch,
         [
             "--id",
@@ -2379,17 +2431,20 @@ def test_contract_conflict_and_one_use_continue_are_durable(
         ],
     )
     _commit_file(repo, "app.txt", "feature\nfix\n", "fix")
-    _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
-    _, exhausted = _run_review(
+    _run_review_after_cleanup(
+        monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)]
+    )
+    _, exhausted = _run_review_after_cleanup(
         monkeypatch,
         ["--id", public_id, "--decision", "findings", "--state-dir", str(state_dir)],
     )
 
     assert set(exhausted["Action"]["choices"]) == {"REPLAN", "RESLICE"}
     _commit_file(repo, "app.txt", "feature\nfix\nnext\n", "next fix")
-    _, redirected = _run_review(
+    _, redirected = _run_review_after_cleanup(
         monkeypatch,
         [
+            "--skip-deslop",
             "--mode",
             "deep",
             "--cd",
@@ -2401,7 +2456,7 @@ def test_contract_conflict_and_one_use_continue_are_durable(
         ],
     )
     assert redirected["review"] == public_id
-    _, replanned = _run_review(
+    _, replanned = _run_review_after_cleanup(
         monkeypatch,
         [
             "--id",
@@ -2418,9 +2473,10 @@ def test_contract_conflict_and_one_use_continue_are_durable(
         "CONTINUE",
         "REPLAN",
     ]
-    _, next_plan = _run_review(
+    _, next_plan = _run_review_after_cleanup(
         monkeypatch,
         [
+            "--skip-deslop",
             "--mode",
             "fast",
             "--cd",
@@ -2454,7 +2510,7 @@ def test_continue_consumes_material_fix_head_at_budget_stop(
     _git(repo, "checkout", "-b", "feature/closure-order")
     _commit_file(repo, "app.txt", "feature\n", "feature")
 
-    _, opened = _run_review(
+    _, opened = _run_review_after_cleanup(
         monkeypatch,
         [
             "--mode",
@@ -2469,7 +2525,7 @@ def test_continue_consumes_material_fix_head_at_budget_stop(
     )
     public_id = str(opened["review"])
     for index in (1, 2):
-        _run_review(
+        _run_review_after_cleanup(
             monkeypatch,
             [
                 "--id",
@@ -2486,13 +2542,15 @@ def test_continue_consumes_material_fix_head_at_budget_stop(
             "feature\n" + "".join(f"fix-{n}\n" for n in range(1, index + 1)),
             f"fix {index}",
         )
-        _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+        _run_review_after_cleanup(
+            monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)]
+        )
 
     if fix_before_classification:
         _commit_file(
             repo, "app.txt", "feature\nfix-1\nfix-2\nclosure-fix\n", "closure fix"
         )
-    _, breaker = _run_review(
+    _, breaker = _run_review_after_cleanup(
         monkeypatch,
         ["--id", public_id, "--state-dir", str(state_dir)]
         + ([] if fix_before_classification else ["--decision", "findings"]),
@@ -2507,14 +2565,16 @@ def test_continue_consumes_material_fix_head_at_budget_stop(
             repo, "app.txt", "feature\nfix-1\nfix-2\nclosure-fix\n", "closure fix"
         )
     )
-    _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+    _run_review_after_cleanup(
+        monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)]
+    )
     blocked_state = _cycle_payload(state_dir, public_id)
     assert blocked_state["convergence"]["status"] == "DECISION_REQUIRED"
     assert len(blocked_state["convergence"]["accepted_findings_heads"]) == 3
     assert blocked_state["review_heads"]["last_fix_head"] != authorized_head
     assert len(review_calls) == 3
 
-    _run_review(
+    _run_review_after_cleanup(
         monkeypatch,
         [
             "--id",
@@ -2530,9 +2590,11 @@ def test_continue_consumes_material_fix_head_at_budget_stop(
     assert continued_state["convergence"]["continue_pending"] is True
     assert len(review_calls) == 3
 
-    _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+    _run_review_after_cleanup(
+        monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)]
+    )
     assert review_calls[-1]["review_scope"]["reviewed_head"] == authorized_head
-    _, classified = _run_review(
+    _, classified = _run_review_after_cleanup(
         monkeypatch,
         [
             "--id",
@@ -2547,16 +2609,15 @@ def test_continue_consumes_material_fix_head_at_budget_stop(
         assert set(classified["Action"]["choices"]) == {"REPLAN", "RESLICE"}
     else:
         clean = _cycle_payload(state_dir, public_id)
-        assert deslop_calls == []
-        assert clean["deslop"]["status"] == "tracked"
-        assert classified["done"] is False
+        assert len(deslop_calls) == 1
+        assert clean["deslop"]["status"] == "closed"
+        assert classified["done"] is True
         assert clean["validation"]["full_suite"] == "unknown"
         assert len(clean["convergence"]["accepted_findings_heads"]) == 3
-        _, closure = _run_review(
+        _, closure = _run_review_after_cleanup(
             monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)]
         )
-        assert "--deslop-done" in closure["Action"]["cmd"]
-        assert closure["done"] is False
+        assert closure["done"] is True
         assert len(deslop_calls) == 1
 
 
@@ -2571,7 +2632,7 @@ def test_repeat_continue_restores_completed_unclassified_round(
     _commit_file(repo, "app.txt", "base\n", "base")
     _git(repo, "checkout", "-b", "feature/continue")
     _commit_file(repo, "app.txt", "feature\n", "feature")
-    _, opened = _run_review(
+    _, opened = _run_review_after_cleanup(
         monkeypatch,
         [
             "--mode",
@@ -2603,7 +2664,7 @@ def test_repeat_continue_restores_completed_unclassified_round(
     orchestrator_store.save_cycle(state_dir, legacy)
 
     for _ in range(2):
-        code, output = _run_review(
+        code, output = _run_review_after_cleanup(
             monkeypatch, [*args, "--convergence-decision", "continue"]
         )
         assert code == 0
@@ -2622,15 +2683,15 @@ def test_repeat_continue_restores_completed_unclassified_round(
         ):
             assert recovered[key] == legacy[key]
     assert len(review_calls) == 1
-    assert deslop_calls == []
-    code, _ = _run_review(monkeypatch, [*args, "--decision", "clean"])
+    assert len(deslop_calls) == 1
+    code, _ = _run_review_after_cleanup(monkeypatch, [*args, "--decision", "clean"])
     assert code == 0
     clean = _cycle_payload(state_dir, public_id)
     assert clean["decisions"][-1]["round_id"] == "round-4"
     assert clean["decisions"][-1]["command"] == "clean"
     assert len(clean["convergence"]["decisions"]) == 1
     assert clean["validation"]["full_suite"] == "unknown"
-    assert clean["deslop"]["status"] == "tracked"
+    assert clean["deslop"]["status"] == "closed"
 
 
 def test_fast_review_can_restart_into_deep_without_becoming_a_restart_target(
@@ -2942,11 +3003,9 @@ def test_closure_dismissal_persists_without_bypassing_gates_or_identity(
     assert dismissed["done"] is False
     assert dismissed["conformance"] == "MATERIALLY_DRIFTED"
     assert dismissed["closure_dismissal_reason"] == reason
-    _assert_github_handoff(
-        dismissed["Action"],
-        public_id=public_id,
-        state_dir=state_dir,
-        blocked_by=["full_suite:unknown", "ci:unknown"],
+    assert review_calls == []
+    assert (
+        _cycle_payload(state_dir, public_id)["validation"]["review_green"] == "unknown"
     )
     closed = _cycle_payload(state_dir, public_id)
     assert closed["deslop"] == {
@@ -2956,6 +3015,8 @@ def test_closure_dismissal_persists_without_bypassing_gates_or_identity(
         "dismissal_reason": reason,
     }
     assert {**closed, "deslop": drifted["deslop"]} == drifted
+    _run_review(monkeypatch, ["--id", public_id])
+    _run_review(monkeypatch, ["--id", public_id, "--decision", "clean"])
     _, waived = _run_review(
         monkeypatch,
         ["--id", public_id, "--github-result", "waived", "--github-note", "local test"],
@@ -2984,10 +3045,92 @@ def test_closure_dismissal_persists_without_bypassing_gates_or_identity(
     assert state["identity"]["merge_base"] == advanced_base
     assert state["stage"] == "created"
     assert state["pending_action"]["kind"] == "run-review-step"
-    assert state["deslop"]["status"] == "tracked"
-    assert "dismissal_reason" not in state["deslop"]
+    assert state["deslop"]["status"] == "closed"
+    assert state["deslop"]["dismissal_reason"] == reason
     assert len(deslop_calls) == 1
     assert len(review_calls) == 1
+
+
+@pytest.mark.parametrize(
+    "change", ["empty_commit", "message_amend", "equivalent_rebase"]
+)
+def test_cleanup_drift_requires_dismissal_after_changes_without_material_fixes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, change: str
+) -> None:
+    cleanup_calls = _stub_deslop(monkeypatch)
+    reviews = _stub_review(monkeypatch)
+    repo, state_dir = tmp_path / "repo", tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "README.md", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/drift")
+    head = _commit_file(repo, "app.txt", "feature\n", "feature")
+    _, opened = _run_review(
+        monkeypatch,
+        [
+            "--mode",
+            "fast",
+            "--cd",
+            str(repo),
+            "--base",
+            "main",
+            "--state-dir",
+            str(state_dir),
+        ],
+    )
+    public_id = str(opened["review"])
+    state = _cycle_payload(state_dir, public_id)
+    state["deslop"].update(conformance="MATERIALLY_DRIFTED", decision="findings")
+    _write_cycle_payload(state_dir, public_id, state)
+    if change == "equivalent_rebase":
+        _git(repo, "checkout", "main")
+        _commit_file(repo, "README.md", "new base\n", "main advances")
+        _git(repo, "checkout", "feature/drift")
+        _git(repo, "rebase", "main")
+    elif change == "empty_commit":
+        _git(repo, "commit", "--allow-empty", "-m", "no code changes")
+    else:
+        _git(repo, "commit", "--amend", "-m", "new message")
+    assert _git(repo, "rev-parse", "HEAD") != head
+    _, pending = _run_review(monkeypatch, ["--id", public_id])
+    assert "dismiss" in pending["Action"]["choices"]
+    assert _cycle_payload(state_dir, public_id)["deslop"]["status"] == "done"
+    if change == "equivalent_rebase":
+        for extra_args in ([], ["--amend"]):
+            _git(
+                repo,
+                "commit",
+                "--allow-empty",
+                *extra_args,
+                "-m",
+                "still no cleanup fixes",
+            )
+            _, pending = _run_review(monkeypatch, ["--id", public_id])
+            assert "dismiss" in pending["Action"]["choices"]
+            assert _cycle_payload(state_dir, public_id)["deslop"]["status"] == "done"
+    errors = []
+    monkeypatch.setattr(
+        review, "emit_error", lambda message, **kwargs: errors.append(message) or 2
+    )
+    monkeypatch.setattr(sys, "argv", ["review.py", "--id", public_id, "--deslop-done"])
+    assert review.main() == 2
+    assert "explicit dismissal" in errors[-1]
+    if change == "equivalent_rebase":
+        _amend_file(repo, "app.txt", "simplified\n")
+    else:
+        _run_review(
+            monkeypatch,
+            [
+                "--id",
+                public_id,
+                "--deslop-done",
+                "--reason",
+                "Allowed by the frozen brief",
+            ],
+        )
+    _run_review(monkeypatch, ["--id", public_id])
+    assert _cycle_payload(state_dir, public_id)["deslop"]["status"] == "closed"
+    assert len(reviews) == 1
+    assert len(cleanup_calls) == 1
 
 
 def test_deslop_done_is_primary_action_when_no_other_action_remains() -> None:
@@ -3066,9 +3209,10 @@ def test_review_step_output_is_not_reprinted_by_review_py(
     _init_repo(repo)
     _commit_file(repo, "app.txt", "base\n", "base")
 
-    exit_code, payload = _run_review(
+    exit_code, payload = _run_review_after_cleanup(
         monkeypatch,
         [
+            "--skip-deslop",
             "--mode",
             "fast",
             "--cd",
@@ -3186,7 +3330,7 @@ def test_github_review_rejects_cycle_before_local_green(
     assert exit_code == 2
     assert errors == [
         (
-            "--github-review requires completed exact-head closure",
+            "--github-review requires local green review state",
             {
                 "status": "usage_error",
                 "help_items": [review._help_command()],
@@ -3205,7 +3349,7 @@ def test_github_review_runs_existing_lane_with_canonical_state_dir_and_force(
     _init_repo(repo)
     _commit_file(repo, "app.txt", "base\n", "base")
 
-    _, opened = _run_review(
+    _, opened = _run_review_after_cleanup(
         monkeypatch,
         [
             "--mode",
@@ -3219,13 +3363,15 @@ def test_github_review_runs_existing_lane_with_canonical_state_dir_and_force(
         ],
     )
     public_id = str(opened["review"])
-    _, clean = _run_review(
+    _, clean = _run_review_after_cleanup(
         monkeypatch,
         ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)],
     )
     assert "stage" not in clean
-    _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
-    _run_review(monkeypatch, ["--id", public_id, "--deslop-done"])
+    _run_review_after_cleanup(
+        monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)]
+    )
+    _run_review_after_cleanup(monkeypatch, ["--id", public_id, "--deslop-done"])
 
     calls: list[list[str]] = []
     real_subprocess_run = review.subprocess.run
@@ -3278,7 +3424,7 @@ def test_github_result_findings_reenters_existing_cycle_for_final_signoff(
     _git(repo, "checkout", "-b", "feature/github-findings")
     _commit_file(repo, "app.txt", "feature\n", "feature")
 
-    _, opened = _run_review(
+    _, opened = _run_review_after_cleanup(
         monkeypatch,
         [
             "--mode",
@@ -3292,9 +3438,13 @@ def test_github_result_findings_reenters_existing_cycle_for_final_signoff(
         ],
     )
     public_id = str(opened["review"])
-    _run_review(monkeypatch, ["--id", public_id, "--decision", "clean"])
-    _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
-    _, green = _run_review(monkeypatch, ["--id", public_id, "--deslop-done"])
+    _run_review_after_cleanup(monkeypatch, ["--id", public_id, "--decision", "clean"])
+    _run_review_after_cleanup(
+        monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)]
+    )
+    _, green = _run_review_after_cleanup(
+        monkeypatch, ["--id", public_id, "--deslop-done"]
+    )
     _assert_github_handoff(
         green["Action"],
         public_id=public_id,
@@ -3302,7 +3452,7 @@ def test_github_result_findings_reenters_existing_cycle_for_final_signoff(
         blocked_by=["full_suite:unknown", "ci:unknown"],
     )
 
-    exit_code, github_findings = _run_review(
+    exit_code, github_findings = _run_review_after_cleanup(
         monkeypatch,
         [
             "--id",
@@ -3328,7 +3478,7 @@ def test_github_result_findings_reenters_existing_cycle_for_final_signoff(
     assert state["validation"]["review_green"] == "unknown"
 
     fixed_head = _commit_file(repo, "app.txt", "feature\nfixed\n", "fix github finding")
-    _, signoff = _run_review(
+    _, signoff = _run_review_after_cleanup(
         monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)]
     )
     assert len(followup_calls) == 0
@@ -3340,12 +3490,16 @@ def test_github_result_findings_reenters_existing_cycle_for_final_signoff(
     assert state["pending_action"]["round_id"] == "signoff-round-2"
     assert state["review_progress"]["completed_steps"] == []
 
-    _run_review(monkeypatch, ["--id", public_id, "--decision", "clean"])
-    _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
-    assert len(deslop_calls) == 2
-    assert fixed_head == deslop_calls[-1][deslop_calls[-1].index("--commit") + 2]
-    assert "--conformance-only" in deslop_calls[-1]
-    _, final_clean = _run_review(monkeypatch, ["--id", public_id, "--deslop-done"])
+    _run_review_after_cleanup(monkeypatch, ["--id", public_id, "--decision", "clean"])
+    _run_review_after_cleanup(
+        monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)]
+    )
+    assert len(deslop_calls) == 1
+    assert review_calls[-1]["review_scope"]["reviewed_head"] == fixed_head
+    assert "--conformance-only" not in deslop_calls[-1]
+    _, final_clean = _run_review_after_cleanup(
+        monkeypatch, ["--id", public_id, "--deslop-done"]
+    )
     _assert_github_handoff(
         final_clean["Action"],
         public_id=public_id,
@@ -3370,7 +3524,7 @@ def test_github_result_clean_and_waived_are_terminal_for_existing_cycle(
     _init_repo(repo)
     _commit_file(repo, "app.txt", "base\n", "base")
 
-    _, opened = _run_review(
+    _, opened = _run_review_after_cleanup(
         monkeypatch,
         [
             "--mode",
@@ -3384,11 +3538,13 @@ def test_github_result_clean_and_waived_are_terminal_for_existing_cycle(
         ],
     )
     public_id = str(opened["review"])
-    _run_review(monkeypatch, ["--id", public_id, "--decision", "clean"])
-    _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
-    _run_review(monkeypatch, ["--id", public_id, "--deslop-done"])
+    _run_review_after_cleanup(monkeypatch, ["--id", public_id, "--decision", "clean"])
+    _run_review_after_cleanup(
+        monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)]
+    )
+    _run_review_after_cleanup(monkeypatch, ["--id", public_id, "--deslop-done"])
 
-    exit_code, clean = _run_review(
+    exit_code, clean = _run_review_after_cleanup(
         monkeypatch,
         ["--id", public_id, "--github-result", "clean", "--state-dir", str(state_dir)],
     )
@@ -3460,7 +3616,7 @@ def test_github_result_clean_and_waived_are_terminal_for_existing_cycle(
     ]
     assert _cycle_payload(state_dir, public_id) == before_validation
 
-    exit_code, clean = _run_review(
+    exit_code, clean = _run_review_after_cleanup(
         monkeypatch,
         [
             "--id",
@@ -3505,7 +3661,7 @@ def test_github_result_clean_and_waived_are_terminal_for_existing_cycle(
     assert errors[0][0] == "--github-note is required when --github-result waived"
 
     monkeypatch.setattr(review, "emit_toon", lambda payload: None)
-    exit_code, waived = _run_review(
+    exit_code, waived = _run_review_after_cleanup(
         monkeypatch,
         [
             "--id",
@@ -3527,7 +3683,7 @@ def test_github_result_clean_and_waived_are_terminal_for_existing_cycle(
     stale_head = _commit_file(
         repo, "app.txt", "base\nnew work\n", "new work after github waiver"
     )
-    exit_code, stale = _run_review(
+    exit_code, stale = _run_review_after_cleanup(
         monkeypatch,
         [
             "--id",
@@ -3550,7 +3706,7 @@ def test_github_result_clean_and_waived_are_terminal_for_existing_cycle(
     assert state["github_review"] == {"status": "unknown"}
     assert state["validation"]["full_suite"] == "unknown"
     assert state["validation"]["ci"] == "unknown"
-    assert state["deslop"]["status"] == "tracked"
+    assert state["deslop"]["status"] == "closed"
 
 
 def test_github_result_findings_does_not_auto_start_followup_when_fix_already_committed(
@@ -3622,7 +3778,7 @@ def test_pending_github_review_after_amend_reuses_same_id_for_signoff(
     _git(repo, "checkout", "-b", "feature/github-amend")
     _commit_file(repo, "app.txt", "feature\n", "feature")
 
-    _, opened = _run_review(
+    _, opened = _run_review_after_cleanup(
         monkeypatch,
         [
             "--mode",
@@ -3636,13 +3792,15 @@ def test_pending_github_review_after_amend_reuses_same_id_for_signoff(
         ],
     )
     public_id = str(opened["review"])
-    _, final_clean = _run_review(
+    _, final_clean = _run_review_after_cleanup(
         monkeypatch,
         ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)],
     )
-    _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
-    _run_review(monkeypatch, ["--id", public_id, "--deslop-done"])
-    _run_review(
+    _run_review_after_cleanup(
+        monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)]
+    )
+    _run_review_after_cleanup(monkeypatch, ["--id", public_id, "--deslop-done"])
+    _run_review_after_cleanup(
         monkeypatch,
         [
             "--id",
@@ -3657,7 +3815,7 @@ def test_pending_github_review_after_amend_reuses_same_id_for_signoff(
     )
     amended_head = _amend_file(repo, "app.txt", "feature\nfix from github review\n")
 
-    exit_code, status = _run_review(
+    exit_code, status = _run_review_after_cleanup(
         monkeypatch, ["--id", public_id, "--show-status", "--state-dir", str(state_dir)]
     )
 
@@ -3672,7 +3830,7 @@ def test_pending_github_review_after_amend_reuses_same_id_for_signoff(
         raise AssertionError("--github-review must not run before amended head signoff")
 
     monkeypatch.setattr(review, "_run_github_review", fail_github_review)
-    _, blocked_github = _run_review(
+    _, blocked_github = _run_review_after_cleanup(
         monkeypatch,
         ["--id", public_id, "--github-review", "--state-dir", str(state_dir)],
     )
@@ -3680,7 +3838,7 @@ def test_pending_github_review_after_amend_reuses_same_id_for_signoff(
     assert blocked_github["Action"]["cmd"].endswith(f"review.py --id {public_id}")
     assert "--github-review" not in str(blocked_github["Action"]["cmd"])
 
-    _, rerun = _run_review(
+    _, rerun = _run_review_after_cleanup(
         monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)]
     )
 
@@ -3691,12 +3849,16 @@ def test_pending_github_review_after_amend_reuses_same_id_for_signoff(
     assert state["validation"]["full_suite"] == "unknown"
     assert state["validation"]["ci"] == "unknown"
 
-    _run_review(
+    _run_review_after_cleanup(
         monkeypatch,
         ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)],
     )
-    _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
-    _, final_clean = _run_review(monkeypatch, ["--id", public_id, "--deslop-done"])
+    _run_review_after_cleanup(
+        monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)]
+    )
+    _, final_clean = _run_review_after_cleanup(
+        monkeypatch, ["--id", public_id, "--deslop-done"]
+    )
     _assert_github_handoff(
         final_clean["Action"],
         public_id=public_id,
@@ -3719,7 +3881,7 @@ def test_mode_rerun_after_pending_github_head_change_reuses_same_id_for_signoff(
     _git(repo, "checkout", "-b", "feature/github-head-change-mode-rerun")
     _commit_file(repo, "app.txt", "feature\n", "feature")
 
-    _, opened = _run_review(
+    _, opened = _run_review_after_cleanup(
         monkeypatch,
         [
             "--mode",
@@ -3733,7 +3895,7 @@ def test_mode_rerun_after_pending_github_head_change_reuses_same_id_for_signoff(
         ],
     )
     public_id = str(opened["review"])
-    _run_review(
+    _run_review_after_cleanup(
         monkeypatch,
         ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)],
     )
@@ -3744,7 +3906,7 @@ def test_mode_rerun_after_pending_github_head_change_reuses_same_id_for_signoff(
         "fix github review finding",
     )
 
-    exit_code, resumed = _run_review(
+    exit_code, resumed = _run_review_after_cleanup(
         monkeypatch,
         [
             "--mode",
@@ -3768,7 +3930,7 @@ def test_mode_rerun_after_pending_github_head_change_reuses_same_id_for_signoff(
     assert state["github_review"]["status"] == "unknown"
 
 
-def test_patch_equivalent_rebase_after_closed_deslop_reopens_local_closure(
+def test_patch_equivalent_rebase_after_cleanup_keeps_local_signoff(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -3782,7 +3944,7 @@ def test_patch_equivalent_rebase_after_closed_deslop_reopens_local_closure(
     _git(repo, "checkout", "-b", "feature/green-base-drift")
     original_head = _commit_file(repo, "src/app.txt", "feature\n", "feature")
 
-    _, opened = _run_review(
+    _, opened = _run_review_after_cleanup(
         monkeypatch,
         [
             "--mode",
@@ -3796,12 +3958,14 @@ def test_patch_equivalent_rebase_after_closed_deslop_reopens_local_closure(
         ],
     )
     public_id = str(opened["review"])
-    _run_review(
+    _run_review_after_cleanup(
         monkeypatch,
         ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)],
     )
-    _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
-    _run_review(monkeypatch, ["--id", public_id, "--deslop-done"])
+    _run_review_after_cleanup(
+        monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)]
+    )
+    _run_review_after_cleanup(monkeypatch, ["--id", public_id, "--deslop-done"])
 
     _git(repo, "checkout", "main")
     current_base = _commit_file(repo, "docs/notes.md", "main notes\n", "main moves")
@@ -3809,7 +3973,7 @@ def test_patch_equivalent_rebase_after_closed_deslop_reopens_local_closure(
     _git(repo, "rebase", "main")
     rebased_head = _git(repo, "rev-parse", "HEAD")
 
-    exit_code, resumed = _run_review(
+    exit_code, resumed = _run_review_after_cleanup(
         monkeypatch,
         [
             "--mode",
@@ -3825,18 +3989,14 @@ def test_patch_equivalent_rebase_after_closed_deslop_reopens_local_closure(
 
     assert exit_code == 0
     assert resumed["review"] == public_id
-    assert len(review_calls) == 2
+    assert len(review_calls) == 1
     assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 1
     state = _cycle_payload(state_dir, public_id)
-    assert state["stage"] == "decision-pending"
+    assert state["stage"] == "review-green"
     assert state["identity"]["head"] == rebased_head
     assert state["identity"]["merge_base"] == current_base
-    assert state["deslop"] == {
-        "tracked": True,
-        "status": "tracked",
-        "cleanup_completed": True,
-        "conformance_only": True,
-    }
+    assert state["deslop"]["status"] == "closed"
+    assert state["deslop"]["reviewed_head"] == rebased_head
     assert state["base_drift"] == {
         "status": "ignored_no_path_overlap",
         "recorded_merge_base": base_at_review,
@@ -3865,7 +4025,7 @@ def test_github_result_after_amend_requires_same_id_signoff(
     _git(repo, "checkout", "-b", "feature/github-result-amend")
     _commit_file(repo, "app.txt", "feature\n", "feature")
 
-    _, opened = _run_review(
+    _, opened = _run_review_after_cleanup(
         monkeypatch,
         [
             "--mode",
@@ -3879,13 +4039,13 @@ def test_github_result_after_amend_requires_same_id_signoff(
         ],
     )
     public_id = str(opened["review"])
-    _run_review(
+    _run_review_after_cleanup(
         monkeypatch,
         ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)],
     )
     amended_head = _amend_file(repo, "app.txt", "feature\nfix before github result\n")
 
-    _, result = _run_review(
+    _, result = _run_review_after_cleanup(
         monkeypatch,
         ["--id", public_id, "--github-result", "clean", "--state-dir", str(state_dir)],
     )
@@ -3913,7 +4073,7 @@ def test_mode_rerun_after_pending_review_amend_reuses_existing_cycle(
     _git(repo, "checkout", "-b", "feature/deslop-amend")
     original_head = _commit_file(repo, "app.txt", "feature\n", "feature")
 
-    _, created = _run_review(
+    _, created = _run_review_after_cleanup(
         monkeypatch,
         [
             "--mode",
@@ -3936,7 +4096,7 @@ def test_mode_rerun_after_pending_review_amend_reuses_existing_cycle(
     amended_head = _amend_file(repo, "app.txt", "feature\nfix from deslop\n")
     assert amended_head != original_head
 
-    exit_code, resumed = _run_review(
+    exit_code, resumed = _run_review_after_cleanup(
         monkeypatch,
         [
             "--mode",
@@ -3952,7 +4112,7 @@ def test_mode_rerun_after_pending_review_amend_reuses_existing_cycle(
 
     assert exit_code == 0
     assert resumed["review"] == public_id
-    assert len(deslop_calls) == 0
+    assert len(deslop_calls) == 1
     assert len(review_calls) == 2
     assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 1
     state = _cycle_payload(state_dir, public_id)
@@ -3960,7 +4120,7 @@ def test_mode_rerun_after_pending_review_amend_reuses_existing_cycle(
     assert state["review_heads"]["head"] == amended_head
     assert state["rounds"][0]["reviewed_head"] == amended_head
 
-    exit_code, restarted = _run_review(
+    exit_code, restarted = _run_review_after_cleanup(
         monkeypatch,
         [
             "--id",
@@ -3975,7 +4135,7 @@ def test_mode_rerun_after_pending_review_amend_reuses_existing_cycle(
     )
     assert exit_code == 0
     assert restarted["review"] != public_id
-    assert len(deslop_calls) == 0
+    assert len(deslop_calls) == 1
 
 
 def test_mode_rerun_allows_non_overlapping_merge_base_drift_without_rerunning_deslop(
@@ -3992,7 +4152,7 @@ def test_mode_rerun_allows_non_overlapping_merge_base_drift_without_rerunning_de
     _git(repo, "checkout", "-b", "feature/base-drift")
     original_head = _commit_file(repo, "src/app.txt", "feature\n", "feature")
 
-    _, created = _run_review(
+    _, created = _run_review_after_cleanup(
         monkeypatch,
         [
             "--mode",
@@ -4015,7 +4175,7 @@ def test_mode_rerun_allows_non_overlapping_merge_base_drift_without_rerunning_de
     rebased_head = _git(repo, "rev-parse", "HEAD")
     assert rebased_head != original_head
 
-    exit_code, resumed = _run_review(
+    exit_code, resumed = _run_review_after_cleanup(
         monkeypatch,
         [
             "--mode",
@@ -4031,7 +4191,7 @@ def test_mode_rerun_allows_non_overlapping_merge_base_drift_without_rerunning_de
 
     assert exit_code == 0
     assert resumed["review"] == public_id
-    assert len(deslop_calls) == 0
+    assert len(deslop_calls) == 1
     assert len(review_calls) == 2
     assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 1
     state = _cycle_payload(state_dir, public_id)
@@ -4125,7 +4285,7 @@ def test_mode_rerun_after_initial_review_commit_reuses_cycle(
     _git(repo, "checkout", "-b", "feature/deslop-new-commit")
     _commit_file(repo, "app.txt", "feature\n", "feature")
 
-    _, created = _run_review(
+    _, created = _run_review_after_cleanup(
         monkeypatch,
         [
             "--mode",
@@ -4141,7 +4301,7 @@ def test_mode_rerun_after_initial_review_commit_reuses_cycle(
     old_id = str(created["review"])
     new_head = _commit_file(repo, "app.txt", "feature\nnew work\n", "continue feature")
 
-    exit_code, fresh = _run_review(
+    exit_code, fresh = _run_review_after_cleanup(
         monkeypatch,
         [
             "--mode",
@@ -4157,7 +4317,7 @@ def test_mode_rerun_after_initial_review_commit_reuses_cycle(
 
     assert exit_code == 0
     assert fresh["review"] == old_id
-    assert len(deslop_calls) == 0
+    assert len(deslop_calls) == 1
     state = _cycle_payload(state_dir, old_id)
     assert state["identity"]["head"] == new_head
     assert len(review_calls) == 2
@@ -4236,7 +4396,7 @@ def test_mode_rerun_after_initial_review_reset_reuses_cycle(
     _git(repo, "checkout", "-b", "feature/deslop-reset")
     _commit_file(repo, "app.txt", "feature\n", "feature")
 
-    _, created = _run_review(
+    _, created = _run_review_after_cleanup(
         monkeypatch,
         [
             "--mode",
@@ -4252,7 +4412,7 @@ def test_mode_rerun_after_initial_review_reset_reuses_cycle(
     old_id = str(created["review"])
     _git(repo, "checkout", "-B", "feature/deslop-reset", "main")
 
-    exit_code, fresh = _run_review(
+    exit_code, fresh = _run_review_after_cleanup(
         monkeypatch,
         [
             "--mode",
@@ -4268,7 +4428,7 @@ def test_mode_rerun_after_initial_review_reset_reuses_cycle(
 
     assert exit_code == 0
     assert fresh["review"] == old_id
-    assert len(deslop_calls) == 0
+    assert len(deslop_calls) == 1
     state = _cycle_payload(state_dir, old_id)
     assert state["identity"]["head"] == base_head
     assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 1
@@ -4290,7 +4450,7 @@ def test_id_rerun_after_pending_decision_amend_auto_verifies_same_cycle(
     _git(repo, "checkout", "-b", "feature/pending-amend")
     original_head = _commit_file(repo, "app.txt", "feature\n", "feature")
 
-    _, created = _run_review(
+    _, created = _run_review_after_cleanup(
         monkeypatch,
         [
             "--mode",
@@ -4304,7 +4464,9 @@ def test_id_rerun_after_pending_decision_amend_auto_verifies_same_cycle(
         ],
     )
     public_id = str(created["review"])
-    _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+    _run_review_after_cleanup(
+        monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)]
+    )
     state = _cycle_payload(state_dir, public_id)
     assert state["stage"] == "decision-pending"
     assert state["rounds"][0]["reviewed_head"] == original_head
@@ -4312,7 +4474,7 @@ def test_id_rerun_after_pending_decision_amend_auto_verifies_same_cycle(
     amended_head = _amend_file(repo, "app.txt", "feature\nfix pending finding\n")
     assert amended_head != original_head
 
-    exit_code, verification = _run_review(
+    exit_code, verification = _run_review_after_cleanup(
         monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)]
     )
 
@@ -4411,7 +4573,7 @@ def test_id_rerun_after_findings_fix_allows_non_overlapping_merge_base_drift(
     _git(repo, "checkout", "-b", "feature/fix-after-base-drift")
     reviewed_head = _commit_file(repo, "app.txt", "feature\n", "feature")
 
-    _, created = _run_review(
+    _, created = _run_review_after_cleanup(
         monkeypatch,
         [
             "--mode",
@@ -4425,8 +4587,10 @@ def test_id_rerun_after_findings_fix_allows_non_overlapping_merge_base_drift(
         ],
     )
     public_id = str(created["review"])
-    _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
-    _run_review(
+    _run_review_after_cleanup(
+        monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)]
+    )
+    _run_review_after_cleanup(
         monkeypatch,
         ["--id", public_id, "--decision", "findings", "--state-dir", str(state_dir)],
     )
@@ -4440,7 +4604,7 @@ def test_id_rerun_after_findings_fix_allows_non_overlapping_merge_base_drift(
         repo, "app.txt", "feature\nfix\n", "fix findings after rebase"
     )
 
-    exit_code, verification = _run_review(
+    exit_code, verification = _run_review_after_cleanup(
         monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)]
     )
 
@@ -4492,7 +4656,7 @@ def test_id_rerun_after_findings_fix_allows_overlapping_base_drift(
         repo, "spec.md", "feature\nshared\n", "touch shared spec"
     )
 
-    _, created = _run_review(
+    _, created = _run_review_after_cleanup(
         monkeypatch,
         [
             "--mode",
@@ -4506,7 +4670,9 @@ def test_id_rerun_after_findings_fix_allows_overlapping_base_drift(
         ],
     )
     public_id = str(created["review"])
-    _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
+    _run_review_after_cleanup(
+        monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)]
+    )
 
     _git(repo, "checkout", "main")
     _commit_file(repo, "spec.md", "base\nmain moved\n", "main moves shared spec")
@@ -4514,7 +4680,7 @@ def test_id_rerun_after_findings_fix_allows_overlapping_base_drift(
     _git(repo, "rebase", "main", "-X", "theirs")
     fixed_head = _amend_file(repo, "app.txt", "feature\nfix\n")
 
-    _, findings = _run_review(
+    _, findings = _run_review_after_cleanup(
         monkeypatch,
         ["--id", public_id, "--decision", "findings", "--state-dir", str(state_dir)],
     )
@@ -4523,7 +4689,7 @@ def test_id_rerun_after_findings_fix_allows_overlapping_base_drift(
         == "Commit/amend valid fixes, then rerun this command."
     )
 
-    exit_code, verification = _run_review(
+    exit_code, verification = _run_review_after_cleanup(
         monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)]
     )
 
@@ -4700,7 +4866,7 @@ def test_validation_flags_do_not_run_expensive_resume(
     _git(repo, "checkout", "-b", "feature/validation-only")
     _commit_file(repo, "app.txt", "feature\n", "feature")
 
-    _, created = _run_review(
+    _, created = _run_review_after_cleanup(
         monkeypatch,
         [
             "--mode",
@@ -4714,21 +4880,23 @@ def test_validation_flags_do_not_run_expensive_resume(
         ],
     )
     public_id = str(created["review"])
-    _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
-    _run_review(
+    _run_review_after_cleanup(
+        monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)]
+    )
+    _run_review_after_cleanup(
         monkeypatch,
         ["--id", public_id, "--decision", "findings", "--state-dir", str(state_dir)],
     )
     _commit_file(repo, "app.txt", "fixed\n", "fix findings")
 
-    exit_code, payload = _run_review(
+    exit_code, payload = _run_review_after_cleanup(
         monkeypatch,
         ["--id", public_id, "--full-suite", "pending", "--state-dir", str(state_dir)],
     )
 
     assert exit_code == 0
     assert "stage" not in payload
-    assert len(deslop_calls) == 0
+    assert len(deslop_calls) == 1
     assert len(review_calls) == 1
     assert followup_calls == []
     state = _cycle_payload(state_dir, public_id)
@@ -4736,17 +4904,19 @@ def test_validation_flags_do_not_run_expensive_resume(
     assert state["active_findings"]["round_id"] == "phase_review-round-1"
 
 
-def test_fast_mode_runs_same_bounded_closure_after_review(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+@pytest.mark.parametrize("resume", ["id", "acknowledge", "mode"])
+@pytest.mark.parametrize("edit_kind", ["commit", "amend"])
+def test_cleanup_edits_precede_first_fast_signoff_and_final_fixes_do_not_repeat_cleanup(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, resume: str, edit_kind: str
 ) -> None:
-    review_calls = _stub_review(monkeypatch)
-    _stub_deslop(monkeypatch)
-    repo = tmp_path / "repo"
-    state_dir = tmp_path / "state"
+    review_calls = _stub_review(monkeypatch, "signoff-1", "signoff-2")
+    cleanup_calls = _stub_deslop(monkeypatch)
+    repo, state_dir = tmp_path / "repo", tmp_path / "state"
     _init_repo(repo)
     _commit_file(repo, "app.txt", "base\n", "base")
-
-    exit_code, payload = _run_review(
+    _git(repo, "checkout", "-b", "feature/cleanup")
+    _commit_file(repo, "app.txt", "feature\n", "feature")
+    _, opened = _run_review(
         monkeypatch,
         [
             "--mode",
@@ -4759,37 +4929,52 @@ def test_fast_mode_runs_same_bounded_closure_after_review(
             str(state_dir),
         ],
     )
+    public_id = str(opened["review"])
+    assert len(cleanup_calls) == 1
+    assert review_calls == []
+    assert opened["done"] is False
+    assert "--deslop-done" in opened["Action"]["cmd"]
+    _run_review(monkeypatch, ["--id", public_id])
+    assert review_calls == []
+    state = _cycle_payload(state_dir, public_id)
+    state["deslop"].update(conformance="MATERIALLY_DRIFTED", decision="findings")
+    state["validation"].update(focused="passed", full_suite="passed", ci="passed")
+    _write_cycle_payload(state_dir, public_id, state)
 
-    assert exit_code == 0
-    assert "stage" not in payload
-    assert len(review_calls) == 1
-    public_id = str(payload["review"])
+    cleanup_head = (
+        _amend_file(repo, "app.txt", "simplified\n")
+        if edit_kind == "amend"
+        else _commit_file(repo, "app.txt", "simplified\n", "cleanup")
+    )
+    resume_args = (
+        ["--mode", "fast", "--cd", str(repo), "--base", "main"]
+        if resume == "mode"
+        else ["--id", public_id]
+        + (["--deslop-done"] if resume == "acknowledge" else [])
+    )
+    _, resumed = _run_review(monkeypatch, resume_args)
+    assert resumed["review"] == public_id
+    state = _cycle_payload(state_dir, public_id)
+    assert state["deslop"]["status"] == "closed"
+    assert state["identity"]["head"] == cleanup_head
+    assert state["validation"]["review_green"] == "unknown"
+    assert state["validation"]["full_suite"] == "unknown"
+    assert resumed["done"] is False
+    if resume == "acknowledge":
+        assert review_calls == []
+        _run_review(monkeypatch, ["--id", public_id])
+    assert review_calls[0]["review_scope"]["reviewed_head"] == cleanup_head
 
-    exit_code, clean = _run_review(
-        monkeypatch,
-        ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)],
-    )
-    assert exit_code == 0
-    assert "stage" not in clean
-    _, clean = _run_review(
-        monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)]
-    )
-    assert clean["conformance"] == "NOT_APPLICABLE"
-    assert "--deslop-done" in str(clean["Action"]["cmd"])
-
-    _, closed = _run_review(monkeypatch, ["--id", public_id, "--deslop-done"])
-    assert "Action" not in closed
-
-    exit_code, github_clean = _run_review(
-        monkeypatch,
-        ["--id", public_id, "--github-result", "clean", "--state-dir", str(state_dir)],
-    )
-    assert exit_code == 0
-    assert github_clean["github_review"] == "clean"
-    assert github_clean["Action"]["blocked_by"] == ["full_suite:unknown", "ci:unknown"]
-    assert "--full-suite FULL_SUITE_STATUS --ci CI_STATUS" in str(
-        github_clean["Action"]["cmd"]
-    )
+    _run_review(monkeypatch, ["--id", public_id, "--decision", "findings"])
+    fixed_head = _commit_file(repo, "app.txt", "simplified and fixed\n", "signoff fix")
+    _run_review(monkeypatch, ["--id", public_id])
+    assert len(review_calls) == 2
+    assert review_calls[-1]["review_scope"]["reviewed_head"] == fixed_head
+    _, green = _run_review(monkeypatch, ["--id", public_id, "--decision", "clean"])
+    assert green["done"] is True
+    _run_review(monkeypatch, ["--id", public_id])
+    assert len(cleanup_calls) == 1
+    assert _cycle_payload(state_dir, public_id)["deslop"]["status"] == "closed"
 
 
 def test_fast_manual_github_findings_keeps_re_review_action(
@@ -4805,7 +4990,7 @@ def test_fast_manual_github_findings_keeps_re_review_action(
     _git(repo, "checkout", "-b", "feature/fast-github-findings")
     _commit_file(repo, "app.txt", "feature\n", "feature")
 
-    _, opened = _run_review(
+    _, opened = _run_review_after_cleanup(
         monkeypatch,
         [
             "--mode",
@@ -4819,15 +5004,19 @@ def test_fast_manual_github_findings_keeps_re_review_action(
         ],
     )
     public_id = str(opened["review"])
-    _, clean = _run_review(
+    _, clean = _run_review_after_cleanup(
         monkeypatch,
         ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)],
     )
-    _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
-    _, clean = _run_review(monkeypatch, ["--id", public_id, "--deslop-done"])
+    _run_review_after_cleanup(
+        monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)]
+    )
+    _, clean = _run_review_after_cleanup(
+        monkeypatch, ["--id", public_id, "--deslop-done"]
+    )
     assert "Action" not in clean
 
-    exit_code, github_findings = _run_review(
+    exit_code, github_findings = _run_review_after_cleanup(
         monkeypatch,
         [
             "--id",
@@ -4848,19 +5037,23 @@ def test_fast_manual_github_findings_keeps_re_review_action(
     )
 
     _commit_file(repo, "app.txt", "feature\nfixed\n", "fix github finding")
-    _, signoff = _run_review(
+    _, signoff = _run_review_after_cleanup(
         monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)]
     )
     assert "--decision clean" in _assert_decision_action(signoff["Action"])["clean"]
     assert len(review_calls) == 2
     assert review_calls[1]["step_name"] == "fast-signoff"
 
-    _, final_clean = _run_review(
+    _, final_clean = _run_review_after_cleanup(
         monkeypatch,
         ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)],
     )
-    _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
-    _, final_clean = _run_review(monkeypatch, ["--id", public_id, "--deslop-done"])
+    _run_review_after_cleanup(
+        monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)]
+    )
+    _, final_clean = _run_review_after_cleanup(
+        monkeypatch, ["--id", public_id, "--deslop-done"]
+    )
     _assert_github_handoff(
         final_clean["Action"],
         public_id=public_id,
@@ -4884,7 +5077,7 @@ def test_stale_decision_renders_current_action_without_mutating_cycle(
     _init_repo(repo)
     _commit_file(repo, "app.txt", "base\n", "base")
 
-    _, payload = _run_review(
+    _, payload = _run_review_after_cleanup(
         monkeypatch,
         [
             "--mode",
@@ -4898,15 +5091,17 @@ def test_stale_decision_renders_current_action_without_mutating_cycle(
         ],
     )
     public_id = str(payload["review"])
-    _run_review(
+    _run_review_after_cleanup(
         monkeypatch,
         ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)],
     )
-    _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
-    _run_review(monkeypatch, ["--id", public_id, "--deslop-done"])
+    _run_review_after_cleanup(
+        monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)]
+    )
+    _run_review_after_cleanup(monkeypatch, ["--id", public_id, "--deslop-done"])
     before = _cycle_payload(state_dir, public_id)
 
-    exit_code, stale = _run_review(
+    exit_code, stale = _run_review_after_cleanup(
         monkeypatch,
         ["--id", public_id, "--decision", "findings", "--state-dir", str(state_dir)],
     )
@@ -4920,7 +5115,7 @@ def test_stale_decision_renders_current_action_without_mutating_cycle(
     assert _cycle_payload(state_dir, public_id) == before
     assert len(review_calls) == 1
 
-    exit_code, validation = _run_review(
+    exit_code, validation = _run_review_after_cleanup(
         monkeypatch,
         [
             "--id",
@@ -4956,7 +5151,7 @@ def test_stale_decision_persists_auto_resume_transition(
     _git(repo, "checkout", "-b", "feature/stale-decision")
     _commit_file(repo, "app.txt", "feature\n", "feature")
 
-    _, payload = _run_review(
+    _, payload = _run_review_after_cleanup(
         monkeypatch,
         [
             "--mode",
@@ -4972,7 +5167,7 @@ def test_stale_decision_persists_auto_resume_transition(
     public_id = str(payload["review"])
     _commit_file(repo, "app.txt", "feature\nfix\n", "fix finding")
 
-    exit_code, stale = _run_review(
+    exit_code, stale = _run_review_after_cleanup(
         monkeypatch,
         ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)],
     )
@@ -5002,7 +5197,7 @@ def test_decision_pending_with_missing_metadata_still_errors(
     _init_repo(repo)
     _commit_file(repo, "app.txt", "base\n", "base")
 
-    _, payload = _run_review(
+    _, payload = _run_review_after_cleanup(
         monkeypatch,
         [
             "--mode",
