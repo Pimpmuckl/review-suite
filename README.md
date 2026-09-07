@@ -20,9 +20,9 @@ codex plugin marketplace upgrade review-suite
 
 | Mode | Use it for | Local review |
 | --- | --- | --- |
-| `fast` | UI-only, local presentation, and other small, well-tested changes | Dual Sol medium until green, then bounded exact-head closure; no Arena or GitHub review; at most two local rounds |
-| `normal` | Everything else | Configured phase Arena rounds when enabled, dual Sol medium until green, bounded exact-head closure, then GitHub review |
-| `deep` | Billing, login/auth, security, business-critical systems, database integrity/migrations, concurrency, and similarly critical logic | Dual Sol medium until green, configured deep Arena rounds when enabled, dual Sol xhigh until green, bounded exact-head closure, then GitHub review |
+| `fast` | UI-only, local presentation, and other small, well-tested changes | Dual normal-model signoff until green, then bounded exact-head closure; no Arena or GitHub review; at most two local rounds |
+| `normal` | Everything else | Configured phase Arena rounds when enabled, dual normal-model signoff until green, bounded exact-head closure, then GitHub review |
+| `deep` | Billing, login/auth, security, business-critical systems, database integrity/migrations, concurrency, and similarly critical logic | Dual normal-model signoff until green, configured deep Arena rounds when enabled, a second dual signoff until green, bounded exact-head closure, then GitHub review |
 
 These are risk heuristics, not permission to downgrade a UI-looking change that
 crosses a trust or data-integrity boundary.
@@ -104,15 +104,61 @@ half a group, bootstrap rounds mix under-sampled and established candidates
 evenly. New candidates join the existing pool at 1500 Elo without resetting
 established ratings.
 
-User configuration lives at:
+## Settings
 
-```text
-~/.codex/state/review-suite/config.json
+Shipped defaults live at the plugin root in
+[`default_settings.toml`](plugins/review-suite/default_settings.toml):
+
+```toml
+[normal]
+model = "gpt-5.6-sol"
+reasoning = "medium"
+
+[deep]
+model = "gpt-6-astra"
+reasoning = "high"
 ```
 
-The shipped defaults are in
-`plugins/review-suite/references/default_config.json`. Review history, ratings,
-and orchestration state remain under `~/.codex/state/review-suite/`.
+Every job uses `normal` except **PR-gate discovery**, which uses `deep`.
+This includes signoffs in deep mode: the mode controls the review sequence,
+while the model groups control which model each job uses.
+
+Optional user overrides live at:
+
+```text
+~/.codex/state/review-suite/settings.toml
+```
+
+The first run creates a comment-only stub. **Defaults are never copied into
+user settings**, so updating the plugin also updates every setting you have
+not overridden. Add only the fields you want to pin:
+
+```toml
+[jobs.deslop]
+model = "gpt-5.6-luna" # inherits normal reasoning
+
+[jobs.plan]
+reasoning = "high" # inherits the normal model
+
+[arena]
+enabled = true
+```
+
+Job names: `plan`, `deslop`, `followup`, `phase_discovery`, `pr_discovery`,
+`normal_signoff`, and `deep_signoff`. Each can override `model`, `reasoning`,
+and `service_tier` (`fast` or `flex`; empty string clears an inherited tier).
+Partial job overrides inherit from their normal/deep group. Arena comparison
+rosters remain separate from these job defaults.
+
+If only legacy `config.json` exists, the first run automatically converts its
+non-model settings to TOML. Old model names, reasoning choices, model references,
+and model lists are discarded so they cannot pin an obsolete model. Counts,
+loop settings, Arena enablement and rating pool IDs, and other non-model settings
+are retained. The old JSON stays intact as a backup and is ignored once TOML
+exists; subsequent explicit TOML model overrides are respected.
+
+Review history, ratings, and orchestration state stay under
+`~/.codex/state/review-suite/`.
 
 ## Skills
 

@@ -22,6 +22,7 @@ from review_suite_core import (
     utc_now_iso,
     write_text,
 )
+from review_suite_core.model_labels import parse_model_label
 from review_suite_local import (
     CAPACITY_RETRY_DELAY_SECONDS,
     CAPACITY_RETRY_MAX_ATTEMPTS,
@@ -797,7 +798,6 @@ def _gate_configured_phase_variants(
     *,
     indexed: dict[str, dict[str, Any]],
     gate_task_class: str,
-    arena_task_class: str,
     cooling: dict[str, dict[str, Any]],
     state_dir: Path | None = None,
     phase: str = "discovery",
@@ -810,16 +810,19 @@ def _gate_configured_phase_variants(
     )
     variants: list[dict[str, Any]] = []
     for variant_id in primary_ids:
-        variant = indexed.get(variant_id)
-        if variant is None:
-            continue
+        model, effort, tier = parse_model_label(
+            variant_id, field="configured gate model"
+        )
+        # Job settings select execution models independently of Arena membership.
+        variant = {
+            **indexed.get(variant_id, {}),
+            "id": variant_id,
+            "model": model,
+            "reasoning_effort": effort,
+            "service_tier": tier,
+        }
+        indexed[variant_id] = variant
         if str(variant.get("state", "active")) != "active":
-            continue
-        if arena_task_class not in list(variant.get("task_classes") or []):
-            continue
-        if phase == "discovery" and not variant_is_arena_eligible(
-            variant, arena_task_class
-        ):
             continue
         if variant_id in cooling:
             continue
@@ -830,15 +833,12 @@ def _gate_configured_phase_variants(
 def _configured_signoff_error(
     variant_id: str,
     variant: dict[str, Any] | None,
-    arena_task_class: str,
     cooling: dict[str, dict[str, Any]],
 ) -> ValueError:
     if variant is None:
         reason = "unavailable"
     elif str(variant.get("state", "active")) != "active":
         reason = "inactive"
-    elif arena_task_class not in list(variant.get("task_classes") or []):
-        reason = f"ineligible for {arena_task_class}"
     elif variant_id in cooling:
         reason = "cooling"
     else:
@@ -916,7 +916,6 @@ def _select_gate_variants(
     configured_phase_ids, configured_phase_variants = _gate_configured_phase_variants(
         indexed=indexed,
         gate_task_class=gate_task_class,
-        arena_task_class=arena_task_class,
         cooling=cooling,
         state_dir=state_dir,
         phase=phase,
@@ -933,7 +932,7 @@ def _select_gate_variants(
     if phase == "signoff":
         configured_id = configured_phase_ids[0]
         raise _configured_signoff_error(
-            configured_id, indexed.get(configured_id), arena_task_class, cooling
+            configured_id, indexed.get(configured_id), cooling
         )
 
     def backup_selection(

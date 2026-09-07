@@ -51,7 +51,7 @@ def test_default_stable_profiles_cover_all_modes(tmp_path: Path) -> None:
     ]
     assert [step.reasoning_effort for step in profiles["stable"]["deep"].steps] == [
         "medium",
-        "xhigh",
+        "medium",
     ]
     assert profiles["stable"]["normal"].steps[-1].rerun_on_findings is True
     assert profiles["stable"]["deep"].steps[0].rerun_on_findings is True

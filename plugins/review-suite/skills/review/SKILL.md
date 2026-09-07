@@ -19,7 +19,7 @@ Path rules:
 
 Mode:
 - Omit `--mode` for `normal`, the default for ordinary changes.
-- Use `--mode fast` for UI-only, local presentation, and other small, well-tested changes. It runs dual GPT-5.6 Sol medium signoff with no Arena or GitHub review; convergence and bounded closure match the other modes.
+- Use `--mode fast` for UI-only, local presentation, and other small, well-tested changes. It runs dual signoff using the configured normal model with no Arena or GitHub review; convergence and bounded closure match the other modes.
 - Use `--mode deep` for billing, login/authentication, authorization/security, business-critical systems, database integrity or migrations, concurrency, and similarly critical or high-blast-radius logic.
 - Treat those mappings as risk heuristics. A nominally UI-only change that crosses a trust or data-integrity boundary is not `fast`.
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -13,104 +14,254 @@ if str(SCRIPT_DIR) not in sys.path:
 
 from review_suite_core.config import gate_config, lens_model_config, load_config
 from review_suite_core.model_labels import parse_model_label
+from review_suite_core.orchestrator_profiles import load_orchestrator_profiles
 
 
-def test_default_public_config_loads(tmp_path: Path) -> None:
-    state_dir = tmp_path / "state"
-    config = load_config(state_dir)
+def test_empty_user_settings_follow_updated_shipped_defaults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from review_suite_core import config as settings
 
-    assert config["privacy"]["arena_external_publish_enabled"] is False
+    shipped = tmp_path / "default_settings.toml"
+    shipped.write_text(settings.default_config_path().read_text(), encoding="utf-8")
+    monkeypatch.setattr(settings, "default_config_path", lambda: shipped)
+    state = tmp_path / "state"
+    config = load_config(state)
     assert config["arena"]["enabled"] is False
-    assert lens_model_config("review-plan", state_dir=state_dir).model == "gpt-5.5"
+    assert tomllib.loads((state / "settings.toml").read_text()) == {}
+    for job in ("review-plan", "review-deslop", "review-followup"):
+        assert lens_model_config(job, state_dir=state).model == "gpt-5.6-sol"
     assert (
-        lens_model_config("review-plan", state_dir=state_dir).reasoning_effort
-        == "medium"
-    )
-    assert lens_model_config("review-deslop", state_dir=state_dir).model == "gpt-5.5"
-    followup = lens_model_config("review-followup", state_dir=state_dir)
-    assert (followup.model, followup.reasoning_effort) == (
-        "gpt-5.6-sol",
-        "medium",
-    )
-    assert (
-        gate_config("phase_gate", state_dir=state_dir).discovery_variant_id
-        == "gpt-5.5-medium"
-    )
-    assert gate_config("phase_gate", state_dir=state_dir).discovery_reviewer_count == 4
-    assert (
-        gate_config("phase_gate", state_dir=state_dir).signoff_variant_id
+        gate_config("phase_gate", state_dir=state).discovery_variant_id
         == "gpt-5.6-sol-medium"
     )
-    assert gate_config("phase_gate", state_dir=state_dir).signoff_reviewer_count == 2
-    assert gate_config("phase_gate", state_dir=state_dir).discovery_loops == 1
     assert (
-        gate_config("pr_gate", state_dir=state_dir).discovery_variant_id
-        == "gpt-5.5-xhigh"
+        gate_config("pr_gate", state_dir=state).discovery_variant_id
+        == "gpt-6-astra-high"
     )
     assert (
-        gate_config("pr_gate", state_dir=state_dir).signoff_variant_id
-        == "gpt-5.6-sol-xhigh"
+        gate_config("pr_gate", state_dir=state).signoff_variant_id
+        == "gpt-5.6-sol-medium"
     )
-    assert config["orchestrator"]["selection"] == "auto"
-    assert config["orchestrator"]["stable_defaults"] == {
-        "discovery_phase_model": "gpt-5.5-medium",
-        "discovery_deep_model": "gpt-5.5-xhigh",
-        "discovery_loops": 1,
-        "normal_arena_loops": 13,
-        "deep_arena_loops": 13,
-        "signoff_normal_model": "gpt-5.6-sol-medium",
-        "signoff_deep_model": "gpt-5.6-sol-xhigh",
-    }
 
-
-def test_user_config_overrides_defaults(tmp_path: Path) -> None:
-    state_dir = tmp_path / "state"
-    state_dir.mkdir()
-    (state_dir / "config.json").write_text(
-        json.dumps(
-            {
-                "lens": {
-                    "review-plan": {
-                        "model": "gpt-5.4",
-                        "reasoning_effort": "high",
-                    }
-                },
-                "gates": {
-                    "phase_gate": {
-                        "discovery_reviewer_count": 3,
-                    }
-                },
-                "orchestrator": {
-                    "stable_defaults": {
-                        "signoff_normal_model": "gpt-5.4-high",
-                        "discovery_loops": 2,
-                    }
-                },
-            }
-        ),
+    shipped.write_text(
+        shipped.read_text()
+        .replace('model = "gpt-5.6-sol"', 'model = "next-normal"')
+        .replace('model = "gpt-6-astra"', 'model = "next-deep"'),
         encoding="utf-8",
     )
-
-    lens = lens_model_config("review-plan", state_dir=state_dir)
-    phase_gate = gate_config("phase_gate", state_dir=state_dir)
-    pr_gate = gate_config("pr_gate", state_dir=state_dir)
-    config = load_config(state_dir)
-
-    assert lens.model == "gpt-5.4"
-    assert lens.reasoning_effort == "high"
-    assert phase_gate.discovery_variant_id == "gpt-5.5-medium"
-    assert phase_gate.discovery_reviewer_count == 3
-    assert phase_gate.signoff_variant_id == "gpt-5.4-high"
-    assert phase_gate.discovery_loops == 2
-    assert pr_gate.signoff_variant_id == "gpt-5.6-sol-xhigh"
+    assert lens_model_config("review-deslop", state_dir=state).model == "next-normal"
     assert (
-        config["orchestrator"]["stable_defaults"]["discovery_phase_model"]
-        == "gpt-5.5-medium"
+        gate_config("phase_gate", state_dir=state).discovery_variant_id
+        == "next-normal-medium"
     )
     assert (
-        config["orchestrator"]["stable_defaults"]["signoff_normal_model"]
-        == "gpt-5.4-high"
+        gate_config("pr_gate", state_dir=state).discovery_variant_id == "next-deep-high"
     )
+    profiles = load_orchestrator_profiles(load_config(state))["stable"]
+    assert all(
+        step.model == "next-normal" and step.reasoning_effort == "medium"
+        for profile in profiles.values()
+        for step in profile.steps
+    )
+    assert tomllib.loads((state / "settings.toml").read_text()) == {}
+
+
+def test_user_job_overrides_inherit_their_group_fields(tmp_path: Path) -> None:
+    (tmp_path / "settings.toml").write_text(
+        """[normal]
+model = "normal-model"
+reasoning = "low"
+[deep]
+model = "deep-model"
+reasoning = "xhigh"
+[jobs.deslop]
+model = "cheap-model"
+[jobs.plan]
+reasoning = "high"
+[jobs.pr_discovery]
+reasoning = "max"
+[jobs.deep_signoff]
+model = "signoff-model"
+service_tier = "fast"
+[orchestrator.stable_defaults]
+discovery_loops = 2
+[gates.phase_gate]
+discovery_reviewer_count = 3
+""",
+        encoding="utf-8",
+    )
+    deslop = lens_model_config("review-deslop", state_dir=tmp_path)
+    assert (deslop.model, deslop.reasoning_effort) == ("cheap-model", "low")
+    plan = lens_model_config("review-plan", state_dir=tmp_path)
+    assert (plan.model, plan.reasoning_effort) == ("normal-model", "high")
+    assert (
+        lens_model_config("review-followup", state_dir=tmp_path).model == "normal-model"
+    )
+    phase = gate_config("phase_gate", state_dir=tmp_path)
+    assert phase.discovery_variant_id == "normal-model-low"
+    assert phase.discovery_reviewer_count == 3
+    assert phase.discovery_loops == 2
+    pr = gate_config("pr_gate", state_dir=tmp_path)
+    assert pr.discovery_variant_id == "deep-model-max"
+    assert pr.signoff_variant_id == "signoff-model-low-fast"
+    profiles = load_orchestrator_profiles(load_config(tmp_path))["stable"]
+    assert profiles["fast"].steps[0].model == "normal-model"
+    assert profiles["deep"].steps[-1].model == "signoff-model"
+    assert profiles["deep"].steps[-1].reasoning_effort == "low"
+    assert profiles["deep"].steps[-1].service_tier == "fast"
+
+
+def test_legacy_migration_preserves_non_model_settings_only(tmp_path: Path) -> None:
+    legacy = {
+        "lens": {
+            "default": {
+                "model": "gpt-5.5",
+                "reasoning_effort": "xhigh",
+                "service_tier": "flex",
+            },
+            "review-deslop": {"model": "gpt-5.5", "service_tier": "fast"},
+        },
+        "arena": {
+            "enabled": True,
+            "pools": {
+                "arena_phase": {
+                    "rating_pool_id": "existing-ratings",
+                    "variant_ids": ["gpt-5.5-medium"],
+                    "variant_groups": [["gpt-5.5-medium"]],
+                }
+            },
+        },
+        "orchestrator": {
+            "selection": "stable",
+            "stable_defaults": {
+                "discovery_phase_model": "gpt-5.5-medium",
+                "discovery_deep_model": "gpt-5.5-xhigh",
+                "signoff_normal_model": "gpt-5.5-medium",
+                "signoff_deep_model": "gpt-5.5-xhigh",
+                "discovery_loops": 2,
+            },
+            "profiles": {
+                "stable": {
+                    "fast": {
+                        "steps": [
+                            {
+                                "name": "custom-signoff",
+                                "count": 1,
+                                "model": "gpt-5.5",
+                                "reasoning_effort": "high",
+                                "max_review_rounds": 2,
+                            }
+                        ]
+                    }
+                }
+            },
+        },
+        "gates": {
+            "phase_gate": {
+                "discovery_reviewer_count": 3,
+                "discovery_model_ref": "old_model",
+                "backup_variant_ids": ["gpt-5.5-medium"],
+            }
+        },
+        "future_setting": {
+            "path": 'C:\\some folder\\"quoted"',
+            "enabled": False,
+            "ratio": 1.5,
+            "tags": ["one", "two"],
+            "unused": None,
+        },
+    }
+    original = json.dumps(legacy)
+    (tmp_path / "config.json").write_text(original, encoding="utf-8")
+    (tmp_path / "runs.jsonl").write_text("historical results", encoding="utf-8")
+    config = load_config(tmp_path)
+    migrated_text = (tmp_path / "settings.toml").read_text()
+    migrated = tomllib.loads(migrated_text)
+    assert "gpt-5.5" not in migrated_text
+    assert "normal" not in migrated or "model" not in migrated["normal"]
+    assert migrated["arena"]["pools"]["arena_phase"] == {
+        "rating_pool_id": "existing-ratings"
+    }
+    assert config["arena"]["enabled"] is True
+    assert config["orchestrator"]["selection"] == "stable"
+    assert config["future_setting"]["path"] == legacy["future_setting"]["path"]
+    assert config["future_setting"]["tags"] == ["one", "two"]
+    assert lens_model_config("review-deslop", state_dir=tmp_path).service_tier == "fast"
+    assert lens_model_config("review-plan", state_dir=tmp_path).service_tier == "flex"
+    phase = gate_config("phase_gate", state_dir=tmp_path)
+    assert phase.discovery_variant_id == "gpt-5.6-sol-medium-flex"
+    assert phase.discovery_reviewer_count == 3
+    assert phase.discovery_loops == 2
+    assert (
+        gate_config("pr_gate", state_dir=tmp_path).discovery_variant_id
+        == "gpt-6-astra-high"
+    )
+    fast = load_orchestrator_profiles(config)["stable"]["fast"].steps[0]
+    assert fast.model == "gpt-5.6-sol"
+    assert fast.count == 1
+    assert fast.max_review_rounds == 2
+    assert (tmp_path / "config.json").read_text() == original
+    assert (tmp_path / "runs.jsonl").read_text() == "historical results"
+    assert load_config(tmp_path) == config
+    assert (tmp_path / "settings.toml").read_text() == migrated_text
+
+
+def test_existing_toml_is_authoritative_over_legacy_json(tmp_path: Path) -> None:
+    (tmp_path / "config.json").write_text("invalid old JSON", encoding="utf-8")
+    override = '[jobs.plan]\nmodel = "explicit-model"\n'
+    (tmp_path / "settings.toml").write_text(override, encoding="utf-8")
+    assert (
+        lens_model_config("review-plan", state_dir=tmp_path).model == "explicit-model"
+    )
+    assert (tmp_path / "settings.toml").read_text() == override
+
+
+@pytest.mark.parametrize(
+    "legacy", ["{broken", "[]", '{"orchestrator": {"selection": "invalid"}}']
+)
+def test_failed_migration_leaves_legacy_and_no_stub(
+    tmp_path: Path, legacy: str
+) -> None:
+    (tmp_path / "config.json").write_text(legacy, encoding="utf-8")
+    with pytest.raises(ValueError):
+        load_config(tmp_path)
+    assert (tmp_path / "config.json").read_text() == legacy
+    assert not (tmp_path / "settings.toml").exists()
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        '[normal]\nreasoning = "bad"',
+        '[jobs.deslop]\nmodel = ""',
+        '[deep]\nservice_tier = "bad"',
+        "jobs = 3",
+        "[jobs]\nplan = 3",
+        "[broken",
+    ],
+)
+def test_invalid_user_settings_are_not_overwritten(
+    tmp_path: Path, override: str
+) -> None:
+    (tmp_path / "settings.toml").write_text(override, encoding="utf-8")
+    with pytest.raises(ValueError):
+        load_config(tmp_path)
+    assert (tmp_path / "settings.toml").read_text() == override
+
+
+def test_concurrent_first_loads_publish_complete_settings(tmp_path: Path) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    (tmp_path / "config.json").write_text(
+        json.dumps({"gates": {"phase_gate": {"discovery_reviewer_count": 3}}}),
+        encoding="utf-8",
+    )
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(load_config, [tmp_path] * 16))
+    assert all(result == results[0] for result in results)
+    assert gate_config("phase_gate", state_dir=tmp_path).discovery_reviewer_count == 3
+    assert list(tmp_path.glob("*.tmp")) == []
 
 
 def test_model_label_parser_accepts_gpt_5_6_max() -> None:

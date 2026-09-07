@@ -119,6 +119,7 @@ def test_select_gate_variants_prefers_least_used_distinct_champions(
         ]
     }
 
+    roster["variants"].append({"id": "gpt-5.6-sol-medium", "state": "disabled"})
     selection = _select_gate_variants(
         roster=roster, state_dir=state_dir, gate_task_class="phase_gate"
     )
@@ -153,6 +154,7 @@ def test_select_gate_variants_duplicates_single_champion(tmp_path: Path) -> None
     )
     roster = {"variants": [{"id": "solo", "state": "active"}]}
 
+    roster["variants"].append({"id": "gpt-5.6-sol-medium", "state": "disabled"})
     selection = _select_gate_variants(
         roster=roster, state_dir=state_dir, gate_task_class="phase_gate"
     )
@@ -195,6 +197,7 @@ def test_select_gate_variants_falls_back_to_legacy_singular_champion_field(
     )
     roster = {"variants": [{"id": "solo", "state": "active"}]}
 
+    roster["variants"].append({"id": "gpt-5.6-sol-medium", "state": "disabled"})
     selection = _select_gate_variants(
         roster=roster, state_dir=state_dir, gate_task_class="phase_gate"
     )
@@ -242,6 +245,7 @@ def test_select_gate_variants_prefers_non_cooling_champions(tmp_path: Path) -> N
         ]
     }
 
+    roster["variants"].append({"id": "gpt-5.6-sol-medium", "state": "disabled"})
     selection = _select_gate_variants(
         roster=roster, state_dir=state_dir, gate_task_class="phase_gate"
     )
@@ -289,7 +293,11 @@ def test_select_gate_variants_uses_pr_gate_discovery_variant_before_champions(
                 "arena_eligible": False,
                 "task_classes": ["pr_review"],
             },
-            {"id": "gpt-5.5-xhigh", "state": "active", "task_classes": ["pr_review"]},
+            {
+                "id": "gpt-6-astra-high",
+                "state": "active",
+                "task_classes": ["pr_review"],
+            },
             {"id": "gpt-5.4-xhigh", "state": "active", "task_classes": ["pr_review"]},
         ]
     }
@@ -300,10 +308,10 @@ def test_select_gate_variants_uses_pr_gate_discovery_variant_before_champions(
 
     assert selection.mode == "configured_discovery_double_pass"
     assert [variant["id"] for variant in selection.variants] == [
-        "gpt-5.5-xhigh",
-        "gpt-5.5-xhigh",
+        "gpt-6-astra-high",
+        "gpt-6-astra-high",
     ]
-    assert selection.champion_ids == ("gpt-5.5-xhigh",)
+    assert selection.champion_ids == ("gpt-6-astra-high",)
 
 
 def test_select_gate_variants_uses_configured_discovery_without_champions(
@@ -338,9 +346,9 @@ def test_select_gate_variants_uses_configured_discovery_without_champions(
     roster = {
         "variants": [
             {
-                "id": "gpt-5.5-medium",
+                "id": "gpt-5.6-sol-medium",
                 "state": "active",
-                "model": "gpt-5.5",
+                "model": "gpt-5.6-sol",
                 "reasoning_effort": "medium",
                 "task_classes": ["phase_review"],
             },
@@ -374,10 +382,10 @@ def test_select_gate_variants_uses_configured_discovery_without_champions(
 
     assert selection.mode == "configured_discovery_4_pass"
     assert [variant["id"] for variant in selection.variants] == [
-        "gpt-5.5-medium",
-        "gpt-5.5-medium",
-        "gpt-5.5-medium",
-        "gpt-5.5-medium",
+        "gpt-5.6-sol-medium",
+        "gpt-5.6-sol-medium",
+        "gpt-5.6-sol-medium",
+        "gpt-5.6-sol-medium",
     ]
 
 
@@ -579,12 +587,16 @@ def test_pr_gate_uses_configured_discovery_then_signoff_variant(tmp_path: Path) 
     roster = {
         "variants": [
             {
-                "id": "gpt-5.6-sol-xhigh",
+                "id": "gpt-5.6-sol-medium",
                 "state": "active",
                 "arena_eligible": False,
                 "task_classes": ["pr_review"],
             },
-            {"id": "gpt-5.5-xhigh", "state": "active", "task_classes": ["pr_review"]},
+            {
+                "id": "gpt-6-astra-high",
+                "state": "active",
+                "task_classes": ["pr_review"],
+            },
         ]
     }
 
@@ -598,8 +610,8 @@ def test_pr_gate_uses_configured_discovery_then_signoff_variant(tmp_path: Path) 
 
     assert first.mode == "configured_discovery_double_pass"
     assert [variant["id"] for variant in first.variants] == [
-        "gpt-5.5-xhigh",
-        "gpt-5.5-xhigh",
+        "gpt-6-astra-high",
+        "gpt-6-astra-high",
     ]
 
     (state_dir / "gate_runs.jsonl").write_text(
@@ -625,8 +637,8 @@ def test_pr_gate_uses_configured_discovery_then_signoff_variant(tmp_path: Path) 
 
     assert subsequent.mode == "configured_signoff_double_pass"
     assert [variant["id"] for variant in subsequent.variants] == [
-        "gpt-5.6-sol-xhigh",
-        "gpt-5.6-sol-xhigh",
+        "gpt-5.6-sol-medium",
+        "gpt-5.6-sol-medium",
     ]
 
 
@@ -729,22 +741,16 @@ def test_select_gate_variants_rejects_ineligible_champion_override(
         )
 
 
-def test_configured_signoff_rejects_unavailable_variants_without_fallback(
+def test_configured_signoff_rejects_disabled_or_cooling_variants_without_fallback(
     tmp_path: Path,
 ) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     signoff_id = "gpt-5.6-sol-medium"
     cases = (
-        ("unavailable", None, {}),
         (
             "inactive",
             {"id": signoff_id, "state": "disabled", "task_classes": ["phase_review"]},
-            {},
-        ),
-        (
-            "ineligible",
-            {"id": signoff_id, "state": "active", "task_classes": ["pr_review"]},
             {},
         ),
         (
@@ -808,7 +814,7 @@ def test_select_gate_variants_falls_through_provisional_backup_order_when_primar
                 "phase_review": {
                     "champion_variant_ids": [],
                     "cooldowns": {
-                        "gpt-5.5-medium": {
+                        "gpt-5.6-sol-medium": {
                             "until": "2099-01-01T00:00:00Z",
                             "failure_count": 1,
                         }
@@ -830,12 +836,12 @@ def test_select_gate_variants_falls_through_provisional_backup_order_when_primar
     roster = {
         "variants": [
             {
-                "id": "gpt-5.5-medium",
+                "id": "gpt-5.6-sol-medium",
                 "state": "active",
                 "task_classes": ["phase_review"],
             },
             {
-                "id": "gpt-5.6-sol-medium",
+                "id": "gpt-5.6-terra-medium",
                 "state": "active",
                 "task_classes": ["phase_review"],
             },
@@ -849,10 +855,10 @@ def test_select_gate_variants_falls_through_provisional_backup_order_when_primar
 
     assert selection.mode == "provisional_backup_4_pass"
     assert [variant["id"] for variant in selection.variants] == [
-        "gpt-5.6-sol-medium",
-        "gpt-5.6-sol-medium",
-        "gpt-5.6-sol-medium",
-        "gpt-5.6-sol-medium",
+        "gpt-5.6-terra-medium",
+        "gpt-5.6-terra-medium",
+        "gpt-5.6-terra-medium",
+        "gpt-5.6-terra-medium",
     ]
 
 
@@ -886,7 +892,7 @@ def test_select_gate_variants_excludes_probation_from_supplied_roster_fallback(
         "variants": [
             {
                 "id": "gpt-5.6-sol-medium",
-                "state": "active",
+                "state": "disabled",
                 "arena_eligible": False,
                 "task_classes": ["phase_review"],
             },
@@ -941,7 +947,11 @@ def test_select_gate_variants_uses_pr_gate_configured_discovery_without_champion
     )
     roster = {
         "variants": [
-            {"id": "gpt-5.5-xhigh", "state": "active", "task_classes": ["pr_review"]},
+            {
+                "id": "gpt-6-astra-high",
+                "state": "active",
+                "task_classes": ["pr_review"],
+            },
             {"id": "gpt-5.4-xhigh", "state": "active", "task_classes": ["pr_review"]},
             {"id": "gpt-5.4-high", "state": "active", "task_classes": ["pr_review"]},
         ]
@@ -953,9 +963,72 @@ def test_select_gate_variants_uses_pr_gate_configured_discovery_without_champion
 
     assert selection.mode == "configured_discovery_double_pass"
     assert [variant["id"] for variant in selection.variants] == [
-        "gpt-5.5-xhigh",
-        "gpt-5.5-xhigh",
+        "gpt-6-astra-high",
+        "gpt-6-astra-high",
     ]
+
+
+@pytest.mark.parametrize("listed", [True, False])
+def test_configured_job_model_does_not_require_arena_membership(
+    tmp_path: Path, listed: bool
+) -> None:
+    (tmp_path / "settings.toml").write_text(
+        '[normal]\nmodel = "gpt-6-astra"\nreasoning = "high"\n', encoding="utf-8"
+    )
+    roster = {
+        "variants": [
+            {
+                "id": "gpt-6-astra-high",
+                "state": "active",
+                "arena_eligible": False,
+                "task_classes": ["pr_review"],
+            }
+        ]
+        if listed
+        else []
+    }
+    selection = _select_gate_variants(
+        roster=roster, state_dir=tmp_path, gate_task_class="phase_gate"
+    )
+    assert selection.mode == "configured_discovery_4_pass"
+    assert all(
+        variant["model"] == "gpt-6-astra" and variant["reasoning_effort"] == "high"
+        for variant in selection.variants
+    )
+    assert len(roster["variants"]) == int(listed)
+
+
+def test_unlisted_configured_model_cooldown_still_uses_backup(tmp_path: Path) -> None:
+    (tmp_path / "settings.toml").write_text(
+        '[jobs.pr_discovery]\nmodel = "new-model"\nservice_tier = "flex"\n',
+        encoding="utf-8",
+    )
+    roster = {"variants": [{"id": "backup", "task_classes": ["pr_review"]}]}
+    first = _select_gate_variants(
+        roster=roster, state_dir=tmp_path, gate_task_class="pr_gate"
+    )
+    assert first.variants[0]["id"] == "new-model-high-flex"
+    assert first.variants[0]["service_tier"] == "flex"
+    _write_json(
+        tmp_path / "operational_state.json",
+        {
+            "task_classes": {
+                "pr_review": {
+                    "cooldowns": {
+                        "new-model-high-flex": {
+                            "until": "2099-01-01T00:00:00Z",
+                            "failure_count": 1,
+                        }
+                    }
+                }
+            }
+        },
+    )
+    second = _select_gate_variants(
+        roster=roster, state_dir=tmp_path, gate_task_class="pr_gate"
+    )
+    assert second.mode == "provisional_backup_double_pass"
+    assert second.variants[0]["id"] == "backup"
 
 
 def test_snapshot_queue_item_preserves_retry_after() -> None:
@@ -1629,6 +1702,11 @@ def test_run_gate_round_replaces_blocked_gate_reviewer_with_inline_fallback(
     expected_exit_code: int,
 ) -> None:
     state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    (state_dir / "settings.toml").write_text(
+        '[gates.phase_gate]\nbackup_variant_ids = ["gpt-5.5-medium", "gpt-5.6-sol-medium"]\n',
+        encoding="utf-8",
+    )
     review_cwd = tmp_path / "repo"
     review_cwd.mkdir()
     _write_json(

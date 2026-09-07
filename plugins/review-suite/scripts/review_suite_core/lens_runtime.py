@@ -29,8 +29,6 @@ from .process_runtime import (
 from .workflow_state import validated_linear_review_range
 
 
-DEFAULT_MODEL = "gpt-5.5"
-DEFAULT_REASONING_EFFORT = "medium"
 DEFAULT_PROGRESS_INTERVAL_SECONDS = 60
 DEFAULT_TIMEOUT_SECONDS = 2 * 60 * 60
 WRAPPER_SESSION_LOG_FILENAME = "wrapper_sessions.jsonl"
