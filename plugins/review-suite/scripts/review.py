@@ -2663,9 +2663,6 @@ def _render(state: dict[str, Any], *, state_dir: Path) -> None:
     payload: dict[str, Any] = {
         "review": state.get("public_id"),
         "review_brief": "available" if state.get("review_brief") else "unavailable",
-        "design_conformance_context": "available"
-        if state.get("review_brief")
-        else "unavailable",
     }
     action = _action_payload(state, state_dir=state_dir)
     summary = _add_review_ladder_fields(payload, state, action)

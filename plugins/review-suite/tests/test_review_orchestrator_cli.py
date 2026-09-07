@@ -1455,7 +1455,6 @@ def test_review_brief_is_frozen_and_public_output_reports_coverage(
         "# Goal\n\nKeep it neutral."
     )
     assert created["review_brief"] == "available"
-    assert created["design_conformance_context"] == "available"
 
     errors: list[str] = []
     monkeypatch.setattr(

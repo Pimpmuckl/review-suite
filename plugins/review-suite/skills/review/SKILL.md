@@ -24,24 +24,19 @@ Mode:
 - Treat those mappings as risk heuristics. A nominally UI-only change that crosses a trust or data-integrity boundary is not `fast`.
 
 Rules:
-- Run focused validation before dispatch; start slow full-suite/CI after dispatch and track final status.
+- Run validation relevant to the changed surface before dispatch. Start any required slow checks after dispatch and track their final status. Run a full suite only when repository requirements or reachable effects justify it; record an explicit reason when waiving an unnecessary full-suite or CI gate.
 - Immediately before final correctness signoff, every mode runs one bounded pass for frozen-brief conformance and local cleanup. Handle or dismiss its output, then close it with `review.py --id <id> --deslop-done`. Accepted edits proceed to final signoff on the new exact head. Cleanup runs once per cycle and does not restart after final-review or GitHub fixes.
-- To dismiss a materially drifted closure, use `review.py --id <id> --deslop-done --reason "<why the findings are dismissed>"`. This records the caller's reason without changing the reviewer verdict or findings. It requires a completed closure on the exact clean branch, HEAD, and merge-base; all other review and validation gates remain in force.
-- To replace an existing ladder with stricter review, use `review.py --id <id> --restart-mode deep --reason "<why>"` while the original repo/base/branch/head/merge-base still match and the worktree is clean; plain `--mode deep --cd <repo-root>` is not a restart.
 - Three distinct caller-accepted findings heads require a durable `CONTINUE`, `REPLAN`, or `RESLICE` decision; `CONTINUE` is available once for one additional fix head and its correctness decision. Report conflicts with the frozen goal, acceptance, scope, stop condition, owner, authorized behavior, or unit boundary immediately with `review.py --id <id> --contract-conflict <dimension>`.
 - Review orchestration expects committed review changes. If `git diff` is non-empty but `base..HEAD` is empty, commit intended changes or stash unrelated worktree changes before rerunning.
-- Review commands do not support a dirty-worktree override. Do not append `--allow-dirty`; commit intended review changes first.
+- There is no `--allow-dirty` override.
 - Read `Output:`, then follow the emitted `Action`: run `cmd` when present, or classify the output and run exactly one matching `choices` command.
-- On `head_changed_after_review`, inspect `reviewed_head..current_head`. If the changes only fix stale tests to match already-reviewed behavior, do not rerun review; run the affected tests and required validation, then proceed. Rerun only if production code or intended behavior changed.
 - For arena grading actions, grade only after checking findings against the diff/repo. Plausible but unverified findings do not count as valid. Use `scope_bloat_loss` when a review asks for product behavior, AI guardrails, validation, fallback behavior, UX policy, or safety checks that are not required by the diff, a real bug, a trust boundary, or the user request.
 - Supply the requested rating pool and repeat `--rank` from best to worst; comma-separated variants within one rank tie. The caller grades; Review Suite never promotes a winner automatically.
 - Without an id, use `review.py --status --cd <repo-root>` for branch routing.
 - The default base is the repository's remote default branch. Use `--base <ref>` only as an explicit override.
-- The normal advance command after a review id exists is bare `review.py --id <id>`; explicit `--decision clean|findings` is an override when Review Suite cannot auto-advance from a structured reviewer verdict or a human intentionally disagrees.
-- For a read-only id check, run `review.py --id <id> --show-status`.
-- If the caller session was restarted after reviewer output was produced, run `review.py --id <id> --show-findings` to recover stored reviewer text without launching another review.
-- Classify reviewer output before coding valid findings.
-- Fix valid findings, then run emitted `review.py --id <id>`.
+- Resume with `review.py --id <id>` without creation flags. Use `--decision clean|findings` only when auto-advance cannot classify the verdict or the caller intentionally disagrees.
+- Verify findings against the diff/repo before fixing them, then run the emitted `review.py --id <id>`.
 - After GitHub review returns, record the result on the owning review id: `--github-result clean`, `--github-result findings`, or `--github-result waived --github-note "why"`. Do not start a new ladder for GitHub findings.
-- After an id exists, do not repeat creation flags.
-- Do not call PR-final/merge-ready until full-suite/CI is passed or explicitly waived with a reason.
+- Do not call PR-final/merge-ready until required validation passes. Record full-suite/CI gates as passed or explicitly waived with a reason; follow the emitted validation commands.
+
+For status-only inspection, session recovery, changed-head recovery, closure dismissal, or escalation to deep mode, read [references/recovery.md](references/recovery.md) before acting.
