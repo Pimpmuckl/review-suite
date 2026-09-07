@@ -48,6 +48,9 @@ jobs:
       - name: Install dependencies
         run: uv sync --locked
 
+      - name: Check generated workflow
+        run: uv run --locked python scripts/generate-workflow.py --check
+
       - parallel:
           - name: Run tests
             run: uv run --locked pytest -n auto --dist=worksteal plugins/review-suite/tests -q

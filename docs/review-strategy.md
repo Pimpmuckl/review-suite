@@ -17,13 +17,8 @@ calibration remain available, but stable profiles do not run fixed discovery
 brawls. The caller grades Arena output; Review Suite does not automatically
 select or promote models.
 
-With the shipped model defaults, the sequences are:
-
-```text
-fast    cleanup (Astra medium) -> 2x Astra medium -> done
-normal  Arena -> cleanup (Astra medium) -> 2x Astra medium -> GitHub
-deep    2x Astra medium -> Arena -> cleanup (Astra medium) -> 2x Astra xhigh -> GitHub
-```
+The [generated workflow diagram](review-workflow.md) shows the sequences,
+reviewer models, and optional Arena rounds from the shipped defaults.
 
 Arena uses its mixed-model roster when enabled. GitHub review uses the GitHub
 Codex service; these model settings do not select its model. Findings require
