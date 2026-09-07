@@ -20,9 +20,9 @@ codex plugin marketplace upgrade review-suite
 
 | Mode | Use it for | Local review |
 | --- | --- | --- |
-| `fast` | UI-only, local presentation, and other small, well-tested changes | Dual normal-model signoff until green, then bounded exact-head closure; no Arena or GitHub review; at most two local rounds |
-| `normal` | Everything else | Configured phase Arena rounds when enabled, dual normal-model signoff until green, bounded exact-head closure, then GitHub review |
-| `deep` | Billing, login/auth, security, business-critical systems, database integrity/migrations, concurrency, and similarly critical logic | Dual normal-model signoff until green, configured deep Arena rounds when enabled, a second dual signoff until green, bounded exact-head closure, then GitHub review |
+| `fast` | UI-only, local presentation, and other small, well-tested changes | Dual normal-model signoff until green, then bounded exact-head closure; no GitHub review; at most two local rounds |
+| `normal` | Everything else | Dual normal-model signoff until green, bounded exact-head closure, then GitHub review |
+| `deep` | Billing, login/auth, security, business-critical systems, database integrity/migrations, concurrency, and similarly critical logic | Dual normal-model signoff until green, a second dual signoff until green, bounded exact-head closure, then GitHub review |
 
 These are risk heuristics, not permission to downgrade a UI-looking change that
 crosses a trust or data-integrity boundary.
@@ -90,20 +90,6 @@ same-mode successor without repeating the repository context:
 <python> <plugin-root>/scripts/review.py --id <id> --new-cycle
 ```
 
-## Discovery and Arena
-
-Stable profiles do not run discovery brawls. Discovery pools and ratings remain
-available for deliberate calibration.
-
-Arena is an opt-in evaluation overlay. Normal and deep run their configured
-Arena counts only when Arena is enabled and the count is positive. The calling
-agent grades the outputs; Review Suite never selects or promotes a winner.
-Each reporting pool uses its balanced groups once, then favors under-sampled
-candidates and opponents they have met least often. When both cohorts can fill
-half a group, bootstrap rounds mix under-sampled and established candidates
-evenly. New candidates join the existing pool at 1500 Elo without resetting
-established ratings.
-
 ## Settings
 
 Shipped defaults live at the plugin root in
@@ -111,12 +97,12 @@ Shipped defaults live at the plugin root in
 
 ```toml
 [normal]
-model = "gpt-5.6-sol"
+model = "gpt-6-astra"
 reasoning = "medium"
 
 [deep]
 model = "gpt-6-astra"
-reasoning = "high"
+reasoning = "xhigh"
 ```
 
 Every job uses `normal` except **PR-gate discovery**, which uses `deep`.
@@ -140,21 +126,17 @@ model = "gpt-5.6-luna" # inherits normal reasoning
 [jobs.plan]
 reasoning = "high" # inherits the normal model
 
-[arena]
-enabled = true
 ```
 
 Job names: `plan`, `deslop`, `followup`, `phase_discovery`, `pr_discovery`,
 `normal_signoff`, and `deep_signoff`. Each can override `model`, `reasoning`,
 and `service_tier` (`fast` or `flex`; empty string clears an inherited tier).
-Partial job overrides inherit from their normal/deep group. Arena comparison
-rosters remain separate from these job defaults.
+Partial job overrides inherit from their normal/deep group.
 
 If only legacy `config.json` exists, the first run automatically converts its
 non-model settings to TOML. Old model names, reasoning choices, model references,
 and model lists are discarded so they cannot pin an obsolete model. Counts,
-loop settings, Arena enablement and rating pool IDs, and other non-model settings
-are retained. The old JSON stays intact as a backup and is ignored once TOML
+loop settings, and other non-model settings are retained. The old JSON stays intact as a backup and is ignored once TOML
 exists; subsequent explicit TOML model overrides are respected.
 
 Review history, ratings, and orchestration state stay under
@@ -168,6 +150,9 @@ Review history, ratings, and orchestration state stay under
 - `review-github`: anchored GitHub pull-request review.
 
 ## Development
+
+Maintainer documentation: [Arena configuration](docs/arena.md).
+
 
 Requirements: Python 3.14.6+, `uv`, Codex CLI, Git, and GitHub CLI for GitHub
 review.

@@ -1,0 +1,40 @@
+# Arena
+
+Stable profiles do not run discovery brawls. Discovery pools and ratings remain
+available for deliberate calibration.
+
+Arena is an opt-in evaluation overlay. Normal and deep run their configured
+Arena counts only when Arena is enabled and the count is positive. The calling
+agent grades the outputs; Review Suite never selects or promotes a winner.
+Each reporting pool uses its balanced groups once, then favors under-sampled
+candidates and opponents they have met least often. When both cohorts can fill
+half a group, bootstrap rounds mix under-sampled and established candidates
+evenly. New candidates join the existing pool at 1500 Elo without resetting
+established ratings.
+
+## Configuration
+
+Arena is disabled by default and is not needed for ordinary reviews.
+The shipped maintainer settings are in
+[`arena_settings.toml`](../plugins/review-suite/references/arena_settings.toml):
+comparison pools, scheduling groups, rating pool IDs, enablement, and Arena loop counts.
+
+To opt in, add only the overrides you need to
+`~/.codex/state/review-suite/settings.toml`:
+
+```toml
+[arena]
+enabled = true
+
+[orchestrator.stable_defaults]
+normal_arena_loops = 1
+deep_arena_loops = 1
+```
+
+Existing overrides continue to work. Keep rating pool IDs stable when moving
+settings so historical ratings retain their identity.
+
+Review sequences and gate counts live separately in
+[`workflow_settings.toml`](../plugins/review-suite/references/workflow_settings.toml).
+The loader merges workflow settings, Arena settings, model defaults, then user
+overrides. Installed runtime copies include all three shipped files.

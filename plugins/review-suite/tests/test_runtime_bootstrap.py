@@ -381,3 +381,34 @@ def test_action_command_helpers_use_launcher_paths_after_reexec(
     assert str(plugin_root / "scripts").replace("\\", "/") in command_text
     assert str(runtime_root).replace("\\", "/") not in command_text
     assert "review_suite_arena.py grade" in command_text
+
+
+def test_runtime_loads_split_settings_with_existing_user_overrides(
+    tmp_path: Path,
+) -> None:
+    runtime = ensure_runtime_copy(SCRIPT_DIR.parent, codex_home=tmp_path / "codex")
+    state = tmp_path / "state"
+    state.mkdir()
+    (state / "settings.toml").write_text(
+        "[arena]\nenabled = true\n[orchestrator.stable_defaults]\nnormal_arena_loops = 2\n",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; from pathlib import Path; sys.path.insert(0, sys.argv[1]); "
+            "from review_suite_core.config import load_config, gate_config; "
+            "state = Path(sys.argv[2]); config = load_config(state); "
+            "assert config['arena']['enabled'] is True; "
+            "assert config['arena']['pools']['arena_phase']['variant_groups']; "
+            "assert config['orchestrator']['stable_defaults']['normal_arena_loops'] == 2; "
+            "assert gate_config('phase_gate', state_dir=state).discovery_reviewer_count == 4",
+            str(runtime / "scripts"),
+            str(state),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr

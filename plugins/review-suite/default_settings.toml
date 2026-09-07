@@ -2,125 +2,15 @@
 # All jobs use normal except PR-gate discovery, which uses deep.
 
 [normal]
-model = "gpt-5.6-sol"
+model = "gpt-6-astra"
 reasoning = "medium"
 
 [deep]
 model = "gpt-6-astra"
-reasoning = "high"
+reasoning = "xhigh"
 
 # Optional per-job overrides inherit omitted fields from normal/deep:
 # [jobs.deslop]
 # model = "gpt-5.6-luna"
 # Jobs: plan, deslop, followup, phase_discovery, pr_discovery,
 # normal_signoff, deep_signoff. service_tier may also be set (fast/flex).
-
-# Workflow and Arena settings.
-[privacy]
-arena_external_publish_enabled = false
-
-[arena]
-enabled = false
-
-[arena.pools.discovery_phase]
-rating_pool_id = "discovery-phase-gpt-5.6-v1"
-variant_groups = [
-  ["gpt-5.5-medium", "gpt-5.6-sol-medium", "gpt-5.6-terra-medium", "gpt-5.6-luna-medium"],
-]
-
-[arena.pools.discovery_deep]
-rating_pool_id = "discovery-deep-gpt-5.6-v1"
-variant_groups = [
-  ["gpt-5.5-xhigh", "gpt-5.6-sol-xhigh", "gpt-5.6-terra-xhigh", "gpt-5.6-luna-xhigh"],
-]
-
-[arena.pools.arena_phase]
-rating_pool_id = "arena-phase-gpt-5.6-v1"
-reporting = true
-variant_ids = ["gpt-5.5-low", "gpt-5.5-medium", "gpt-5.6-luna-medium", "gpt-5.6-luna-high", "gpt-5.6-luna-xhigh", "gpt-5.6-luna-max", "gpt-5.6-terra-medium", "gpt-5.6-terra-high", "gpt-5.6-terra-xhigh", "gpt-5.6-sol-low", "gpt-5.6-sol-medium", "gpt-6-astra-low", "gpt-6-astra-medium"]
-variant_groups = [
-  ["gpt-5.5-low", "gpt-5.5-medium", "gpt-5.6-luna-high", "gpt-5.6-sol-low"],
-  ["gpt-5.5-medium", "gpt-5.6-luna-medium", "gpt-5.6-luna-xhigh", "gpt-5.6-sol-medium"],
-  ["gpt-5.6-luna-medium", "gpt-5.6-luna-high", "gpt-5.6-luna-max", "gpt-6-astra-low"],
-  ["gpt-5.6-luna-high", "gpt-5.6-luna-xhigh", "gpt-5.6-terra-medium", "gpt-6-astra-medium"],
-  ["gpt-5.6-luna-xhigh", "gpt-5.6-luna-max", "gpt-5.6-terra-high", "gpt-5.6-luna-medium"],
-  ["gpt-5.6-luna-max", "gpt-5.6-terra-medium", "gpt-5.6-terra-xhigh", "gpt-5.6-terra-high"],
-  ["gpt-5.6-terra-medium", "gpt-5.6-terra-high", "gpt-5.6-sol-low", "gpt-5.5-low"],
-  ["gpt-5.6-terra-high", "gpt-5.6-terra-xhigh", "gpt-5.6-sol-medium", "gpt-5.5-medium"],
-  ["gpt-5.6-terra-xhigh", "gpt-5.6-sol-low", "gpt-6-astra-low", "gpt-5.6-luna-medium"],
-  ["gpt-5.6-sol-low", "gpt-5.6-sol-medium", "gpt-6-astra-medium", "gpt-5.6-luna-high"],
-  ["gpt-5.6-sol-medium", "gpt-6-astra-low", "gpt-5.5-low", "gpt-5.6-luna-xhigh"],
-  ["gpt-6-astra-low", "gpt-6-astra-medium", "gpt-5.6-terra-xhigh", "gpt-5.6-luna-max"],
-  ["gpt-6-astra-medium", "gpt-5.5-medium", "gpt-5.5-low", "gpt-5.6-terra-medium"],
-]
-
-[arena.pools.arena_deep]
-rating_pool_id = "arena-deep-gpt-5.6-v1"
-reporting = true
-variant_ids = ["gpt-5.5-medium", "gpt-5.5-high", "gpt-5.5-xhigh", "gpt-5.6-terra-medium", "gpt-5.6-terra-high", "gpt-5.6-terra-xhigh", "gpt-5.6-terra-max", "gpt-5.6-sol-medium", "gpt-5.6-sol-high", "gpt-5.6-sol-xhigh", "gpt-5.6-sol-max", "gpt-5.6-luna-medium", "gpt-5.6-luna-high", "gpt-5.6-luna-xhigh", "gpt-5.6-luna-max", "gpt-6-astra-low", "gpt-6-astra-medium", "gpt-6-astra-high", "gpt-6-astra-xhigh", "gpt-6-astra-max"]
-variant_groups = [
-  ["gpt-5.5-medium", "gpt-5.5-high", "gpt-5.6-terra-high", "gpt-5.6-sol-max"],
-  ["gpt-5.5-high", "gpt-5.5-xhigh", "gpt-5.6-terra-xhigh", "gpt-5.6-luna-medium"],
-  ["gpt-5.5-xhigh", "gpt-5.6-terra-medium", "gpt-5.6-terra-max", "gpt-5.6-luna-high"],
-  ["gpt-5.6-terra-medium", "gpt-5.6-terra-high", "gpt-5.6-sol-medium", "gpt-5.6-luna-xhigh"],
-  ["gpt-5.6-terra-high", "gpt-5.6-terra-xhigh", "gpt-5.6-sol-high", "gpt-5.6-luna-max"],
-  ["gpt-5.6-terra-xhigh", "gpt-5.6-terra-max", "gpt-5.6-sol-xhigh", "gpt-6-astra-low"],
-  ["gpt-5.6-terra-max", "gpt-5.6-sol-medium", "gpt-5.6-sol-max", "gpt-6-astra-medium"],
-  ["gpt-5.6-sol-medium", "gpt-5.6-sol-high", "gpt-5.6-luna-medium", "gpt-6-astra-high"],
-  ["gpt-5.6-sol-high", "gpt-5.6-sol-xhigh", "gpt-5.6-luna-high", "gpt-6-astra-xhigh"],
-  ["gpt-5.6-sol-xhigh", "gpt-5.6-sol-max", "gpt-5.6-luna-xhigh", "gpt-6-astra-max"],
-  ["gpt-5.6-sol-max", "gpt-5.6-luna-medium", "gpt-5.6-luna-max", "gpt-5.5-high"],
-  ["gpt-5.6-luna-medium", "gpt-5.6-luna-high", "gpt-6-astra-low", "gpt-5.6-sol-medium"],
-  ["gpt-5.6-luna-high", "gpt-5.6-luna-xhigh", "gpt-6-astra-medium", "gpt-5.5-xhigh"],
-  ["gpt-5.6-luna-xhigh", "gpt-5.6-luna-max", "gpt-6-astra-high", "gpt-5.5-medium"],
-  ["gpt-5.6-luna-max", "gpt-6-astra-low", "gpt-6-astra-xhigh", "gpt-5.5-high"],
-  ["gpt-6-astra-low", "gpt-6-astra-medium", "gpt-6-astra-max", "gpt-5.5-xhigh"],
-  ["gpt-6-astra-medium", "gpt-6-astra-high", "gpt-5.6-sol-high", "gpt-5.6-terra-medium"],
-  ["gpt-6-astra-high", "gpt-6-astra-xhigh", "gpt-5.5-medium", "gpt-5.6-terra-high"],
-  ["gpt-6-astra-xhigh", "gpt-6-astra-max", "gpt-5.6-terra-medium", "gpt-5.6-terra-xhigh"],
-  ["gpt-6-astra-max", "gpt-5.6-sol-xhigh", "gpt-5.5-medium", "gpt-5.6-terra-max"],
-]
-
-[orchestrator]
-selection = "auto"
-
-[orchestrator.calibration]
-auto_promotion_enabled = false
-
-[orchestrator.stable_defaults]
-discovery_loops = 1
-normal_arena_loops = 13
-deep_arena_loops = 13
-
-[orchestrator.profiles.stable.normal]
-steps = [
-  { kind = "arena", name = "arena-phase-review", lane = "review_t1", task_class = "phase_review", pool = "arena_phase", loop_ref = "normal_arena_loops", enabled_ref = "arena.enabled" },
-  { name = "precision-signoff", count = 2, model_ref = "signoff_normal_model", rerun_on_findings = true },
-]
-
-[orchestrator.profiles.stable.deep]
-steps = [
-  { name = "precision-signoff", count = 2, model_ref = "signoff_normal_model", rerun_on_findings = true },
-  { kind = "arena", name = "arena-pr-review", lane = "review_t3", task_class = "pr_review", pool = "arena_deep", loop_ref = "deep_arena_loops", enabled_ref = "arena.enabled" },
-  { name = "deep-signoff", count = 2, model_ref = "signoff_deep_model", rerun_on_findings = true },
-]
-
-[orchestrator.profiles.stable.fast]
-steps = [
-  { name = "fast-signoff", count = 2, model_ref = "signoff_normal_model", max_review_rounds = 2 },
-]
-
-[gates.phase_gate]
-discovery_reviewer_count = 4
-signoff_reviewer_count = 2
-discovery_loops_ref = "discovery_loops"
-backup_variant_ids = ["gpt-5.6-sol-medium", "gpt-5.6-terra-medium"]
-max_active_reviewers = 4
-
-[gates.pr_gate]
-discovery_reviewer_count = 2
-signoff_reviewer_count = 2
-discovery_loops_ref = "discovery_loops"
-backup_variant_ids = ["gpt-5.6-sol-xhigh", "gpt-5.6-terra-xhigh"]
-max_active_reviewers = 2
-
