@@ -193,7 +193,7 @@ def _create_user_settings(path: Path, defaults: dict[str, Any]) -> None:
 
 
 def _job_model(config: dict[str, Any], job: str) -> dict[str, Any]:
-    group = "deep" if job == "pr_discovery" else "normal"
+    group = "deep" if job == "deep_signoff" else "normal"
     base = config.get(group)
     jobs = config.get("jobs", {})
     if not isinstance(base, dict):

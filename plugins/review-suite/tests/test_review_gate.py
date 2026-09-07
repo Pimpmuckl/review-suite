@@ -321,10 +321,10 @@ def test_select_gate_variants_uses_pr_gate_discovery_variant_before_champions(
 
     assert selection.mode == "configured_discovery_double_pass"
     assert [variant["id"] for variant in selection.variants] == [
-        "gpt-6-astra-high",
-        "gpt-6-astra-high",
+        "gpt-5.6-sol-medium",
+        "gpt-5.6-sol-medium",
     ]
-    assert selection.champion_ids == ("gpt-6-astra-high",)
+    assert selection.champion_ids == ("gpt-5.6-sol-medium",)
 
 
 def test_select_gate_variants_uses_configured_discovery_without_champions(
@@ -623,8 +623,8 @@ def test_pr_gate_uses_configured_discovery_then_signoff_variant(tmp_path: Path) 
 
     assert first.mode == "configured_discovery_double_pass"
     assert [variant["id"] for variant in first.variants] == [
-        "gpt-6-astra-high",
-        "gpt-6-astra-high",
+        "gpt-5.6-sol-medium",
+        "gpt-5.6-sol-medium",
     ]
 
     (state_dir / "gate_runs.jsonl").write_text(
@@ -650,8 +650,8 @@ def test_pr_gate_uses_configured_discovery_then_signoff_variant(tmp_path: Path) 
 
     assert subsequent.mode == "configured_signoff_double_pass"
     assert [variant["id"] for variant in subsequent.variants] == [
-        "gpt-5.6-sol-medium",
-        "gpt-5.6-sol-medium",
+        "gpt-6-astra-high",
+        "gpt-6-astra-high",
     ]
 
 
@@ -976,8 +976,8 @@ def test_select_gate_variants_uses_pr_gate_configured_discovery_without_champion
 
     assert selection.mode == "configured_discovery_double_pass"
     assert [variant["id"] for variant in selection.variants] == [
-        "gpt-6-astra-high",
-        "gpt-6-astra-high",
+        "gpt-5.6-sol-medium",
+        "gpt-5.6-sol-medium",
     ]
 
 
@@ -1020,7 +1020,7 @@ def test_unlisted_configured_model_cooldown_still_uses_backup(tmp_path: Path) ->
     first = _select_gate_variants(
         roster=roster, state_dir=tmp_path, gate_task_class="pr_gate"
     )
-    assert first.variants[0]["id"] == "new-model-high-flex"
+    assert first.variants[0]["id"] == "new-model-medium-flex"
     assert first.variants[0]["service_tier"] == "flex"
     _write_json(
         tmp_path / "operational_state.json",
@@ -1028,7 +1028,7 @@ def test_unlisted_configured_model_cooldown_still_uses_backup(tmp_path: Path) ->
             "task_classes": {
                 "pr_review": {
                     "cooldowns": {
-                        "new-model-high-flex": {
+                        "new-model-medium-flex": {
                             "until": "2099-01-01T00:00:00Z",
                             "failure_count": 1,
                         }

@@ -1,5 +1,5 @@
 # Shipped defaults. User overrides: ~/.codex/state/review-suite/settings.toml
-# All jobs use normal except PR-gate discovery, which uses deep.
+# All jobs use normal except final deep/PR-gate signoff, which uses deep.
 
 [normal]
 model = "gpt-6-astra"

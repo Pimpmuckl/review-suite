@@ -17,6 +17,6 @@ calibration remain available, but stable profiles do not run fixed discovery
 brawls. The caller grades Arena output; Review Suite does not automatically
 select or promote models.
 
-All jobs use the configured `normal` model except PR-gate discovery, which uses
-`deep`. Both signoff stages in deep mode use `normal` unless overridden per job.
+Discovery and earlier review passes use the configured `normal` model. The
+final signoff in deep mode and PR-gate signoff use `deep`, unless overridden per job.
 See [model settings](../README.md#settings) and the [Arena maintainer guide](arena.md).

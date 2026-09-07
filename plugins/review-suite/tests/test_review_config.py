@@ -16,6 +16,26 @@ from review_suite_core.config import gate_config, load_config
 from review_suite_core.orchestrator_profiles import load_orchestrator_profiles
 
 
+def test_deep_model_is_reserved_for_final_signoff(tmp_path: Path) -> None:
+    (tmp_path / "settings.toml").write_text(
+        '[normal]\nmodel = "gpt-5.6-sol"\nreasoning = "medium"\n'
+        '[deep]\nmodel = "gpt-6-astra"\nreasoning = "xhigh"\n',
+        encoding="utf-8",
+    )
+    phase = gate_config("phase_gate", state_dir=tmp_path)
+    pr = gate_config("pr_gate", state_dir=tmp_path)
+    assert phase.discovery_variant_id == "gpt-5.6-sol-medium"
+    assert phase.signoff_variant_id == "gpt-5.6-sol-medium"
+    assert pr.discovery_variant_id == "gpt-5.6-sol-medium"
+    assert pr.signoff_variant_id == "gpt-6-astra-xhigh"
+    steps = load_orchestrator_profiles(load_config(tmp_path))["stable"]["deep"].steps
+    signoffs = [step for step in steps if step.kind != "arena"]
+    assert [(step.model, step.reasoning_effort) for step in signoffs] == [
+        ("gpt-5.6-sol", "medium"),
+        ("gpt-6-astra", "xhigh"),
+    ]
+
+
 def test_legacy_migration_preserves_non_model_settings_only(tmp_path: Path) -> None:
     legacy = {
         "lens": {

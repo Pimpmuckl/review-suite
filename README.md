@@ -105,9 +105,8 @@ model = "gpt-6-astra"
 reasoning = "xhigh"
 ```
 
-Every job uses `normal` except **PR-gate discovery**, which uses `deep`.
-This includes signoffs in deep mode: the mode controls the review sequence,
-while the model groups control which model each job uses.
+Discovery and earlier review passes use `normal`. The final signoff in deep
+mode and PR-gate signoff use `deep`. Per-job overrides still take precedence.
 
 Optional user overrides live at:
 
