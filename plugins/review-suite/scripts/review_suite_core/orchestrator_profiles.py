@@ -19,8 +19,7 @@ SUPPORTED_SELECTION_REASONS = (
     "explicit_stable",
     "auto_stable_profile",
 )
-SUPPORTED_STEP_KINDS = ("review", "gate", "arena")
-SUPPORTED_GATE_TASK_CLASSES = ("phase_gate", "pr_gate")
+SUPPORTED_STEP_KINDS = ("review", "arena")
 SUPPORTED_ARENA_LANES = ("review_t1", "review_t3")
 SUPPORTED_ARENA_TASK_CLASSES = ("phase_review", "pr_review")
 ARENA_LANES_BY_TASK_CLASS = {
@@ -37,7 +36,6 @@ class OrchestratorProfileStep:
     model: str | None = None
     reasoning_effort: str | None = None
     service_tier: str | None = None
-    gate: str | None = None
     lane: str | None = None
     task_class: str | None = None
     rating_pool_id: str | None = None
@@ -177,15 +175,6 @@ def _normalize_step_kind(value: Any, *, field: str) -> str:
             f"{field}.kind must be one of: {', '.join(SUPPORTED_STEP_KINDS)}"
         )
     return kind
-
-
-def _normalize_gate(value: Any, *, field: str) -> str:
-    gate = _non_empty_text(value, field=f"{field}.gate")
-    if gate not in SUPPORTED_GATE_TASK_CLASSES:
-        raise ValueError(
-            f"{field}.gate must be one of: {', '.join(SUPPORTED_GATE_TASK_CLASSES)}"
-        )
-    return gate
 
 
 def _normalize_arena_lane(value: Any, *, field: str) -> str:
@@ -366,12 +355,6 @@ def _normalize_step(
     name = (
         f"{_non_empty_text(raw_step.get('name'), field=f'{field}.name')}{name_suffix}"
     )
-    if kind == "gate":
-        return OrchestratorProfileStep(
-            kind=kind,
-            name=name,
-            gate=_normalize_gate(raw_step.get("gate"), field=field),
-        )
     if kind == "arena":
         lane, task_class = _normalize_arena_pair(raw_step, field=field)
         rating_pool_id, variant_groups, variant_ids, reporting_pool = (

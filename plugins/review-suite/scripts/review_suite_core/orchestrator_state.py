@@ -17,7 +17,6 @@ STAGE_RUNNING = "running"
 STAGE_DECISION_PENDING = "decision-pending"
 STAGE_FIX_PENDING = "fix-pending"
 STAGE_FOLLOWUP_PENDING = "followup-pending"
-STAGE_GATE_RERUN_NEEDED = "gate-rerun-needed"
 STAGE_REVIEW_GREEN = "review-green"
 STAGE_LOCAL_GREEN_HANDOFF = "local-green-handoff"
 STAGE_BLOCKED = "blocked"
@@ -57,7 +56,6 @@ DESLOP_STATUS_FAILED = "failed"
 DESLOP_STATUS_CLOSED = "closed"
 DESLOP_STATUS_SKIPPED = "skipped"
 CONFORMANCE_VERDICTS = {"CONFORMS", "MATERIALLY_DRIFTED", "NOT_APPLICABLE"}
-GATE_LANES = {"review_t2", "review_t4"}
 NO_WORK_STAGES = {
     STAGE_DECISION_PENDING,
     STAGE_FIX_PENDING,
@@ -105,7 +103,6 @@ def _review_ladder_heads(state: dict[str, Any]) -> list[str]:
     review_heads = dict(state.get("review_heads") or {})
     heads: list[str] = []
     for key in (
-        "last_gate_clean_head",
         "last_followup_head",
         "last_reviewed_head",
         "last_fix_head",
@@ -441,7 +438,6 @@ def create_cycle(
             "last_reviewed_head": None,
             "last_fix_head": None,
             "last_followup_head": None,
-            "last_gate_clean_head": None,
         },
         "validation": {
             "review_green": "unknown",
@@ -464,7 +460,6 @@ def create_cycle(
         "rounds": [],
         "decisions": [],
         "active_findings": None,
-        "resolved_gate_findings": [],
         "convergence": deepcopy(CONVERGENCE_DEFAULTS),
     }
     if restart is not None:
@@ -496,7 +491,6 @@ def _last_reviewed_head(state: dict[str, Any]) -> str | None:
     review_heads = dict(state.get("review_heads") or {})
     for key in (
         "last_reviewed_head",
-        "last_gate_clean_head",
         "last_followup_head",
         "head",
     ):
@@ -506,16 +500,10 @@ def _last_reviewed_head(state: dict[str, Any]) -> str | None:
     return None
 
 
-def _round_kind(lane: str, gate: str | None = None) -> str:
-    if gate or lane in GATE_LANES:
-        return "gate"
+def _round_kind(lane: str) -> str:
     if lane == "review-followup":
         return "followup"
     return "review"
-
-
-def _gate_name(lane: str, gate: str | None = None) -> str | None:
-    return _optional_text(gate) or (lane if lane in GATE_LANES else None)
 
 
 def _upsert_round(
@@ -526,7 +514,6 @@ def _upsert_round(
     status: str,
     reviewed_head: str | None = None,
     command: str | None = None,
-    gate: str | None = None,
     source_round_id: str | None = None,
 ) -> dict[str, Any]:
     resolved_round_id = _required_text(round_id, field="round_id")
@@ -535,8 +522,7 @@ def _upsert_round(
         {
             "round_id": resolved_round_id,
             "lane": resolved_lane,
-            "kind": _round_kind(resolved_lane, gate),
-            "gate": _gate_name(resolved_lane, gate),
+            "kind": _round_kind(resolved_lane),
             "status": status,
             "reviewed_head": reviewed_head,
             "command": command,
@@ -559,7 +545,6 @@ def _upsert_decision(
     lane: str,
     command: str,
     reviewed_head: str,
-    gate: str | None = None,
 ) -> None:
     if command not in DECISION_COMMANDS:
         raise ValueError(
@@ -571,7 +556,6 @@ def _upsert_decision(
             "lane": _required_text(lane, field="lane"),
             "command": command,
             "reviewed_head": reviewed_head,
-            "gate": _gate_name(lane, gate),
         }
     )
     decisions = state.setdefault("decisions", [])
@@ -831,9 +815,6 @@ def _next_profile_step_action(state: dict[str, Any]) -> dict[str, Any]:
     step_kind = _profile_step_kind(step)
     if step_kind != "review":
         action["step_kind"] = step_kind
-    gate = _optional_text(step.get("gate"))
-    if gate:
-        action["gate"] = gate
     return action
 
 
@@ -965,64 +946,6 @@ def mark_review_step_pending(
     return next_state
 
 
-def mark_gate_step_pending(
-    state: dict[str, Any],
-    *,
-    round_id: str,
-    lane: str,
-    gate: str,
-    step_index: int,
-    step_name: str,
-    reviewed_head: str | None = None,
-) -> dict[str, Any]:
-    index = _nonnegative_int(step_index, field="step_index")
-    name = _required_text(step_name, field="step_name")
-    gate_context = _required_text(gate, field="gate")
-    next_state = mark_decision_pending(
-        state,
-        round_id=round_id,
-        lane=lane,
-        gate=gate_context,
-        reviewed_head=reviewed_head,
-        pending_action={
-            "kind": "decision",
-            "round_id": round_id,
-            "lane": lane,
-            "gate": gate_context,
-            "step_index": index,
-            "step": name,
-        },
-    )
-    profile_step = {
-        "index": index,
-        "name": name,
-        "round_id": _required_text(round_id, field="round_id"),
-        "lane": _required_text(lane, field="lane"),
-        "kind": "gate",
-        "gate": gate_context,
-    }
-    for item in list(next_state.get("rounds") or []):
-        if isinstance(item, dict) and item.get("round_id") == round_id:
-            item["profile_step"] = {
-                "index": index,
-                "name": name,
-                "kind": "gate",
-                "gate": gate_context,
-            }
-            break
-    active = next_state.get("active_findings")
-    if isinstance(active, dict) and isinstance(active.get("gate"), dict):
-        active_gate = dict(active["gate"])
-        if active_gate.get("lane") != lane or active_gate.get("gate") != gate_context:
-            raise ValueError(
-                "gate findings require rerunning the same gate before advancing"
-            )
-        active["rerun_round_id"] = _required_text(round_id, field="round_id")
-        active["status"] = STAGE_DECISION_PENDING
-    _set_review_progress(next_state, next_step_index=index, current_step=profile_step)
-    return next_state
-
-
 def _profile_step_for_round(
     state: dict[str, Any], round_id: str
 ) -> dict[str, Any] | None:
@@ -1042,9 +965,6 @@ def _profile_step_for_round(
             "round_id": round_id,
             "lane": pending.get("lane"),
         }
-        if pending.get("gate"):
-            payload["kind"] = "gate"
-            payload["gate"] = pending.get("gate")
         if pending.get("arena_round"):
             payload["arena_round"] = True
         if pending.get("grading_required"):
@@ -1080,9 +1000,6 @@ def _profile_step_for_round(
                 payload["arena_round"] = True
             if bool(item.get("grading_required")):
                 payload["grading_required"] = True
-            if profile_step.get("gate"):
-                payload["kind"] = "gate"
-                payload["gate"] = profile_step.get("gate")
             return payload
     return None
 
@@ -1115,7 +1032,6 @@ def _complete_profile_step_from_metadata(
     progress = _review_progress(state)
     completed = list(progress["completed_steps"])
     step_kind = _profile_step_kind(profile_step)
-    gate = _optional_text(profile_step.get("gate"))
     completed_item = _compact(
         {
             "index": index,
@@ -1123,7 +1039,6 @@ def _complete_profile_step_from_metadata(
             "round_id": _required_text(round_id, field="round_id"),
             "lane": _required_text(lane, field="lane"),
             "kind": step_kind if step_kind != "review" else None,
-            "gate": gate,
             "reviewed_head": reviewed_head,
             "arena_round": True if profile_step.get("arena_round") else None,
         }
@@ -1504,7 +1419,6 @@ def mark_running(
     round_id: str,
     lane: str,
     reviewed_head: str | None = None,
-    gate: str | None = None,
 ) -> dict[str, Any]:
     next_state = _copy_state(state)
     head = reviewed_head or _state_head(next_state)
@@ -1514,7 +1428,6 @@ def mark_running(
         lane=lane,
         status=STAGE_RUNNING,
         reviewed_head=head,
-        gate=gate,
     )
     _set_stage(next_state, STAGE_RUNNING)
     return next_state
@@ -1605,7 +1518,6 @@ def mark_decision_pending(
     round_id: str,
     lane: str,
     reviewed_head: str | None = None,
-    gate: str | None = None,
     pending_action: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     next_state = _copy_state(state)
@@ -1616,7 +1528,6 @@ def mark_decision_pending(
         lane=lane,
         status=STAGE_DECISION_PENDING,
         reviewed_head=head,
-        gate=gate,
     )
     next_state.setdefault("review_heads", {})["last_reviewed_head"] = head
     _set_stage(next_state, STAGE_DECISION_PENDING, pending_action)
@@ -1630,11 +1541,9 @@ def record_findings_decision(
     lane: str,
     reviewed_head: str | None = None,
     reviewed_tree: str | None = None,
-    gate: str | None = None,
 ) -> dict[str, Any]:
     next_state = _copy_state(state)
     head = reviewed_head or _state_head(next_state)
-    gate_context = _gate_name(lane, gate)
     profile_step = _profile_step_for_round(next_state, round_id)
     _upsert_decision(
         next_state,
@@ -1642,7 +1551,6 @@ def record_findings_decision(
         lane=lane,
         command=DECISION_FINDINGS,
         reviewed_head=head,
-        gate=gate_context,
     )
     _upsert_round(
         next_state,
@@ -1651,7 +1559,6 @@ def record_findings_decision(
         status="decided",
         reviewed_head=head,
         command=DECISION_FINDINGS,
-        gate=gate_context,
     )
     next_state.setdefault("review_heads", {})["last_reviewed_head"] = head
     next_state["active_findings"] = _compact(
@@ -1661,14 +1568,6 @@ def record_findings_decision(
             "reviewed_head": head,
             "status": STAGE_FIX_PENDING,
             "profile_round_id": round_id if profile_step else None,
-            "gate": {
-                "lane": lane,
-                "gate": gate_context,
-                "round_id": round_id,
-                "reviewed_head": head,
-            }
-            if gate_context
-            else None,
         }
     )
     _set_review_green(next_state, "unknown")
@@ -1711,9 +1610,6 @@ def mark_fix_detected(
                 "head": fix_head,
             },
         )
-        return next_state
-    if isinstance(active.get("gate"), dict):
-        _mark_gate_rerun_needed_inplace(next_state)
         return next_state
     if _mark_profile_fix_review_needed_inplace(next_state, active):
         return next_state
@@ -1764,40 +1660,6 @@ def mark_followup_review_pending(
     return next_state
 
 
-def _mark_gate_rerun_needed_inplace(state: dict[str, Any]) -> None:
-    active = _active_findings(state)
-    gate = active.get("gate")
-    if not isinstance(gate, dict):
-        raise ValueError("gate rerun requires active gate findings")
-    followup_round_id = _optional_text(active.get("followup_round_id"))
-    active["status"] = STAGE_GATE_RERUN_NEEDED
-    profile_round_id = _profile_round_id_for_findings(state, active)
-    profile_step = (
-        _profile_step_for_round(state, profile_round_id) if profile_round_id else None
-    )
-    action = {
-        "kind": "rerun-gate",
-        "lane": gate.get("lane"),
-        "gate": gate.get("gate"),
-        "source_round_id": gate.get("round_id"),
-        "head": active.get("followup_head") or active.get("fix_head"),
-        "fix_verification": _findings_fix_context(active),
-    }
-    if followup_round_id:
-        action["after_followup_round_id"] = followup_round_id
-    if profile_step:
-        action["step_index"] = profile_step.get("index")
-        action["step"] = profile_step.get("name")
-    _set_review_green(state, "unknown")
-    _set_stage(state, STAGE_GATE_RERUN_NEEDED, action)
-
-
-def mark_gate_rerun_needed(state: dict[str, Any]) -> dict[str, Any]:
-    next_state = _copy_state(state)
-    _mark_gate_rerun_needed_inplace(next_state)
-    return next_state
-
-
 def record_followup_clean(
     state: dict[str, Any],
     *,
@@ -1827,9 +1689,6 @@ def record_followup_clean(
     active["followup_head"] = head
     next_state.setdefault("review_heads", {})["last_followup_head"] = head
     _convergence(next_state).pop("continue_pending", None)
-    if isinstance(active.get("gate"), dict):
-        _mark_gate_rerun_needed_inplace(next_state)
-        return next_state
     next_state["active_findings"] = None
     profile_round_id = _profile_round_id_for_findings(next_state, active)
     profile_step = (
@@ -1878,7 +1737,6 @@ def record_followup_findings(
     next_state = _copy_state(state)
     active = _active_findings(next_state)
     head = reviewed_head or active.get("fix_head") or _state_head(next_state)
-    gate = active.get("gate") if isinstance(active.get("gate"), dict) else None
     _upsert_decision(
         next_state,
         round_id=round_id,
@@ -1907,7 +1765,6 @@ def record_followup_findings(
             "status": STAGE_FIX_PENDING,
             "previous_round_id": active.get("round_id"),
             "profile_round_id": profile_round_id,
-            "gate": gate,
         }
     )
     _set_review_green(next_state, "unknown")
@@ -1924,43 +1781,20 @@ def record_clean_decision(
     round_id: str,
     lane: str,
     reviewed_head: str | None = None,
-    gate: str | None = None,
 ) -> dict[str, Any]:
     next_state = _copy_state(state)
     resolved_lane = _required_text(lane, field="lane")
     head = reviewed_head or _state_head(next_state)
-    pending_action = dict(next_state.get("pending_action") or {})
     active = next_state.get("active_findings")
-    active_gate = (
-        active.get("gate")
-        if isinstance(active, dict) and isinstance(active.get("gate"), dict)
-        else None
-    )
-    if active_gate:
-        if (
-            pending_action.get("kind") != "decision"
-            or pending_action.get("round_id") != round_id
-        ):
-            raise ValueError(
-                "gate findings require fix, follow-up clean, and same gate rerun before advancing"
-            )
-        if pending_action.get("lane") != resolved_lane or pending_action.get(
-            "gate"
-        ) != _gate_name(resolved_lane, gate):
-            raise ValueError(
-                "gate findings require rerunning the same gate before advancing"
-            )
-    elif isinstance(active, dict):
+    if isinstance(active, dict):
         raise ValueError("findings require a clean follow-up before advancing")
 
-    gate_context = _gate_name(resolved_lane, gate)
     _upsert_decision(
         next_state,
         round_id=round_id,
         lane=resolved_lane,
         command=DECISION_CLEAN,
         reviewed_head=head,
-        gate=gate_context,
     )
     _upsert_round(
         next_state,
@@ -1969,60 +1803,20 @@ def record_clean_decision(
         status="decided",
         reviewed_head=head,
         command=DECISION_CLEAN,
-        gate=gate_context,
     )
     next_state.setdefault("review_heads", {})["last_reviewed_head"] = head
     _convergence(next_state).pop("continue_pending", None)
     completed_profile_step = False
-    if active_gate:
-        next_state.setdefault("review_heads", {})["last_gate_clean_head"] = head
-        resolved = _compact(
-            {
-                "source_round_id": active_gate.get("round_id"),
-                "followup_round_id": active.get("followup_round_id")
-                if isinstance(active, dict)
-                else None,
-                "rerun_round_id": _required_text(round_id, field="round_id"),
-                "lane": resolved_lane,
-                "gate": gate_context,
-                "resolved_head": head,
-            }
+    profile_step = _profile_step_for_round(next_state, round_id)
+    if profile_step:
+        completed_profile_step = _complete_profile_step_from_metadata(
+            next_state,
+            profile_step=profile_step,
+            round_id=round_id,
+            lane=resolved_lane,
+            reviewed_head=head,
         )
-        resolved_items = next_state.setdefault("resolved_gate_findings", [])
-        if not any(
-            isinstance(item, dict)
-            and item.get("source_round_id") == resolved.get("source_round_id")
-            for item in resolved_items
-        ):
-            resolved_items.append(resolved)
-        profile_step = _profile_step_for_round(next_state, round_id)
-        if not profile_step and isinstance(active, dict):
-            profile_round_id = _profile_round_id_for_findings(next_state, active)
-            profile_step = (
-                _profile_step_for_round(next_state, profile_round_id)
-                if profile_round_id
-                else None
-            )
-        if profile_step:
-            completed_profile_step = _complete_profile_step_from_metadata(
-                next_state,
-                profile_step=profile_step,
-                round_id=round_id,
-                lane=resolved_lane,
-                reviewed_head=head,
-            )
-        next_state["active_findings"] = None
-    else:
-        profile_step = _profile_step_for_round(next_state, round_id)
-        if profile_step:
-            completed_profile_step = _complete_profile_step_from_metadata(
-                next_state,
-                profile_step=profile_step,
-                round_id=round_id,
-                lane=resolved_lane,
-                reviewed_head=head,
-            )
-            _advance_after_clean_discovery_or_arena(next_state, profile_step)
+        _advance_after_clean_discovery_or_arena(next_state, profile_step)
     if completed_profile_step and review_profile_has_next_step(next_state):
         _set_review_green(next_state, "unknown")
         _set_stage(next_state, STAGE_CREATED, _next_profile_step_action(next_state))
@@ -2035,7 +1829,6 @@ def record_clean_decision(
 def can_advance_or_anchor(state: dict[str, Any]) -> bool:
     return (
         state.get("active_findings") is None
-        and dict(state.get("pending_action") or {}).get("kind") != "rerun-gate"
         and dict(state.get("validation") or {}).get("review_green") == "passed"
     )
 
@@ -2303,7 +2096,7 @@ def mark_local_green_handoff(
 ) -> dict[str, Any]:
     if not can_advance_or_anchor(state):
         raise ValueError(
-            "local-green handoff requires review_green without unresolved findings or gate rerun"
+            "local-green handoff requires review_green without unresolved findings"
         )
     next_state = record_validation_statuses(
         state,

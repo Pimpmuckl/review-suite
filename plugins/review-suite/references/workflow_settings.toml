@@ -1,10 +1,9 @@
-# Shipped review sequences and gate settings.
+# Shipped review sequences.
 
 [orchestrator]
 selection = "auto"
 
 [orchestrator.stable_defaults]
-discovery_loops = 1
 
 [orchestrator.profiles.stable.normal]
 steps = [
@@ -23,17 +22,3 @@ steps = [
 steps = [
   { name = "fast-signoff", count = 2, model_ref = "signoff_normal_model", max_review_rounds = 2 },
 ]
-
-[gates.phase_gate]
-discovery_reviewer_count = 4
-signoff_reviewer_count = 2
-discovery_loops_ref = "discovery_loops"
-backup_variant_ids = ["gpt-5.6-sol-medium", "gpt-5.6-terra-medium"]
-max_active_reviewers = 4
-
-[gates.pr_gate]
-discovery_reviewer_count = 2
-signoff_reviewer_count = 2
-discovery_loops_ref = "discovery_loops"
-backup_variant_ids = ["gpt-5.6-sol-xhigh", "gpt-5.6-terra-xhigh"]
-max_active_reviewers = 2

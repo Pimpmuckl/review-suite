@@ -30,18 +30,14 @@ from review_suite_local import (
     write_json,
 )
 
-LANES = ("review_t1", "review_t2", "review_t3", "review_t4", "review_followup")
+LANES = ("review_t1", "review_t3", "review_followup")
 TASK_TO_LANE = {
     "phase_review": "review_t1",
-    "phase_gate": "review_t2",
     "pr_review": "review_t3",
-    "pr_gate": "review_t4",
 }
 PUBLIC_TASK_TO_LANE = {
     "review_t1": "review_t1",
-    "review_t2": "review_t2",
     "review_t3": "review_t3",
-    "review_t4": "review_t4",
     "review-followup": "review_followup",
     "review_followup": "review_followup",
 }
@@ -377,7 +373,6 @@ def _is_review_title(title: str | None) -> bool:
     value = str(title or "").strip().lower()
     return (
         value.startswith("review-suite::")
-        or value.startswith("review-gate::")
         or value.startswith("review the code changes against the base branch ")
         or value.startswith("you are reviewing a manually supplied diff artifact.")
         or value.startswith("brief review for commit range ")
@@ -853,21 +848,11 @@ def _run_contribution_id(
 
 
 def _record_cost_runs(record: dict[str, Any]) -> list[dict[str, Any]]:
-    if _record_lane(record) in {"review_t2", "review_t4"}:
-        runs = [
-            run
-            for run in [
-                *list(record.get("retry_runs") or []),
-                *list(record.get("runs") or []),
-            ]
-            if isinstance(run, dict)
-        ]
-    else:
-        runs = [
-            run
-            for run in list(record.get("runs") or [])
-            if isinstance(run, dict) and _run_is_finalized(run)
-        ]
+    runs = [
+        run
+        for run in list(record.get("runs") or [])
+        if isinstance(run, dict) and _run_is_finalized(run)
+    ]
     if record.get("rerolled_from_round_id"):
         parent_round_id = str(record["rerolled_from_round_id"])
         runs = [
@@ -991,24 +976,6 @@ def collect_review_cost_rows(
             continue
         bucket = buckets.setdefault(normalized_cwd, _new_bucket())
         _add_record(bucket, lane=lane, record=dict(payload), runs=runs)
-    for record in read_jsonl(state_dir / "gate_runs.jsonl"):
-        lane = TASK_TO_LANE.get(str(record.get("task_class") or ""))
-        if lane not in {"review_t2", "review_t4"}:
-            continue
-        normalized_cwd = str(normalize_record_review_cwd_value(record) or "")
-        if not normalized_cwd:
-            continue
-        if requested_cwd and normalized_cwd != requested_cwd:
-            continue
-        if not include_all and not requested_cwd:
-            continue
-        if not record_matches_current_branch(normalized_cwd, dict(record)):
-            continue
-        runs = _record_cost_runs(record)
-        if not runs:
-            continue
-        bucket = buckets.setdefault(normalized_cwd, _new_bucket())
-        _add_record(bucket, lane=lane, record=dict(record), runs=runs)
     for normalized_cwd, records in wrapper_records_by_cwd.items():
         if requested_cwd and normalized_cwd != requested_cwd:
             continue
@@ -1138,7 +1105,7 @@ def render_review_cost_markdown(rows: list[ReviewCostRow]) -> str:
     lines = [
         "# Review Cost Ledger",
         "",
-        "Generated from local review-suite state. T1/T2/T3/T4/FU columns are reviewer session counts.",
+        "Generated from local review-suite state. T1/T3/FU columns are reviewer session counts.",
         "",
     ]
     if not rows:
@@ -1150,8 +1117,8 @@ def render_review_cost_markdown(rows: list[ReviewCostRow]) -> str:
             [
                 f"# {repo}",
                 "",
-                "| Date | Folder | Branch | PR | Worker Model | Impl Tokens | Impl Cost | T1 | T2 | T3 | T4 | FU | Review Time | Review Tokens | Review Cost | Total Cost |",
-                "| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+                "| Date | Folder | Branch | PR | Worker Model | Impl Tokens | Impl Cost | T1 | T3 | FU | Review Time | Review Tokens | Review Cost | Total Cost |",
+                "| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
             ]
         )
         repo_rows = sorted(
@@ -1176,9 +1143,7 @@ def render_review_cost_markdown(rows: list[ReviewCostRow]) -> str:
                         format_compact_number(row.implementation_tokens),
                         f"${row.implementation_cost_usd:.2f}",
                         str(row.lane_sessions.get("review_t1", 0)),
-                        str(row.lane_sessions.get("review_t2", 0)),
                         str(row.lane_sessions.get("review_t3", 0)),
-                        str(row.lane_sessions.get("review_t4", 0)),
                         str(row.lane_sessions.get("review_followup", 0)),
                         _md_cell(format_duration(row.review_seconds)),
                         format_compact_number(row.tokens),

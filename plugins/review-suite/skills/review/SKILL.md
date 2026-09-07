@@ -35,7 +35,7 @@ Rules:
 - On `head_changed_after_review`, inspect `reviewed_head..current_head`. If the changes only fix stale tests to match already-reviewed behavior, do not rerun review; run the affected tests and required validation, then proceed. Rerun only if production code or intended behavior changed.
 - For arena grading actions, grade only after checking findings against the diff/repo. Plausible but unverified findings do not count as valid. Use `scope_bloat_loss` when a review asks for product behavior, AI guardrails, validation, fallback behavior, UX policy, or safety checks that are not required by the diff, a real bug, a trust boundary, or the user request.
 - Supply the requested rating pool and repeat `--rank` from best to worst; comma-separated variants within one rank tie. The caller grades; Review Suite never promotes a winner automatically.
-- Without an id, use `review.py --status --cd <repo-root>` for branch/gate routing.
+- Without an id, use `review.py --status --cd <repo-root>` for branch routing.
 - The default base is the repository's remote default branch. Use `--base <ref>` only as an explicit override.
 - The normal advance command after a review id exists is bare `review.py --id <id>`; explicit `--decision clean|findings` is an override when Review Suite cannot auto-advance from a structured reviewer verdict or a human intentionally disagrees.
 - For a read-only id check, run `review.py --id <id> --show-status`.

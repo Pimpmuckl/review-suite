@@ -132,21 +132,10 @@ def resolve_since_head(
             )
         resolved_since = resolve_ref(review_cwd, since_head)
         if not is_ancestor(review_cwd, resolved_since, "HEAD"):
-            status_anchor = str(status.get("last_reviewed_head") or "").strip()
-            try:
-                resolved_status_anchor = (
-                    resolve_ref(review_cwd, status_anchor) if status_anchor else ""
-                )
-            except ValueError:
-                resolved_status_anchor = ""
-            if (
-                str(status.get("reason") or "") != "gate_findings_fix_delta"
-                or resolved_status_anchor != resolved_since
-            ):
-                raise ValueError(
-                    "--since must resolve to an ancestor of HEAD for a non-forced follow-up review. "
-                    "Use review.py --status to choose the right lane, or pass --force to override."
-                )
+            raise ValueError(
+                "--since must resolve to an ancestor of HEAD for a non-forced follow-up review. "
+                "Use review.py --status to choose the right lane, or pass --force to override."
+            )
         decision = classify_delta_recommendation(
             diff_stats(review_cwd, resolved_since, "HEAD")
         )
@@ -185,39 +174,6 @@ def resolve_since_head(
             )
         )
     return since_head
-
-
-def gate_findings_source_context(
-    *, state_dir: Path, review_cwd: Path, base: str, since_head: str
-) -> dict[str, str]:
-    try:
-        status = inspect_workflow_status(
-            state_dir=state_dir, review_cwd=review_cwd, base=base
-        )
-    except ValueError:
-        return {}
-    if str(status.get("reason") or "") not in {
-        "gate_findings_fix_delta",
-        "gate_findings_dirty_fix_delta",
-    }:
-        return {}
-    source_head = str(status.get("last_reviewed_head") or "").strip()
-    try:
-        if not source_head or resolve_ref(review_cwd, source_head) != resolve_ref(
-            review_cwd, since_head
-        ):
-            return {}
-    except ValueError:
-        return {}
-    source_round_id = str(status.get("last_gate_findings_round_id") or "").strip()
-    source_lane = str(status.get("last_reviewed_lane") or "").strip()
-    if not source_round_id or source_lane not in {"review_t2", "review_t4"}:
-        return {}
-    return {
-        "source_gate_round_id": source_round_id,
-        "source_gate_lane": source_lane,
-        "source_gate_reviewed_head": resolve_ref(review_cwd, source_head),
-    }
 
 
 def build_followup_prompt(
@@ -260,12 +216,6 @@ def main() -> int:
             review_cwd=review_root,
             base=branch_base,
             force=bool(args.force),
-        )
-        source_context = gate_findings_source_context(
-            state_dir=state_dir,
-            review_cwd=review_root,
-            base=branch_base,
-            since_head=since_head,
         )
         head = current_head(review_root)
         if since_head == head:
@@ -328,7 +278,6 @@ def main() -> int:
                             "base": since_head,
                             "target_label": f"interdiff `{since_head}..{head}`",
                             **branch_scope,
-                            **source_context,
                         }
                     ),
                     reviewed_head=head,

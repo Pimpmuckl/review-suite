@@ -34,7 +34,7 @@ deep_arena_loops = 1
 Existing overrides continue to work. Keep rating pool IDs stable when moving
 settings so historical ratings retain their identity.
 
-Review sequences and gate counts live separately in
+Review sequences and reviewer counts live separately in
 [`workflow_settings.toml`](../plugins/review-suite/references/workflow_settings.toml).
 The loader merges workflow settings, Arena settings, model defaults, then user
 overrides. Installed runtime copies include all three shipped files.

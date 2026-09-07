@@ -225,7 +225,7 @@ def test_main_records_effective_branch_base_for_followup_anchor(
     )
 
     assert review_followup.main() == 0
-    assert status_bases == ["origin/main", "origin/main"]
+    assert status_bases == ["origin/main"]
     assert captured["anchor"]["base"] == "origin/main"
     assert captured["anchor"]["review_scope"]["base"] == "abc123"
     assert captured["anchor"]["review_scope"]["branch_base"] == "origin/main"
@@ -474,77 +474,6 @@ def test_resolve_since_head_rejects_explicit_anchor_that_is_not_ancestor_without
             base="main",
             force=False,
         )
-
-
-def test_resolve_since_head_allows_non_ancestor_gate_findings_anchor(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.setattr(
-        review_followup,
-        "inspect_workflow_status",
-        lambda **kwargs: {
-            "status": "ok",
-            "recommendation": "review-followup",
-            "reason": "gate_findings_fix_delta",
-            "last_reviewed_head": "abc123-resolved",
-        },
-    )
-    monkeypatch.setattr(
-        review_followup, "resolve_ref", lambda review_cwd, ref: "abc123-resolved"
-    )
-    monkeypatch.setattr(review_followup, "is_ancestor", lambda *args, **kwargs: False)
-    monkeypatch.setattr(
-        review_followup,
-        "diff_stats",
-        lambda review_cwd, start_ref, end_ref: {
-            "commits_since_anchor": 1,
-            "files_changed": 1,
-            "lines_changed": 20,
-        },
-    )
-
-    resolved = review_followup.resolve_since_head(
-        explicit_since="abc123",
-        state_dir=tmp_path / "state",
-        review_cwd=tmp_path,
-        base="main",
-        force=False,
-    )
-
-    assert resolved == "abc123-resolved"
-
-
-def test_gate_findings_source_context_returns_link_metadata(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.setattr(
-        review_followup,
-        "inspect_workflow_status",
-        lambda **kwargs: {
-            "reason": "gate_findings_fix_delta",
-            "last_reviewed_head": "old-head",
-            "last_reviewed_lane": "review_t4",
-            "last_gate_findings_round_id": "gate-round-1",
-        },
-    )
-    monkeypatch.setattr(
-        review_followup,
-        "resolve_ref",
-        lambda review_cwd, ref: {"old-head": "old-sha", "since-ref": "old-sha"}[ref],
-    )
-
-    context = review_followup.gate_findings_source_context(
-        state_dir=tmp_path / "state",
-        review_cwd=tmp_path,
-        base="main",
-        since_head="since-ref",
-    )
-
-    assert context == {
-        "source_gate_round_id": "gate-round-1",
-        "source_gate_lane": "review_t4",
-        "source_gate_reviewed_head": "old-sha",
-    }
 
 
 def test_resolve_since_head_rejects_large_explicit_delta_without_force(

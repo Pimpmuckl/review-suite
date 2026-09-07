@@ -21,9 +21,7 @@ from review_suite_arena import (
     _has_direct_grade_inputs,
     _normalize_arena_task_class,
     _print_findings,
-    _public_local_task_name,
     _record_grade_result,
-    cmd_close_gate,
     cmd_costs,
     cmd_dismiss_round,
     cmd_prune_state,
@@ -271,182 +269,6 @@ def test_cmd_show_round_prints_stored_reviewer_outputs(tmp_path: Path, capsys) -
     assert "No findings." in captured.out
 
 
-def test_cmd_show_round_prints_gate_record_outputs(tmp_path: Path, capsys) -> None:
-    (tmp_path / "gate_runs.jsonl").write_text(
-        json.dumps(
-            {
-                "recorded_at": "2026-04-25T10:00:00Z",
-                "round_id": "gate-round-1",
-                "task_class": "pr_gate",
-                "review_cwd": str(tmp_path),
-                "review_cwd_normalized": str(tmp_path),
-                "runs": [
-                    {
-                        "slot": "alpha",
-                        "variant_id": "alpha-model",
-                        "review_status": "completed",
-                        "reviewer_output": "Gate alpha finding",
-                    },
-                    {
-                        "slot": "bravo",
-                        "variant_id": "bravo-model",
-                        "review_status": "completed",
-                        "status_summary": "Gate bravo clean.",
-                    },
-                ],
-            }
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-
-    result = cmd_show_round(
-        Namespace(round_id="gate-round-1", state_dir=str(tmp_path), json=False)
-    )
-
-    captured = capsys.readouterr()
-    assert result == 0
-    assert "task: review_t4" in captured.out
-    assert "Gate alpha finding" in captured.out
-    assert "Gate bravo clean." in captured.out
-
-
-def test_cmd_close_gate_clean_records_workflow_anchor(
-    monkeypatch, tmp_path: Path, capsys
-) -> None:
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    (tmp_path / "gate_runs.jsonl").write_text(
-        json.dumps(
-            {
-                "recorded_at": "2026-04-25T10:00:00Z",
-                "round_id": "gate-round-clean",
-                "task_class": "pr_gate",
-                "task_id": "feature/test",
-                "review_cwd": str(repo),
-                "review_cwd_normalized": str(repo),
-                "review_scope": {"base": "main", "reviewed_head": "head-sha"},
-                "signoff_status": "pending",
-                "signoff_required": True,
-                "runs": [
-                    {
-                        "slot": "alpha",
-                        "variant_id": "alpha-model",
-                        "review_status": "completed",
-                        "grade_blocked": False,
-                        "reviewer_output_ref": "ref://alpha",
-                    },
-                    {
-                        "slot": "bravo",
-                        "variant_id": "bravo-model",
-                        "review_status": "completed",
-                        "grade_blocked": False,
-                        "reviewer_output_ref": "ref://bravo",
-                    },
-                ],
-            }
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    anchor_calls: list[dict[str, object]] = []
-    monkeypatch.setattr(
-        "review_suite_arena.record_review_anchor",
-        lambda **kwargs: anchor_calls.append(kwargs) or {},
-    )
-
-    result = cmd_close_gate(
-        Namespace(
-            round_id="gate-round-clean",
-            verdict="clean",
-            state_dir=str(tmp_path),
-            note=None,
-        )
-    )
-
-    captured = capsys.readouterr()
-    decisions = [
-        json.loads(line)
-        for line in (tmp_path / "gate_signoffs.jsonl")
-        .read_text(encoding="utf-8")
-        .splitlines()
-    ]
-    assert result == 0
-    assert anchor_calls[0]["lane"] == "review_t4"
-    assert anchor_calls[0]["task_id"] == "feature/test"
-    assert anchor_calls[0]["output_refs"] == ["ref://alpha", "ref://bravo"]
-    assert decisions[0]["verdict"] == "clean"
-    assert decisions[0]["workflow_anchor_recorded"] is True
-    assert "anchored: true" in captured.out
-
-
-def test_cmd_close_gate_findings_does_not_record_workflow_anchor(
-    monkeypatch, tmp_path: Path, capsys
-) -> None:
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    (tmp_path / "gate_runs.jsonl").write_text(
-        json.dumps(
-            {
-                "recorded_at": "2026-04-25T10:00:00Z",
-                "round_id": "gate-round-findings",
-                "task_class": "phase_gate",
-                "task_id": "feature/test",
-                "review_cwd": str(repo),
-                "review_cwd_normalized": str(repo),
-                "review_scope": {"base": "main", "reviewed_head": "head-sha"},
-                "signoff_status": "pending",
-                "signoff_required": True,
-                "runs": [
-                    {
-                        "slot": "alpha",
-                        "variant_id": "alpha-model",
-                        "review_status": "completed",
-                        "grade_blocked": False,
-                        "reviewer_output": "P2 finding",
-                    },
-                ],
-            }
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    anchor_calls: list[dict[str, object]] = []
-    monkeypatch.setattr(
-        "review_suite_arena.record_review_anchor",
-        lambda **kwargs: anchor_calls.append(kwargs) or {},
-    )
-
-    result = cmd_close_gate(
-        Namespace(
-            round_id="gate-round-findings",
-            verdict="findings",
-            state_dir=str(tmp_path),
-            note="valid P2",
-        )
-    )
-    shown = cmd_show_round(
-        Namespace(round_id="gate-round-findings", state_dir=str(tmp_path), json=False)
-    )
-
-    captured = capsys.readouterr()
-    decisions = [
-        json.loads(line)
-        for line in (tmp_path / "gate_signoffs.jsonl")
-        .read_text(encoding="utf-8")
-        .splitlines()
-    ]
-    assert result == 0
-    assert shown == 0
-    assert anchor_calls == []
-    assert decisions[0]["verdict"] == "findings"
-    assert decisions[0]["workflow_anchor_recorded"] is False
-    assert "status: findings" in captured.out
-    assert "signoff: findings" in captured.out
-    assert "Code only valid findings" in captured.out
-    assert "full-suite/CI continues as a merge-readiness check" in captured.out
-
-
 def test_cmd_costs_uses_cache_and_ignores_stale_legacy_lock(
     monkeypatch, tmp_path: Path, capsys
 ) -> None:
@@ -466,9 +288,7 @@ def test_cmd_costs_uses_cache_and_ignores_stale_legacy_lock(
         latest_review="2026-04-27T10:00:00Z",
         lane_sessions={
             "review_t1": 2,
-            "review_t2": 2,
             "review_t3": 0,
-            "review_t4": 0,
             "review_followup": 0,
         },
         review_seconds=123.0,
@@ -531,9 +351,7 @@ def test_cmd_costs_renders_all_cached_rows_for_scoped_report(
         latest_review="2026-04-26T10:00:00Z",
         lane_sessions={
             "review_t1": 1,
-            "review_t2": 0,
             "review_t3": 0,
-            "review_t4": 0,
             "review_followup": 0,
         },
         review_seconds=60,
@@ -552,9 +370,7 @@ def test_cmd_costs_renders_all_cached_rows_for_scoped_report(
         latest_review="2026-04-27T10:00:00Z",
         lane_sessions={
             "review_t1": 2,
-            "review_t2": 2,
             "review_t3": 0,
-            "review_t4": 0,
             "review_followup": 0,
         },
         review_seconds=123.0,
@@ -641,9 +457,7 @@ def test_cmd_costs_scoped_stale_implementation_points_to_full_rebuild(
         latest_review="2026-04-27T10:00:00Z",
         lane_sessions={
             "review_t1": 1,
-            "review_t2": 0,
             "review_t3": 0,
-            "review_t4": 0,
             "review_followup": 0,
         },
         review_seconds=1,
@@ -759,27 +573,6 @@ def test_cmd_show_last_prints_latest_outputs_per_local_lane(
             ],
         },
     )
-    (tmp_path / "gate_runs.jsonl").write_text(
-        json.dumps(
-            {
-                "recorded_at": "2026-04-25T10:30:00Z",
-                "round_id": "latest-t2",
-                "task_class": "phase_gate",
-                "review_cwd": str(repo),
-                "review_cwd_normalized": str(repo),
-                "runs": [
-                    {
-                        "slot": "alpha",
-                        "review_status": "completed",
-                        "reviewer_output": "Latest T2",
-                    }
-                ],
-            }
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-
     result = cmd_show_last(
         Namespace(cd=None, task=None, state_dir=str(tmp_path), json=False)
     )
@@ -789,8 +582,6 @@ def test_cmd_show_last_prints_latest_outputs_per_local_lane(
     assert "round_id: latest-t1" in captured.out
     assert "Latest T1" in captured.out
     assert "Old T1" not in captured.out
-    assert "round_id: latest-t2" in captured.out
-    assert "Latest T2" in captured.out
 
 
 def test_cmd_show_round_finds_orchestrator_review_rounds(
@@ -927,7 +718,6 @@ def test_prune_state_removes_only_final_unreferenced_detail(tmp_path: Path) -> N
 
     canonical = {
         "runs.jsonl": '{"round_id":"graded-old"}\n',
-        "gate_runs.jsonl": '{"round_id":"gate-old"}\n',
         "wrapper_sessions.jsonl": '{"session_id":"review-wrapper"}\n',
         "summary.json": '{"stable":true}\n',
         "review_cost_rows/row.json": '{"repo":"kept"}\n',
@@ -2631,11 +2421,6 @@ def test_resume_orchestrator_review_step_collects_existing_running_round(
     assert saved["task_id_hint"] == "branch-1"
     assert saved["public_task"] == "review_t1"
     assert saved["orchestrator_step"] == "precision"
-
-
-def test_public_local_task_name_maps_gate_aliases() -> None:
-    assert _public_local_task_name("phase_gate") == "review_t2"
-    assert _public_local_task_name("pr_gate") == "review_t4"
 
 
 def test_normalize_arena_task_class_accepts_public_aliases() -> None:

@@ -12,7 +12,6 @@ from typing import Any
 from .model_labels import (
     SUPPORTED_REASONING_EFFORTS,
     SUPPORTED_SERVICE_TIERS,
-    parse_model_label,
     supported_reasoning_efforts_text,
 )
 
@@ -30,17 +29,6 @@ class LensModelConfig:
     model: str
     reasoning_effort: str
     service_tier: str | None = None
-
-
-@dataclass(frozen=True)
-class GateConfig:
-    discovery_variant_id: str
-    discovery_reviewer_count: int
-    signoff_variant_id: str
-    signoff_reviewer_count: int
-    discovery_loops: int
-    backup_variant_ids: tuple[str, ...]
-    max_active_reviewers: int
 
 
 def plugin_root() -> Path:
@@ -221,20 +209,11 @@ def _resolved_config(config: dict[str, Any]) -> dict[str, Any]:
         _job_model(config, job)
     defaults = config["orchestrator"]["stable_defaults"]
     for ref, job in {
-        "discovery_phase_model": "phase_discovery",
-        "discovery_deep_model": "pr_discovery",
         "signoff_normal_model": "normal_signoff",
         "signoff_deep_model": "deep_signoff",
     }.items():
         model = _job_model(config, job)
         defaults[ref] = "-".join(str(value) for value in model.values() if value)
-    for name, gate in config["gates"].items():
-        gate["discovery_model_ref"] = (
-            "discovery_deep_model" if name == "pr_gate" else "discovery_phase_model"
-        )
-        gate["signoff_model_ref"] = (
-            "signoff_deep_model" if name == "pr_gate" else "signoff_normal_model"
-        )
     _validate_config(config)
     return config
 
@@ -252,40 +231,11 @@ def load_config(state_dir: Path | None = None) -> dict[str, Any]:
     return _resolved_config(_deep_merge(defaults, _read_toml(path)))
 
 
-def _string_list(value: Any, *, field: str) -> tuple[str, ...]:
-    if value is None:
-        return ()
-    if not isinstance(value, list):
-        raise ValueError(f"{field} must be an array of strings")
-    result: list[str] = []
-    for item in value:
-        text = str(item or "").strip()
-        if not text:
-            raise ValueError(f"{field} must not contain empty values")
-        result.append(text)
-    return tuple(result)
-
-
-def _positive_int(value: Any, *, field: str) -> int:
-    try:
-        number = int(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{field} must be an integer") from exc
-    if number <= 0:
-        raise ValueError(f"{field} must be > 0")
-    return number
-
-
 def _non_empty_text(value: Any, *, field: str) -> str:
     text = str(value or "").strip()
     if not text:
         raise ValueError(f"{field} is required")
     return text
-
-
-def _parse_model_label(value: Any, *, field: str) -> str:
-    model, effort, service_tier = parse_model_label(value, field=field)
-    return "-".join(part for part in (model, effort, service_tier) if part)
 
 
 def _orchestrator_defaults(config: dict[str, Any]) -> dict[str, Any]:
@@ -296,63 +246,6 @@ def _orchestrator_defaults(config: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(defaults, dict):
         raise ValueError("orchestrator.stable_defaults must be an object")
     return defaults
-
-
-def _stable_model_ref(config: dict[str, Any], ref: Any, *, field: str) -> str:
-    ref_name = _non_empty_text(ref, field=field)
-    return _parse_model_label(
-        _orchestrator_defaults(config).get(ref_name),
-        field=f"orchestrator.stable_defaults.{ref_name}",
-    )
-
-
-def _stable_positive_int_ref(config: dict[str, Any], ref: Any, *, field: str) -> int:
-    ref_name = _non_empty_text(ref, field=field)
-    return _positive_int(
-        _orchestrator_defaults(config).get(ref_name),
-        field=f"orchestrator.stable_defaults.{ref_name}",
-    )
-
-
-def _validate_gate_config(config: dict[str, Any]) -> None:
-    gates = config.get("gates")
-    if not isinstance(gates, dict):
-        raise ValueError("gates config must be an object")
-    for gate_name in ("phase_gate", "pr_gate"):
-        gate = gates.get(gate_name)
-        if not isinstance(gate, dict):
-            raise ValueError(f"gates.{gate_name} config must be an object")
-        _stable_model_ref(
-            config,
-            gate.get("discovery_model_ref"),
-            field=f"gates.{gate_name}.discovery_model_ref",
-        )
-        _positive_int(
-            gate.get("discovery_reviewer_count"),
-            field=f"gates.{gate_name}.discovery_reviewer_count",
-        )
-        _stable_model_ref(
-            config,
-            gate.get("signoff_model_ref"),
-            field=f"gates.{gate_name}.signoff_model_ref",
-        )
-        _positive_int(
-            gate.get("signoff_reviewer_count"),
-            field=f"gates.{gate_name}.signoff_reviewer_count",
-        )
-        _stable_positive_int_ref(
-            config,
-            gate.get("discovery_loops_ref"),
-            field=f"gates.{gate_name}.discovery_loops_ref",
-        )
-        _string_list(
-            gate.get("backup_variant_ids"),
-            field=f"gates.{gate_name}.backup_variant_ids",
-        )
-        _positive_int(
-            gate.get("max_active_reviewers"),
-            field=f"gates.{gate_name}.max_active_reviewers",
-        )
 
 
 def _validate_orchestrator_config(config: dict[str, Any]) -> None:
@@ -374,7 +267,6 @@ def _validate_config(config: dict[str, Any]) -> None:
         raise ValueError(
             "arena_external_publish_enabled is not supported in the public review-suite plugin"
         )
-    _validate_gate_config(config)
     _validate_orchestrator_config(config)
 
 
@@ -383,44 +275,4 @@ def lens_model_config(
 ) -> LensModelConfig:
     return LensModelConfig(
         **_job_model(load_config(state_dir), tool_name.removeprefix("review-"))
-    )
-
-
-def gate_config(gate_task_class: str, *, state_dir: Path | None = None) -> GateConfig:
-    config = load_config(state_dir)
-    gate = dict((config.get("gates") or {}).get(gate_task_class) or {})
-    if not gate:
-        raise ValueError(f"missing gate config for {gate_task_class}")
-    return GateConfig(
-        discovery_variant_id=_stable_model_ref(
-            config,
-            gate.get("discovery_model_ref"),
-            field=f"gates.{gate_task_class}.discovery_model_ref",
-        ),
-        discovery_reviewer_count=_positive_int(
-            gate.get("discovery_reviewer_count"),
-            field=f"gates.{gate_task_class}.discovery_reviewer_count",
-        ),
-        signoff_variant_id=_stable_model_ref(
-            config,
-            gate.get("signoff_model_ref"),
-            field=f"gates.{gate_task_class}.signoff_model_ref",
-        ),
-        signoff_reviewer_count=_positive_int(
-            gate.get("signoff_reviewer_count"),
-            field=f"gates.{gate_task_class}.signoff_reviewer_count",
-        ),
-        discovery_loops=_stable_positive_int_ref(
-            config,
-            gate.get("discovery_loops_ref"),
-            field=f"gates.{gate_task_class}.discovery_loops_ref",
-        ),
-        backup_variant_ids=_string_list(
-            gate.get("backup_variant_ids"),
-            field=f"gates.{gate_task_class}.backup_variant_ids",
-        ),
-        max_active_reviewers=_positive_int(
-            gate.get("max_active_reviewers"),
-            field=f"gates.{gate_task_class}.max_active_reviewers",
-        ),
     )

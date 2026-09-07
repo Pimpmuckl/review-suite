@@ -20,9 +20,7 @@ import review_github
 import review_plan
 import review_suite_arena
 import review_t1
-import review_t2
 import review_t3
-import review_t4
 import review_suite_local
 
 from review_suite_local import (
@@ -585,7 +583,7 @@ def test_primary_wrappers_hide_operator_state_knobs_from_help() -> None:
             assert flag not in help_text
 
 
-@pytest.mark.parametrize("module", [review_t1, review_t2, review_t3, review_t4])
+@pytest.mark.parametrize("module", [review_t1, review_t3])
 def test_legacy_tier_wrappers_point_to_review_py(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], module
 ) -> None:
@@ -617,7 +615,7 @@ def test_legacy_tier_wrapper_malformed_old_flags_still_report_retired(
 
 
 def test_legacy_tier_wrappers_own_installed_cache_bootstrap() -> None:
-    for module in (review_t1, review_t2, review_t3, review_t4):
+    for module in (review_t1, review_t3):
         wrapper_source = Path(module.__file__).read_text(encoding="utf-8")
         assert (
             "from review_suite_runtime_bootstrap import bootstrap_from_installed_cache"
@@ -806,77 +804,3 @@ def test_review_plan_skip_git_repo_check_uses_current_directory_without_cd(
     monkeypatch.setattr(review_plan, "resolve_repo_root", fail_resolve_repo_root)
 
     assert review_plan.resolve_review_root(args) == tmp_path.resolve(strict=False)
-
-
-def test_guard_branch_signoff_lane_rejects_followup_drift_for_current_branch_gate(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setattr(
-        review_suite_local,
-        "inspect_workflow_status",
-        lambda **kwargs: {
-            "recommendation": "review-followup",
-            "note": "Use the interdiff follow-up lane against the last reviewed head.",
-        },
-    )
-
-    with pytest.raises(ValueError, match="requires review-followup"):
-        review_suite_local.guard_branch_signoff_lane(
-            lane="review_t2",
-            review_cwd=tmp_path,
-            base="main",
-            state_dir=tmp_path / "state",
-            review_scope={"base": "main"},
-        )
-
-    with pytest.raises(ValueError, match="requires review-followup"):
-        review_suite_local.guard_branch_signoff_lane(
-            lane="review_t4",
-            review_cwd=tmp_path,
-            base="main",
-            state_dir=tmp_path / "state",
-            review_scope={"base": "main"},
-        )
-
-
-def test_guard_branch_signoff_lane_allows_stage_reset_lane(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.setattr(
-        review_suite_local,
-        "inspect_workflow_status",
-        lambda **kwargs: {
-            "recommendation": "coherence-review",
-            "recommended_lane": "review_t4",
-            "note": "Run the full-diff gate lane for this stage.",
-        },
-    )
-
-    review_suite_local.guard_branch_signoff_lane(
-        lane="review_t4",
-        review_cwd=tmp_path,
-        base="main",
-        state_dir=tmp_path / "state",
-        review_scope={"base": "main"},
-    )
-
-
-def test_guard_branch_signoff_lane_skips_commit_scope(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.setattr(
-        review_suite_local,
-        "inspect_workflow_status",
-        lambda **kwargs: (_ for _ in ()).throw(
-            AssertionError("commit scope should not inspect branch workflow state")
-        ),
-    )
-
-    review_suite_local.guard_branch_signoff_lane(
-        lane="review_t2",
-        review_cwd=tmp_path,
-        base="main",
-        state_dir=tmp_path / "state",
-        review_scope={"commit": "abc123"},
-    )

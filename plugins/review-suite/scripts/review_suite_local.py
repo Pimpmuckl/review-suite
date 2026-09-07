@@ -57,9 +57,7 @@ TASK_CLASSES = ("phase_review", "pr_review")
 PAIR_SELECTION_MODES = ("legacy", "slight_bias", "true_scramble")
 LOCAL_REVIEW_LANE_STAGE_RANK = {
     "review_t1": 1,
-    "review_t2": 2,
     "review_t3": 3,
-    "review_t4": 4,
 }
 STALE_REVIEW_STATE_TTL_SECONDS = 24 * 60 * 60
 RUN_LOG_FILENAME = "runs.jsonl"
@@ -392,54 +390,6 @@ def _review_status_command(*, review_cwd: Path, base: str) -> str:
             "--base",
             str(base),
         ]
-    )
-
-
-def guard_branch_signoff_lane(
-    *,
-    lane: str,
-    review_cwd: Path,
-    base: str,
-    state_dir: Path,
-    review_scope: dict[str, Any],
-) -> None:
-    if not _is_branch_review_scope(review_scope):
-        return
-    try:
-        status = inspect_workflow_status(
-            state_dir=state_dir,
-            review_cwd=review_cwd,
-            base=str(base),
-        )
-    except ValueError:
-        return
-    recommendation = str(status.get("recommendation") or "").strip()
-    if recommendation not in {"review-followup", "coherence-review", "full-review"}:
-        return
-    recommended_lane = str(status.get("recommended_lane") or "").strip()
-    if recommended_lane == lane and recommendation in {
-        "coherence-review",
-        "full-review",
-    }:
-        return
-    note = str(status.get("note") or "").strip()
-    command = _review_status_command(
-        review_cwd=review_cwd,
-        base=str(base),
-    )
-    if recommendation == "review-followup":
-        raise ValueError(
-            f"{lane} only signs off the current reviewed head. This branch has moved since the last valid review anchor and now requires review-followup instead. "
-            f"{note} Run {command} and follow its action before another signoff pass."
-        )
-    if recommendation == "coherence-review":
-        raise ValueError(
-            f"{lane} only signs off a branch that is still aligned with the last reviewed head. The current post-review delta is too large for signoff and needs a fresh coherence/full-diff pass first. "
-            f"{note} Run {command} and follow its action before another signoff pass."
-        )
-    raise ValueError(
-        f"{lane} only signs off a branch that is still aligned with the last reviewed head. The current branch state needs a fresh full review before signoff. "
-        f"{note} Run {command} and follow its action before another signoff pass."
     )
 
 
@@ -1786,12 +1736,8 @@ def review_label(task_class: str) -> str:
 def public_task_name(task_class: str) -> str:
     if task_class == "phase_review":
         return "review_t1"
-    if task_class == "phase_gate":
-        return "review_t2"
     if task_class == "pr_review":
         return "review_t3"
-    if task_class == "pr_gate":
-        return "review_t4"
     return str(task_class)
 
 

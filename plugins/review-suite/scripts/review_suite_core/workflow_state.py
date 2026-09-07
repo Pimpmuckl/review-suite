@@ -22,19 +22,12 @@ BRANCH_PRESSURE_MAX_COMMITS = 25
 BRANCH_PRESSURE_MAX_RECORDED_ANCHORS = 12
 BRANCH_PRESSURE_MAX_FOLLOWUP_ANCHORS = 5
 BRANCH_PRESSURE_MAX_FULL_REVIEW_ANCHORS = 4
-BRANCH_PRESSURE_MAX_SIGNOFF_ANCHORS = 6
 FOLLOWUP_CYCLE_LIMIT = 2
 SAME_TIER_REVIEW_CAUTION_THRESHOLD = 6
 SAME_TIER_REVIEW_HIGH_PRESSURE_THRESHOLD = 10
-GATE_TASK_TO_LANE = {
-    "phase_gate": "review_t2",
-    "pr_gate": "review_t4",
-}
 LANE_STAGE_RANK = {
     "review_t1": 1,
-    "review_t2": 2,
     "review_t3": 3,
-    "review_t4": 4,
 }
 EFFECTIVE_BASE_METADATA_KEYS = (
     "base_upstream",
@@ -264,7 +257,7 @@ def anchor_updates_branch_state(
         return reviewed_head == current_head
     if scope.get("commit") or scope.get("commit_end"):
         return False
-    if lane in {"review_t1", "review_t2", "review_t3", "review_t4"}:
+    if lane in {"review_t1", "review_t3"}:
         return reviewed_head == current_head
     if scope.get("base"):
         return reviewed_head == current_head
@@ -589,234 +582,6 @@ def load_workflow_state(
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _read_jsonl(path: Path) -> list[dict[str, Any]]:
-    if not path.exists():
-        return []
-    rows: list[dict[str, Any]] = []
-    try:
-        for line in path.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            try:
-                payload = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(payload, dict):
-                rows.append(payload)
-    except OSError:
-        return []
-    return rows
-
-
-def _gate_signoff_decisions_by_round(state_dir: Path) -> dict[str, dict[str, Any]]:
-    decisions: dict[str, dict[str, Any]] = {}
-    for decision in _read_jsonl(state_dir / "gate_signoffs.jsonl"):
-        round_id = str(decision.get("round_id") or "").strip()
-        if round_id:
-            decisions[round_id] = dict(decision)
-    return decisions
-
-
-def _gate_record_cwd(record: dict[str, Any]) -> str:
-    value = str(
-        record.get("review_cwd_normalized") or record.get("review_cwd") or ""
-    ).strip()
-    if not value:
-        return ""
-    try:
-        return normalize_cwd(value)
-    except Exception:
-        return value
-
-
-def _gate_record_reviewed_head(record: dict[str, Any]) -> str:
-    scope = dict(record.get("review_scope") or {})
-    return str(
-        scope.get("reviewed_head")
-        or scope.get("commit_end")
-        or scope.get("commit")
-        or ""
-    ).strip()
-
-
-def _gate_record_base(record: dict[str, Any]) -> str:
-    scope = dict(record.get("review_scope") or {})
-    return str(scope.get("base") or "").strip()
-
-
-def _gate_record_has_blocked_runs(record: dict[str, Any]) -> bool:
-    runs = [run for run in list(record.get("runs") or []) if isinstance(run, dict)]
-    return bool(runs) and any(bool(run.get("grade_blocked")) for run in runs)
-
-
-def _gate_record_advances_stage(
-    record: dict[str, Any], decision: dict[str, Any] | None = None
-) -> bool:
-    runs = [run for run in list(record.get("runs") or []) if isinstance(run, dict)]
-    if not runs or _gate_record_has_blocked_runs(record):
-        return False
-    verdict = str((decision or {}).get("verdict") or "").strip()
-    if verdict in {"clean", "findings"}:
-        return True
-    if str(record.get("signoff_status") or "").strip() == "pending":
-        return True
-    return all(
-        str(run.get("review_status") or "").strip() == "completed" for run in runs
-    )
-
-
-def _latest_current_head_followup_after(
-    *,
-    state: dict[str, Any] | None,
-    review_cwd: Path,
-    head: str,
-    after: str,
-    source_gate_round_id: str | None = None,
-    source_reviewed_head: str | None = None,
-) -> dict[str, Any] | None:
-    if not state:
-        return None
-    source_gate_round_id = str(source_gate_round_id or "").strip()
-    source_reviewed_head = str(source_reviewed_head or "").strip()
-    candidates: list[dict[str, Any]] = []
-    for anchor in [
-        item for item in list(state.get("anchors") or []) if isinstance(item, dict)
-    ]:
-        if str(anchor.get("lane") or "") != "review-followup":
-            continue
-        recorded_at = str(anchor.get("recorded_at") or "").strip()
-        if after and recorded_at and recorded_at <= after:
-            continue
-        scope = dict(anchor.get("review_scope") or {})
-        anchor_source_round_id = str(scope.get("source_gate_round_id") or "").strip()
-        if (
-            source_gate_round_id
-            and anchor_source_round_id
-            and anchor_source_round_id != source_gate_round_id
-        ):
-            continue
-        if source_gate_round_id and not anchor_source_round_id and source_reviewed_head:
-            source_head = str(scope.get("commit") or "").strip()
-            if source_head:
-                try:
-                    if resolve_ref(review_cwd, source_head) != source_reviewed_head:
-                        continue
-                except ValueError:
-                    continue
-        reviewed_head = str(
-            anchor.get("reviewed_head") or anchor.get("current_head_at_record") or ""
-        ).strip()
-        if not reviewed_head:
-            continue
-        try:
-            if resolve_ref(review_cwd, reviewed_head) == head:
-                candidates.append(dict(anchor))
-        except ValueError:
-            continue
-    if not candidates:
-        return None
-    return sorted(candidates, key=lambda item: str(item.get("recorded_at") or ""))[-1]
-
-
-def _gate_record_order_key(
-    record: dict[str, Any], decision: dict[str, Any] | None = None
-) -> str:
-    decision = decision or {}
-    return str(
-        decision.get("recorded_at")
-        or record.get("review_completed_at")
-        or record.get("recorded_at")
-        or record.get("round_id")
-        or ""
-    )
-
-
-def latest_unresolved_gate_findings_candidate(
-    *,
-    state_dir: Path,
-    state: dict[str, Any] | None,
-    review_cwd: Path,
-    base: str,
-    branch: str | None,
-    head: str,
-    current_stage_lane: str | None,
-) -> dict[str, Any] | None:
-    if current_stage_lane not in {"review_t2", "review_t4"}:
-        return None
-    normalized_cwd = normalize_cwd(str(review_cwd))
-    requested_base = str(base or "").strip()
-    decisions = _gate_signoff_decisions_by_round(state_dir)
-    findings: list[dict[str, Any]] = []
-    clean_records: list[dict[str, Any]] = []
-    for record in _read_jsonl(state_dir / "gate_runs.jsonl"):
-        round_id = str(record.get("round_id") or "").strip()
-        decision = decisions.get(round_id) or {}
-        if not _gate_record_advances_stage(record, decision):
-            continue
-        task_class = str(record.get("task_class") or "")
-        lane = GATE_TASK_TO_LANE.get(task_class)
-        if lane != current_stage_lane:
-            continue
-        if _gate_record_cwd(record) != normalized_cwd:
-            continue
-        task_id = str(record.get("task_id") or "").strip()
-        if branch and branch != "HEAD" and task_id and task_id != branch:
-            continue
-        if requested_base and _gate_record_base(record) != requested_base:
-            continue
-        verdict = str(decision.get("verdict") or "").strip()
-        reviewed_head = _gate_record_reviewed_head(record)
-        if not reviewed_head:
-            continue
-        try:
-            resolved_head = resolve_ref(review_cwd, reviewed_head)
-        except ValueError:
-            continue
-        if verdict == "clean" and resolved_head == head:
-            clean_records.append(
-                {
-                    "round_id": round_id,
-                    "reviewed_head": resolved_head,
-                    "order_key": _gate_record_order_key(record, decision),
-                }
-            )
-        if verdict != "findings":
-            continue
-        decision_at = str(decision.get("recorded_at") or "").strip()
-        followup_anchor = _latest_current_head_followup_after(
-            state=state,
-            review_cwd=review_cwd,
-            head=head,
-            after=decision_at,
-            source_gate_round_id=round_id,
-            source_reviewed_head=resolved_head,
-        )
-        findings.append(
-            {
-                "lane": lane,
-                "round_id": round_id,
-                "reviewed_head": resolved_head,
-                "reviewed_head_raw": reviewed_head,
-                "recorded_at": str(
-                    record.get("review_completed_at") or record.get("recorded_at") or ""
-                ).strip(),
-                "decision_recorded_at": decision_at,
-                "order_key": _gate_record_order_key(record, decision),
-                "followup_anchor": followup_anchor,
-            }
-        )
-    for finding in sorted(
-        findings, key=lambda item: str(item.get("order_key") or ""), reverse=True
-    ):
-        finding_order = str(finding.get("order_key") or "")
-        if any(
-            str(clean.get("order_key") or "") > finding_order for clean in clean_records
-        ):
-            continue
-        return finding
-    return None
-
-
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
@@ -837,9 +602,6 @@ def compact_review_scope(review_scope: dict[str, Any] | None) -> dict[str, Any]:
         "branch_base",
         "requested_base",
         *EFFECTIVE_BASE_METADATA_KEYS,
-        "source_gate_lane",
-        "source_gate_reviewed_head",
-        "source_gate_round_id",
     )
     return {
         key: scope[key]
@@ -1131,9 +893,7 @@ def latest_followup_pressure_checkpoint_anchor(
     for anchor in reversed(anchors):
         if str(anchor.get("lane") or "") in {
             "review_t1",
-            "review_t2",
             "review_t3",
-            "review_t4",
             "review-github",
         }:
             return anchor
@@ -1155,9 +915,7 @@ def latest_base_review_context_anchor(
     for anchor in reversed(anchors):
         if str(anchor.get("lane") or "") not in {
             "review_t1",
-            "review_t2",
             "review_t3",
-            "review_t4",
         }:
             continue
         scope = dict(anchor.get("review_scope") or {})
@@ -1200,10 +958,6 @@ def review_scope_matches_requested_base(
 
 def current_stage_full_review_lane(
     state: dict[str, Any] | None,
-    *,
-    state_dir: Path | None = None,
-    review_cwd: Path | None = None,
-    branch: str | None = None,
 ) -> str | None:
     candidates: list[str] = []
     anchors = [
@@ -1215,29 +969,6 @@ def current_stage_full_review_lane(
         lane = str(anchor.get("lane") or "")
         if lane in LANE_STAGE_RANK:
             candidates.append(lane)
-    if state_dir is not None and review_cwd is not None:
-        normalized_cwd = normalize_cwd(str(review_cwd))
-        decisions = _gate_signoff_decisions_by_round(state_dir)
-        for record in _read_jsonl(state_dir / "gate_runs.jsonl"):
-            round_id = str(record.get("round_id") or "").strip()
-            if not _gate_record_advances_stage(record, decisions.get(round_id)):
-                continue
-            record_cwd = str(
-                record.get("review_cwd_normalized") or record.get("review_cwd") or ""
-            ).strip()
-            if record_cwd:
-                try:
-                    record_cwd = normalize_cwd(record_cwd)
-                except Exception:
-                    pass
-            if record_cwd != normalized_cwd:
-                continue
-            task_id = str(record.get("task_id") or "").strip()
-            if branch and task_id and task_id != branch:
-                continue
-            lane = GATE_TASK_TO_LANE.get(str(record.get("task_class") or ""))
-            if lane:
-                candidates.append(lane)
     if not candidates:
         return None
     return max(candidates, key=lambda lane: LANE_STAGE_RANK[lane])
@@ -1246,17 +977,11 @@ def current_stage_full_review_lane(
 def same_tier_review_pressure(
     *,
     state: dict[str, Any] | None,
-    state_dir: Path | None,
-    review_cwd: Path,
-    branch: str | None,
 ) -> dict[str, Any] | None:
-    lane = current_stage_full_review_lane(
-        state, state_dir=state_dir, review_cwd=review_cwd, branch=branch
-    )
+    lane = current_stage_full_review_lane(state)
     if lane is None:
         return None
     count = 0
-    seen_round_ids: set[str] = set()
     for anchor in [
         item
         for item in list((state or {}).get("anchors") or [])
@@ -1264,37 +989,7 @@ def same_tier_review_pressure(
     ]:
         if str(anchor.get("lane") or "") != lane:
             continue
-        round_id = str(anchor.get("round_id") or "").strip()
-        if round_id:
-            seen_round_ids.add(round_id)
         count += 1
-    if state_dir is not None:
-        normalized_cwd = normalize_cwd(str(review_cwd))
-        decisions = _gate_signoff_decisions_by_round(state_dir)
-        for record in _read_jsonl(state_dir / "gate_runs.jsonl"):
-            if GATE_TASK_TO_LANE.get(str(record.get("task_class") or "")) != lane:
-                continue
-            round_id = str(record.get("round_id") or "").strip()
-            if not _gate_record_advances_stage(record, decisions.get(round_id)):
-                continue
-            record_cwd = str(
-                record.get("review_cwd_normalized") or record.get("review_cwd") or ""
-            ).strip()
-            if record_cwd:
-                try:
-                    record_cwd = normalize_cwd(record_cwd)
-                except Exception:
-                    pass
-            if record_cwd != normalized_cwd:
-                continue
-            task_id = str(record.get("task_id") or "").strip()
-            if branch and task_id and task_id != branch:
-                continue
-            if round_id and round_id in seen_round_ids:
-                continue
-            if round_id:
-                seen_round_ids.add(round_id)
-            count += 1
     if count < SAME_TIER_REVIEW_CAUTION_THRESHOLD:
         return None
     status = (
@@ -1322,18 +1017,13 @@ def add_stage_full_review_lane(
     decision: dict[str, Any],
     *,
     state: dict[str, Any] | None,
-    state_dir: Path | None = None,
-    review_cwd: Path | None = None,
-    branch: str | None = None,
 ) -> dict[str, Any]:
     if str(decision.get("recommendation") or "") not in {
         "coherence-review",
         "full-review",
     }:
         return decision
-    lane = current_stage_full_review_lane(
-        state, state_dir=state_dir, review_cwd=review_cwd, branch=branch
-    )
+    lane = current_stage_full_review_lane(state)
     if lane is None:
         return decision
     enriched = dict(decision)
@@ -1373,20 +1063,14 @@ def followup_cycle_pressure(*, state: dict[str, Any] | None) -> dict[str, Any] |
     )
     if followup_anchor_count <= FOLLOWUP_CYCLE_LIMIT:
         return None
-    signoff_anchor_count = sum(
-        1
-        for item in trailing
-        if str(item.get("lane") or "") in {"review_t2", "review_t4"}
-    )
     return {
         "last_full_review_lane": str(checkpoint.get("lane") or ""),
         "last_full_review_head": str(checkpoint.get("reviewed_head") or ""),
         "followup_anchor_count_since_full_review": followup_anchor_count,
-        "signoff_anchor_count_since_full_review": signoff_anchor_count,
         "recommendation": "coherence-review",
         "reason": "followup_cycle_limit_exceeded",
         "note": (
-            f"The branch already used {followup_anchor_count} follow-up rounds and {signoff_anchor_count} signoff rounds "
+            f"The branch already used {followup_anchor_count} follow-up rounds "
             f"since the last full checkpoint {str(checkpoint.get('lane') or '')} at {str(checkpoint.get('reviewed_head') or '')[:12]}. "
             "Stop chaining more narrow interdiff follow-ups on this branch. Run a fresh branch-wide correctness review or split the next logical slice into a new stacked PR."
         ),
@@ -1420,11 +1104,6 @@ def branch_review_pressure(
         for item in anchors
         if str(item.get("lane") or "") in {"review_t1", "review_t3"}
     )
-    signoff_anchor_count = sum(
-        1
-        for item in anchors
-        if str(item.get("lane") or "") in {"review_t2", "review_t4"}
-    )
     if commits_since_base < BRANCH_PRESSURE_MAX_COMMITS:
         return None
     if recorded_anchor_count < BRANCH_PRESSURE_MAX_RECORDED_ANCHORS:
@@ -1432,7 +1111,6 @@ def branch_review_pressure(
     if (
         followup_anchor_count < BRANCH_PRESSURE_MAX_FOLLOWUP_ANCHORS
         and full_review_anchor_count < BRANCH_PRESSURE_MAX_FULL_REVIEW_ANCHORS
-        and signoff_anchor_count < BRANCH_PRESSURE_MAX_SIGNOFF_ANCHORS
     ):
         return None
     return {
@@ -1440,12 +1118,11 @@ def branch_review_pressure(
         "recorded_review_anchor_count": recorded_anchor_count,
         "followup_anchor_count": followup_anchor_count,
         "full_review_anchor_count": full_review_anchor_count,
-        "signoff_anchor_count": signoff_anchor_count,
         "recommendation": "coherence-review",
         "reason": "branch_review_pressure_exceeded",
         "note": (
             f"The branch already carries {commits_since_base} commits since base and {recorded_anchor_count} recorded review anchors "
-            f"({followup_anchor_count} follow-up, {full_review_anchor_count} graded full-review, {signoff_anchor_count} signoff). "
+            f"({followup_anchor_count} follow-up, {full_review_anchor_count} graded full-review). "
             "Stop using narrow interdiff loops on this branch. Run a fresh branch-wide correctness review and consider splitting or checkpointing the reviewed subset before more signoff."
         ),
     }
@@ -1499,139 +1176,19 @@ def inspect_workflow_status(
     state = load_workflow_state(
         state_dir=state_dir, review_cwd=review_cwd, branch=branch, head=head
     )
-    current_stage_lane = current_stage_full_review_lane(
-        state,
-        state_dir=state_dir,
-        review_cwd=review_cwd,
-        branch=branch,
-    )
+    current_stage_lane = current_stage_full_review_lane(state)
     if current_stage_lane:
         payload["current_stage_lane"] = current_stage_lane
     latest = latest_anchor(state)
 
     def finalize() -> dict[str, Any]:
-        pressure = same_tier_review_pressure(
-            state=state,
-            state_dir=state_dir,
-            review_cwd=review_cwd,
-            branch=branch,
-        )
+        pressure = same_tier_review_pressure(state=state)
         if pressure is not None:
             payload["convergence"] = pressure
         return payload
 
     def stage_decision(decision: dict[str, Any]) -> dict[str, Any]:
-        return add_stage_full_review_lane(
-            decision,
-            state=state,
-            state_dir=state_dir,
-            review_cwd=review_cwd,
-            branch=branch,
-        )
-
-    gate_findings_anchor = latest_unresolved_gate_findings_candidate(
-        state_dir=state_dir,
-        state=state,
-        review_cwd=review_cwd,
-        base=base,
-        branch=branch,
-        head=head,
-        current_stage_lane=current_stage_lane,
-    )
-    if gate_findings_anchor is not None:
-        reviewed_head = str(gate_findings_anchor.get("reviewed_head") or "").strip()
-        gate_lane = str(gate_findings_anchor.get("lane") or "")
-        gate_round_id = str(gate_findings_anchor.get("round_id") or "")
-        followup_anchor = (
-            gate_findings_anchor.get("followup_anchor")
-            if isinstance(gate_findings_anchor.get("followup_anchor"), dict)
-            else None
-        )
-        payload["last_reviewed_head"] = reviewed_head
-        payload["last_reviewed_lane"] = gate_lane
-        payload["last_reviewed_at"] = str(
-            gate_findings_anchor.get("decision_recorded_at")
-            or gate_findings_anchor.get("recorded_at")
-            or ""
-        )
-        payload["last_gate_findings_round_id"] = gate_round_id
-        try:
-            payload["gate_findings_anchor_not_ancestor"] = not is_ancestor(
-                review_cwd, reviewed_head, head
-            )
-        except ValueError:
-            payload["gate_findings_anchor_not_ancestor"] = True
-
-        if followup_anchor is not None:
-            lane_short = gate_lane.replace("review_", "")
-            payload["last_reviewed_head"] = head
-            payload["last_reviewed_lane"] = "review-followup"
-            payload["last_reviewed_at"] = str(followup_anchor.get("recorded_at") or "")
-            payload["source_gate_lane"] = gate_lane
-            payload.update(
-                {
-                    "recommendation": "full-review",
-                    "reason": f"{lane_short}_findings_followup_needs_signoff",
-                    "recommended_lane": gate_lane,
-                    "note": (
-                        f"The latest {gate_lane} gate was closed as findings and the current head has a follow-up anchor. "
-                        f"Rerun {gate_lane} so all signoff reviewers are effectively green on the current head."
-                    ),
-                }
-            )
-            return finalize()
-
-        if reviewed_head == head:
-            if has_worktree_changes(review_cwd):
-                delta = worktree_diff_stats(review_cwd, head)
-                payload.update(delta)
-                payload["top_paths"] = [
-                    f"{item['path']} (+{item['added']}/-{item['deleted']})"
-                    for item in list(delta.get("top_paths") or [])
-                ]
-                decision = classify_delta_recommendation(delta)
-                if str(decision.get("recommendation") or "") == "review-followup":
-                    decision = {
-                        "recommendation": "review-followup",
-                        "reason": "gate_findings_dirty_fix_delta",
-                        "note": (
-                            "Commit intended follow-up changes or stash unrelated dirty files, then rerun review.py --status. "
-                            f"After a clean follow-up, rerun {gate_lane} so both signoff reviewers are green on the current head."
-                        ),
-                    }
-                payload.update(stage_decision(decision))
-                return finalize()
-            payload.update(
-                {
-                    "recommendation": "fix-gate-findings",
-                    "reason": "gate_findings_current_head",
-                    "recommended_lane": "review-followup",
-                    "note": (
-                        f"The latest {gate_lane} gate was closed as findings on the current head. "
-                        "Inspect the stored reviewer output, fix valid findings, then run review-followup on the fix delta before rerunning the gate."
-                    ),
-                }
-            )
-            return finalize()
-
-        delta = diff_stats(review_cwd, reviewed_head, "HEAD")
-        payload.update(delta)
-        payload["top_paths"] = [
-            f"{item['path']} (+{item['added']}/-{item['deleted']})"
-            for item in list(delta.get("top_paths") or [])
-        ]
-        decision = classify_delta_recommendation(delta)
-        if str(decision.get("recommendation") or "") == "review-followup":
-            decision = {
-                "recommendation": "review-followup",
-                "reason": "gate_findings_fix_delta",
-                "note": (
-                    f"Use review-followup against the latest {gate_lane} findings head. "
-                    f"After a clean follow-up, rerun {gate_lane} so both signoff reviewers are green on the current head."
-                ),
-            }
-        payload.update(stage_decision(decision))
-        return finalize()
+        return add_stage_full_review_lane(decision, state=state)
 
     if not state or not latest:
         decision = {

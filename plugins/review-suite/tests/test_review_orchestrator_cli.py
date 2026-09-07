@@ -109,7 +109,7 @@ def test_main_emits_structured_runtime_error_for_artifact_cleanup(
     tmp_path: Path,
 ) -> None:
     def fail_artifact_cleanup(_args: object) -> int:
-        raise OSError("gate artifact cleanup incomplete")
+        raise OSError("review artifact cleanup incomplete")
 
     monkeypatch.setattr(review, "default_state_dir", lambda: tmp_path)
     monkeypatch.setattr(review, "cmd_branch_status", fail_artifact_cleanup)
@@ -118,7 +118,7 @@ def test_main_emits_structured_runtime_error_for_artifact_cleanup(
     assert review.main() == 1
     output = capsys.readouterr()
     assert "status: error" in output.out
-    assert "gate artifact cleanup incomplete" in output.out
+    assert "review artifact cleanup incomplete" in output.out
     assert "Traceback" not in output.err
 
 
@@ -320,130 +320,6 @@ def _stub_followup(
     return calls
 
 
-def _stub_gate(
-    monkeypatch: pytest.MonkeyPatch, *round_ids: str
-) -> list[dict[str, object]]:
-    calls: list[dict[str, object]] = []
-    ids = list(round_ids) or ["phase_gate-round-1"]
-
-    def fake_run(**kwargs: object) -> tuple[dict[str, object], int]:
-        calls.append(dict(kwargs))
-        round_id = ids[min(len(calls) - 1, len(ids) - 1)]
-        state_dir = Path(kwargs["state_dir"])
-        review_cwd = Path(kwargs["review_cwd"])
-        review_scope = dict(kwargs.get("review_scope") or {})
-        ref = f"rollout://{round_id}/alpha"
-        record = {
-            "round_id": round_id,
-            "task_class": kwargs["gate_task_class"],
-            "task_id": kwargs.get("task_id") or round_id,
-            "review_cwd": str(review_cwd),
-            "review_cwd_normalized": str(review_cwd),
-            "review_scope": review_scope,
-            "signoff_status": "pending",
-            "signoff_required": True,
-            "runs": [
-                {"slot": "alpha", "reviewer_output_ref": ref, "grade_blocked": False}
-            ],
-        }
-        path = state_dir / "gate_runs.jsonl"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(record) + "\n")
-        return (
-            {
-                "round_id": round_id,
-                "task": "review_t2",
-                "status": "signoff_pending",
-                "blocked": False,
-                "signoff_required": True,
-                "runs": [
-                    {
-                        "slot": "Alpha",
-                        "status": "completed",
-                        "summary": "No findings.",
-                        "blocked": False,
-                        "block": None,
-                        "ref": ref,
-                    }
-                ],
-            },
-            0,
-        )
-
-    monkeypatch.setattr(orchestrator_runner, "run_gate_step", fake_run)
-    return calls
-
-
-def _stub_gate_with_terminal(
-    monkeypatch: pytest.MonkeyPatch, command: str, *round_ids: str
-) -> list[dict[str, object]]:
-    calls: list[dict[str, object]] = []
-    ids = list(round_ids) or ["phase_gate-round-1"]
-
-    def fake_run(**kwargs: object) -> tuple[dict[str, object], int]:
-        calls.append(dict(kwargs))
-        round_id = ids[min(len(calls) - 1, len(ids) - 1)]
-        state_dir = Path(kwargs["state_dir"])
-        review_cwd = Path(kwargs["review_cwd"])
-        review_scope = dict(kwargs.get("review_scope") or {})
-        ref = f"rollout://{round_id}/alpha"
-        output = (
-            "No findings.\n\nReview result: clean"
-            if command == "clean"
-            else "P1: concrete regression.\n\nReview result: findings"
-        )
-        record = {
-            "round_id": round_id,
-            "task_class": kwargs["gate_task_class"],
-            "task_id": kwargs.get("task_id") or round_id,
-            "review_cwd": str(review_cwd),
-            "review_cwd_normalized": str(review_cwd),
-            "review_scope": review_scope,
-            "signoff_status": "pending",
-            "signoff_required": True,
-            "runs": [
-                {
-                    "slot": "alpha",
-                    "review_status": "completed",
-                    "reviewer_output": output,
-                    "reviewer_output_ref": ref,
-                    "terminal_command": command,
-                    "grade_blocked": False,
-                }
-            ],
-        }
-        path = state_dir / "gate_runs.jsonl"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(record) + "\n")
-        return (
-            {
-                "round_id": round_id,
-                "task": "review_t2",
-                "status": "signoff_pending",
-                "blocked": False,
-                "signoff_required": True,
-                "runs": [
-                    {
-                        "slot": "Alpha",
-                        "status": "completed",
-                        "summary": output,
-                        "reviewer_output": output,
-                        "terminal_command": command,
-                        "blocked": False,
-                        "block": None,
-                        "ref": ref,
-                    }
-                ],
-            },
-            0,
-        )
-
-    monkeypatch.setattr(orchestrator_runner, "run_gate_step", fake_run)
-    return calls
-
-
 def _use_compact_normal_profile(
     monkeypatch: pytest.MonkeyPatch, state_dir: Path, *, include_deep: bool = False
 ) -> dict[str, object]:
@@ -453,7 +329,7 @@ def _use_compact_normal_profile(
         {
             "name": "broad-discovery",
             "count": 1,
-            "model_ref": "discovery_phase_model",
+            "model_ref": "signoff_normal_model",
         },
         *profiles["normal"]["steps"],
     ]
@@ -462,13 +338,13 @@ def _use_compact_normal_profile(
             {
                 "name": "broad-discovery",
                 "count": 1,
-                "model_ref": "discovery_phase_model",
+                "model_ref": "signoff_normal_model",
             },
             profiles["deep"]["steps"][0],
             {
                 "name": "deep-discovery",
                 "count": 1,
-                "model_ref": "discovery_deep_model",
+                "model_ref": "signoff_normal_model",
             },
             profiles["deep"]["steps"][-1],
         ]
@@ -532,17 +408,6 @@ def test_profile_resolution_serializes_configured_arena_pool(tmp_path: Path) -> 
     assert arena_step["reporting_pool"] is True
     assert len(arena_step["variant_groups"]) == 13
     assert len(arena_step["variant_ids"]) == 13
-
-
-def _gate_signoff_decisions(state_dir: Path) -> list[dict[str, object]]:
-    path = state_dir / "gate_signoffs.jsonl"
-    if not path.exists():
-        return []
-    return [
-        json.loads(line)
-        for line in path.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
 
 
 def _assert_github_handoff(
@@ -1344,7 +1209,6 @@ def test_create_resume_and_id_reprint_use_one_pending_action(
         "phase_review-round-1",
         "phase_review-round-2",
     ]
-    assert _gate_signoff_decisions(state_dir) == []
 
     exit_code, pending_validation = _run_review(
         monkeypatch,
@@ -2052,7 +1916,7 @@ def test_id_show_findings_prefers_closure_over_round_payload_without_running(
     state["rounds"].append(
         {
             "round_id": "empty-later-round",
-            "lane": "review_t2",
+            "lane": "review_t1",
             "round_state_dir": str(round_state_dir),
             "runs": [],
         }
@@ -2060,7 +1924,7 @@ def test_id_show_findings_prefers_closure_over_round_payload_without_running(
     state["pending_action"] = {
         "kind": "decision",
         "round_id": "empty-later-round",
-        "lane": "review_t2",
+        "lane": "review_t1",
     }
     _write_cycle_payload(state_dir, public_id, state)
     write_round(
@@ -2084,7 +1948,7 @@ def test_id_show_findings_prefers_closure_over_round_payload_without_running(
         round_state_dir,
         {
             "round_id": "empty-later-round",
-            "task_class": "phase_gate",
+            "task_class": "phase_review",
             "status": "completed",
             "runs": [],
         },
@@ -4679,103 +4543,6 @@ def test_id_rerun_after_findings_fix_allows_overlapping_base_drift(
     assert state["rounds"][0]["reviewed_head"] == reviewed_head
     assert state["rounds"][1]["reviewed_head"] == fixed_head
     assert len(list((state_dir / "orchestrator" / "cycles").glob("*.json"))) == 1
-
-
-def test_id_rerun_after_gate_pending_amend_records_gate_findings(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    _stub_deslop(monkeypatch)
-    _stub_review(monkeypatch, "phase_review-round-1", "phase_review-round-2")
-    gate_calls = _stub_gate(monkeypatch, "phase_gate-round-1", "phase_gate-round-2")
-    repo = tmp_path / "repo"
-    state_dir = tmp_path / "state"
-    config = _use_compact_normal_profile(monkeypatch, state_dir)
-    config["orchestrator"]["profiles"]["stable"]["normal"]["steps"].append(
-        {"name": "local-signoff", "kind": "gate", "gate": "phase_gate"}
-    )
-    _init_repo(repo)
-    _commit_file(repo, "app.txt", "base\n", "base")
-    _git(repo, "checkout", "-b", "feature/gate-pending-amend")
-    original_head = _commit_file(repo, "app.txt", "feature\n", "feature")
-
-    _, created = _run_review(
-        monkeypatch,
-        [
-            "--mode",
-            "normal",
-            "--cd",
-            str(repo),
-            "--base",
-            "main",
-            "--state-dir",
-            str(state_dir),
-        ],
-    )
-    public_id = str(created["review"])
-    _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
-    _run_review(
-        monkeypatch,
-        ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)],
-    )
-    _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
-    _run_review(
-        monkeypatch,
-        ["--id", public_id, "--decision", "clean", "--state-dir", str(state_dir)],
-    )
-    _run_review(monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)])
-    state = _cycle_payload(state_dir, public_id)
-    assert state["stage"] == "decision-pending"
-    assert state["pending_action"]["round_id"] == "phase_gate-round-1"
-    assert state["rounds"][2]["reviewed_head"] == original_head
-    assert _gate_signoff_decisions(state_dir) == []
-
-    before_invalid_waiver = state
-    errors: list[str] = []
-    monkeypatch.setattr(
-        review,
-        "emit_error",
-        lambda message, **kwargs: errors.append(str(message)) or 2,
-    )
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "review.py",
-            "--id",
-            public_id,
-            "--decision",
-            "clean",
-            "--ci",
-            "waived",
-        ],
-    )
-    monkeypatch.setattr(review, "default_state_dir", lambda: state_dir)
-
-    assert review.main() == 2
-    assert errors == [
-        "--validation-note is required when --full-suite or --ci is waived"
-    ]
-    assert _cycle_payload(state_dir, public_id) == before_invalid_waiver
-    assert _gate_signoff_decisions(state_dir) == []
-
-    amended_head = _amend_file(repo, "app.txt", "feature\nfix gate finding\n")
-    assert amended_head != original_head
-
-    exit_code, verification = _run_review(
-        monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)]
-    )
-
-    assert exit_code == 0
-    assert verification["review"] == public_id
-    assert len(gate_calls) == 2
-    state = _cycle_payload(state_dir, public_id)
-    assert state["active_findings"]["status"] == "decision-pending"
-    assert state["pending_action"]["round_id"] == "phase_gate-round-2"
-    assert state["review_heads"]["last_fix_head"] == amended_head
-    assert [item["verdict"] for item in _gate_signoff_decisions(state_dir)] == [
-        "findings"
-    ]
 
 
 def test_clean_followup_note_does_not_leak_to_later_review_steps(

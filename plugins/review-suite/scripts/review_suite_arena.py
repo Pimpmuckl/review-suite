@@ -93,16 +93,6 @@ from review_suite_local import (
     write_round,
     final_display_body,
 )
-from review_gate import (
-    GATE_FINDINGS_SCOPE_CHECK,
-    PUBLIC_TASK_BY_GATE,
-    _gate_output_refs,
-    gate_record_status,
-    gate_signoff_decision_for_round,
-    gate_signoff_decisions_by_round,
-    load_gate_record,
-    record_gate_signoff_decision,
-)
 from review_costs import (
     DEFAULT_COST_REPORT_FILENAME,
     REVIEW_COSTS_LOCK_NAME,
@@ -262,17 +252,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     show_last = sub.add_parser("show-last", aliases=["show_last"])
     show_last.add_argument("--cd")
-    show_last.add_argument(
-        "--task", choices=["review_t1", "review_t2", "review_t3", "review_t4"]
-    )
+    show_last.add_argument("--task", choices=["review_t1", "review_t3"])
     show_last.add_argument("--state-dir", default=str(default_state_dir()))
     show_last.add_argument("--json", action="store_true")
-
-    close_gate = sub.add_parser("close-gate", aliases=["close-signoff"])
-    close_gate.add_argument("--round-id", required=True)
-    close_gate.add_argument("--verdict", required=True, choices=["clean", "findings"])
-    close_gate.add_argument("--state-dir", default=str(default_state_dir()))
-    close_gate.add_argument("--note")
 
     costs = sub.add_parser("costs")
     costs.add_argument("--cd")
@@ -2042,9 +2024,6 @@ def _round_output_payload(payload: dict[str, object]) -> dict[str, object]:
         "task": public_task_name(str(payload.get("task_class") or "")),
         "task_class": payload.get("task_class"),
         "status": payload.get("status"),
-        "signoff_status": payload.get("signoff_status"),
-        "signoff_verdict": payload.get("signoff_verdict"),
-        "signoff_recorded_at": payload.get("signoff_recorded_at"),
         "recorded_at": payload.get("recorded_at"),
         "review_cwd": payload.get("review_cwd") or payload.get("review_cwd_normalized"),
         "graded_at": payload.get("graded_at"),
@@ -2071,12 +2050,7 @@ def _print_round_outputs(payload: dict[str, object]) -> None:
     write_text(f"task: {public_task_name(str(payload.get('task_class') or ''))}")
     write_text(f"task_class: {payload.get('task_class')}")
     write_text(f"status: {payload.get('status')}")
-    signoff_verdict = str(payload.get("signoff_verdict") or "").strip()
-    signoff_status = str(payload.get("signoff_status") or "").strip()
-    if signoff_verdict:
-        write_text(f"signoff: {signoff_verdict}")
-    elif signoff_status:
-        write_text(f"signoff: {signoff_status}")
+
     recorded_at = str(payload.get("recorded_at") or "").strip()
     if recorded_at:
         write_text(f"recorded_at: {recorded_at}")
@@ -2109,39 +2083,6 @@ def _round_output_sort_key(payload: dict[str, object]) -> str:
     )
 
 
-def _gate_record_as_round_payload(
-    record: dict[str, object], decision: dict[str, object] | None = None
-) -> dict[str, object]:
-    payload = {
-        "round_id": record.get("round_id"),
-        "task_class": record.get("task_class"),
-        "status": gate_record_status(
-            dict(record), dict(decision) if decision else None
-        ),
-        "recorded_at": record.get("recorded_at"),
-        "review_cwd": record.get("review_cwd"),
-        "review_cwd_normalized": record.get("review_cwd_normalized"),
-        "runs": list(record.get("runs") or []),
-    }
-    if record.get("signoff_status"):
-        payload["signoff_status"] = record.get("signoff_status")
-    if decision:
-        payload["signoff_verdict"] = decision.get("verdict")
-        payload["signoff_recorded_at"] = decision.get("recorded_at")
-    return payload
-
-
-def _load_gate_round_payload(
-    state_dir: Path, round_id: str
-) -> dict[str, object] | None:
-    for record in read_jsonl(state_dir / "gate_runs.jsonl"):
-        if str(record.get("round_id") or "") == round_id:
-            return _gate_record_as_round_payload(
-                record, gate_signoff_decision_for_round(state_dir, round_id)
-            )
-    return None
-
-
 def _recoverable_round_state_dirs(state_dir: Path) -> list[Path]:
     candidates = [state_dir, _orchestrator_review_state_dir(state_dir)]
     seen: set[str] = set()
@@ -2158,19 +2099,11 @@ def _recoverable_round_state_dirs(state_dir: Path) -> list[Path]:
 
 def _iter_recoverable_round_outputs(state_dir: Path) -> list[dict[str, object]]:
     payloads: list[dict[str, object]] = []
-    gate_decisions = gate_signoff_decisions_by_round(state_dir)
     for round_state_dir in _recoverable_round_state_dirs(state_dir):
         for payload in iter_round_payloads(round_state_dir):
             task_class = str(payload.get("task_class") or "")
             if task_class in {"phase_review", "pr_review"}:
                 payloads.append(payload)
-    for record in read_jsonl(state_dir / "gate_runs.jsonl"):
-        task_class = str(record.get("task_class") or "")
-        if task_class in {"phase_gate", "pr_gate"}:
-            round_id = str(record.get("round_id") or "")
-            payloads.append(
-                _gate_record_as_round_payload(record, gate_decisions.get(round_id))
-            )
     return payloads
 
 
@@ -2211,9 +2144,7 @@ def cmd_show_round(args: argparse.Namespace) -> int:
         except ValueError as exc:
             load_error = exc
     if payload is None:
-        payload = _load_gate_round_payload(state_dir, args.round_id)
-        if payload is None:
-            raise load_error or ValueError(f"unknown round: {args.round_id}")
+        raise load_error or ValueError(f"unknown round: {args.round_id}")
     if bool(getattr(args, "json", False)):
         write_text(
             json.dumps(_round_output_payload(payload), indent=2, ensure_ascii=False)
@@ -2251,88 +2182,6 @@ def cmd_show_last(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_close_gate(args: argparse.Namespace) -> int:
-    state_dir = Path(args.state_dir)
-    round_id = str(args.round_id or "").strip()
-    gate_record = load_gate_record(state_dir, round_id)
-    if gate_record is None:
-        raise ValueError(f"gate round not found: {round_id}")
-    task_class = str(gate_record.get("task_class") or "").strip()
-    if task_class not in PUBLIC_TASK_BY_GATE:
-        raise ValueError(f"round is not a T2/T4 gate round: {round_id}")
-    existing = gate_signoff_decision_for_round(state_dir, round_id)
-    status = gate_record_status(gate_record, existing)
-    if status == "blocked":
-        raise ValueError(
-            f"blocked gate rounds cannot be closed as signoff decisions: {round_id}"
-        )
-    verdict = str(args.verdict or "").strip()
-    if existing:
-        existing_verdict = str(existing.get("verdict") or "").strip()
-        if existing_verdict != verdict:
-            raise ValueError(
-                f"gate round already closed as {existing_verdict}: {round_id}"
-            )
-        emit_toon(
-            {
-                "status": "ok",
-                "closed": True,
-                "already_closed": True,
-                "round_id": round_id,
-                "verdict": existing_verdict,
-                "anchored": bool(existing.get("workflow_anchor_recorded")),
-                **(
-                    {"scope_check": GATE_FINDINGS_SCOPE_CHECK}
-                    if existing_verdict == "findings"
-                    else {}
-                ),
-            }
-        )
-        return 0
-
-    workflow_anchor_recorded = False
-    lane = PUBLIC_TASK_BY_GATE[task_class]
-    review_cwd_text = str(gate_record.get("review_cwd") or "").strip()
-    if verdict == "clean":
-        if not review_cwd_text:
-            raise ValueError(
-                f"gate round is missing review_cwd and cannot be anchored: {round_id}"
-            )
-        review_scope = dict(gate_record.get("review_scope") or {})
-        record_review_anchor(
-            state_dir=state_dir,
-            review_cwd=Path(review_cwd_text),
-            lane=lane,
-            base=str(review_scope.get("base") or "") or None,
-            review_scope=review_scope,
-            round_id=round_id,
-            task_id=str(gate_record.get("task_id") or round_id),
-            output_refs=_gate_output_refs(list(gate_record.get("runs") or [])),
-        )
-        workflow_anchor_recorded = True
-
-    decision, recorded = record_gate_signoff_decision(
-        state_dir=state_dir,
-        gate_record=gate_record,
-        verdict=verdict,
-        note=str(args.note or "").strip() or None,
-        workflow_anchor_recorded=workflow_anchor_recorded,
-    )
-    output = {
-        "status": "ok",
-        "closed": True,
-        "recorded": recorded,
-        "round_id": round_id,
-        "lane": lane,
-        "verdict": decision.get("verdict"),
-        "anchored": workflow_anchor_recorded,
-    }
-    if verdict == "findings":
-        output["scope_check"] = GATE_FINDINGS_SCOPE_CHECK
-    emit_toon(output)
-    return 0
-
-
 def _cost_row_payload(row) -> dict[str, object]:
     payload = {
         "repo": row.repo,
@@ -2344,9 +2193,7 @@ def _cost_row_payload(row) -> dict[str, object]:
         "implementation_cost_usd": row.implementation_cost_usd,
         "latest_review": row.latest_review,
         "t1_sessions": row.lane_sessions.get("review_t1", 0),
-        "t2_sessions": row.lane_sessions.get("review_t2", 0),
         "t3_sessions": row.lane_sessions.get("review_t3", 0),
-        "t4_sessions": row.lane_sessions.get("review_t4", 0),
         "review_seconds": int(round(row.review_seconds)),
         "tokens": row.tokens,
         "cost_usd": row.cost_usd,
@@ -2707,8 +2554,6 @@ def main() -> int:
             return cmd_show_round(args)
         if args.command in {"show-last", "show_last"}:
             return cmd_show_last(args)
-        if args.command in {"close-gate", "close-signoff"}:
-            return cmd_close_gate(args)
         if args.command == "costs":
             return cmd_costs(args)
         if args.command == "reroll-slot":

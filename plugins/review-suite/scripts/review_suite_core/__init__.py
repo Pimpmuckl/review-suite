@@ -15,9 +15,7 @@ from .codex_runtime import (
     wrapper_launch_cwd,
 )
 from .config import (
-    GateConfig,
     LensModelConfig,
-    gate_config,
     lens_model_config,
     load_config,
 )
@@ -97,7 +95,6 @@ __all__ = [
     "CapturedChildProcess",
     "CapturedChildWaitResult",
     "CodexReviewLaunch",
-    "GateConfig",
     "LensModelConfig",
     "codex_review_stdin_text",
     "codex_reasoning_effort",
@@ -106,7 +103,6 @@ __all__ = [
     "emit_result",
     "emit_toon",
     "format_command",
-    "gate_config",
     "anchor_updates_branch_state",
     "branch_diff_paths",
     "classify_delta_recommendation",

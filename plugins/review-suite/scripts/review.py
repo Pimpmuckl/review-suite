@@ -19,12 +19,6 @@ from review_suite_runtime_bootstrap import (
 bootstrap_from_installed_cache(__file__)
 sys.dont_write_bytecode = _previous_dont_write_bytecode
 
-from review_gate import (
-    gate_record_status,
-    gate_signoff_decision_for_round,
-    load_gate_record,
-    record_gate_signoff_decision,
-)
 from review_suite_core import (
     AxiArgumentParser,
     current_branch,
@@ -40,7 +34,6 @@ from review_suite_core import (
     merge_base,
     merge_base_drift_scope,
     normalize_cwd,
-    record_review_anchor,
     resolve_ref,
     resolve_repo_root,
     write_text,
@@ -70,7 +63,6 @@ from review_suite_core.orchestrator_state import (
     STAGE_DECISION_PENDING,
     STAGE_FIX_PENDING,
     STAGE_FOLLOWUP_PENDING,
-    STAGE_GATE_RERUN_NEEDED,
     STAGE_RUNNING,
     STAGE_LOCAL_GREEN_HANDOFF,
     STAGE_RETRY_REQUESTED,
@@ -120,7 +112,6 @@ from review_suite_local import (
 
 
 FOLLOWUP_LANE = "review-followup"
-GATE_LANES = {"review_t2", "review_t4"}
 ARENA_REROLL_SLOTS = set(PUBLIC_REVIEWER_LABELS)
 DECISION_COMMANDS = {DECISION_CLEAN, DECISION_FINDINGS}
 NO_DECISION_PENDING_MESSAGE = "no decision is pending for this review cycle"
@@ -131,7 +122,6 @@ CONTINUATION_REDIRECT_STAGES = {
     STAGE_DECISION_PENDING,
     STAGE_FIX_PENDING,
     STAGE_FOLLOWUP_PENDING,
-    STAGE_GATE_RERUN_NEEDED,
     STAGE_RETRY_REQUESTED,
     STAGE_BLOCKED,
     STAGE_CRASHED,
@@ -173,12 +163,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--status",
         action="store_true",
-        help="Inspect branch/gate routing when no review id exists.",
+        help="Inspect branch routing when no review id exists.",
     )
     parser.add_argument(
         "--verbose",
         action="store_true",
-        help="Print the full branch/gate routing snapshot for --status.",
+        help="Print the full branch routing snapshot for --status.",
     )
     parser.add_argument(
         "--json",
@@ -828,7 +818,7 @@ def _auto_decision_command(state: dict[str, Any], *, state_dir: Path) -> str | N
         str(payload.get("review_status") or "").strip(),
         str(payload.get("status") or "").strip(),
     }
-    if not (status_values & {"completed", "decision-pending", "signoff_pending"}):
+    if not (status_values & {"completed", "decision-pending"}):
         return None
     return _round_terminal_command(payload)
 
@@ -841,24 +831,6 @@ def _with_fix_action(state: dict[str, Any]) -> dict[str, Any]:
         "round_id": active.get("round_id"),
     }
     return next_state
-
-
-def _round_gate(round_payload: dict[str, Any], lane: str) -> str | None:
-    gate = str(round_payload.get("gate") or "").strip()
-    if gate:
-        return gate
-    return lane if lane in GATE_LANES else None
-
-
-def _gate_output_refs(runs: list[object]) -> list[str]:
-    refs: list[str] = []
-    for run in runs:
-        if not isinstance(run, dict):
-            continue
-        ref = str(run.get("reviewer_output_ref") or "").strip()
-        if ref:
-            refs.append(ref)
-    return refs
 
 
 def _orchestrator_review_state_dir(state_dir: Path) -> Path:
@@ -883,9 +855,7 @@ def _round_state_dir_candidates(
 def _task_class_for_lane(lane: str) -> str:
     return {
         "review_t1": "phase_review",
-        "review_t2": "phase_gate",
         "review_t3": "pr_review",
-        "review_t4": "pr_gate",
         FOLLOWUP_LANE: "phase_review",
     }.get(lane, lane)
 
@@ -947,9 +917,6 @@ def _load_output_round_payload(
             return payload
         except ValueError:
             continue
-    gate_record = load_gate_record(state_dir, round_id)
-    if gate_record is not None:
-        return gate_record
     return _fallback_round_payload(round_record)
 
 
@@ -1085,9 +1052,7 @@ def _current_label(state: dict[str, Any]) -> str | None:
     pending = dict(state.get("pending_action") or {})
     if pending:
         kind = str(pending.get("kind") or "").strip()
-        step = str(
-            pending.get("step") or pending.get("lane") or pending.get("gate") or ""
-        ).strip()
+        step = str(pending.get("step") or pending.get("lane") or "").strip()
         if kind and step:
             return f"{kind}:{step}"
         return kind or None
@@ -1230,57 +1195,6 @@ def _show_status(state: dict[str, Any], *, state_dir: Path) -> int:
             payload["Action"] = action
     emit_toon(payload)
     return 0
-
-
-def _record_gate_decision(
-    *,
-    state_dir: Path,
-    round_id: str,
-    lane: str,
-    verdict: str,
-) -> None:
-    gate_record = load_gate_record(state_dir, round_id)
-    if gate_record is None:
-        raise ValueError(f"gate round not found: {round_id}")
-    existing = gate_signoff_decision_for_round(state_dir, round_id)
-    status = gate_record_status(gate_record, existing)
-    if status == "blocked":
-        raise ValueError(
-            f"blocked gate rounds cannot be closed as signoff decisions: {round_id}"
-        )
-    if existing:
-        record_gate_signoff_decision(
-            state_dir=state_dir,
-            gate_record=gate_record,
-            verdict=verdict,
-            workflow_anchor_recorded=bool(existing.get("workflow_anchor_recorded")),
-        )
-        return
-    workflow_anchor_recorded = False
-    review_cwd_text = str(gate_record.get("review_cwd") or "").strip()
-    if verdict == DECISION_CLEAN:
-        if not review_cwd_text:
-            raise ValueError(
-                f"gate round is missing review_cwd and cannot be anchored: {round_id}"
-            )
-        review_scope = dict(gate_record.get("review_scope") or {})
-        record_review_anchor(
-            state_dir=state_dir,
-            review_cwd=Path(review_cwd_text),
-            lane=lane,
-            base=str(review_scope.get("base") or "") or None,
-            review_scope=review_scope,
-            round_id=round_id,
-            task_id=str(gate_record.get("task_id") or round_id),
-            output_refs=_gate_output_refs(list(gate_record.get("runs") or [])),
-        )
-        workflow_anchor_recorded = True
-    record_gate_signoff_decision(
-        state_dir=state_dir,
-        gate_record=gate_record,
-        verdict=verdict,
-        workflow_anchor_recorded=workflow_anchor_recorded,
-    )
 
 
 def _identity_head(state: dict[str, Any]) -> str | None:
@@ -1497,19 +1411,14 @@ def _apply_decision_to_ready_state(
         )
     reviewed_head = str(round_payload.get("reviewed_head") or "").strip() or None
     reviewed_tree = _reviewed_tree(state, reviewed_head)
-    gate = _round_gate(round_payload, lane)
     if decision == DECISION_CLEAN:
         if lane == FOLLOWUP_LANE:
             return record_followup_clean(
                 state, round_id=round_id, reviewed_head=reviewed_head
             )
         next_state = record_clean_decision(
-            state, round_id=round_id, lane=lane, reviewed_head=reviewed_head, gate=gate
+            state, round_id=round_id, lane=lane, reviewed_head=reviewed_head
         )
-        if gate:
-            _record_gate_decision(
-                state_dir=state_dir, round_id=round_id, lane=lane, verdict=decision
-            )
         return next_state
     if decision == DECISION_FINDINGS:
         if lane == FOLLOWUP_LANE:
@@ -1528,13 +1437,8 @@ def _apply_decision_to_ready_state(
                 lane=lane,
                 reviewed_head=reviewed_head,
                 reviewed_tree=reviewed_tree,
-                gate=gate,
             )
         )
-        if gate:
-            _record_gate_decision(
-                state_dir=state_dir, round_id=round_id, lane=lane, verdict=decision
-            )
         return next_state
     raise ValueError(f"unsupported decision: {decision}")
 
@@ -1671,9 +1575,6 @@ def _apply_profile_resolution(state: dict[str, Any], resolution: Any) -> dict[st
             "kind": step.kind,
             "name": step.name,
         }
-        if step.kind == "gate":
-            payload["gate"] = step.gate
-            return payload
         if step.kind == "arena":
             payload["lane"] = step.lane
             payload["task_class"] = step.task_class
@@ -1842,7 +1743,6 @@ def _continuation_head_match_kind(
         STAGE_DECISION_PENDING,
         STAGE_FIX_PENDING,
         STAGE_FOLLOWUP_PENDING,
-        STAGE_GATE_RERUN_NEEDED,
         "decision-required",
     }:
         return "changed"
@@ -2362,14 +2262,6 @@ def _continuation_note(state: dict[str, Any]) -> str | None:
             return None
         label = _review_step_label(state, pending)
         return f"Clean follow-up is not final signoff; run {label} before treating the review as green."
-    if kind == "rerun-gate":
-        if not _last_decision_is_clean_followup(state):
-            return None
-        gate = (
-            str(pending.get("gate") or pending.get("lane") or "").strip()
-            or "the same gate"
-        )
-        return f"Clean follow-up is not final signoff; rerun {gate} before treating the review as green."
     return None
 
 
@@ -2677,7 +2569,7 @@ def _action_payload(state: dict[str, Any], *, state_dir: Path) -> dict[str, Any]
             "note": note,
         }
         return _with_deslop_done_action(state, action, public_id, state_dir=state_dir)
-    if stage in {STAGE_CREATED, STAGE_GATE_RERUN_NEEDED}:
+    if stage == STAGE_CREATED:
         action = {"cmd": _review_command(public_id, state_dir=state_dir)}
         note = _continuation_note(state)
         if note:

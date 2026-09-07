@@ -12,7 +12,7 @@ SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts"
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from review_suite_core.config import gate_config, load_config
+from review_suite_core.config import load_config
 from review_suite_core.orchestrator_profiles import load_orchestrator_profiles
 
 
@@ -22,12 +22,6 @@ def test_deep_model_is_reserved_for_final_signoff(tmp_path: Path) -> None:
         '[deep]\nmodel = "gpt-6-astra"\nreasoning = "xhigh"\n',
         encoding="utf-8",
     )
-    phase = gate_config("phase_gate", state_dir=tmp_path)
-    pr = gate_config("pr_gate", state_dir=tmp_path)
-    assert phase.discovery_variant_id == "gpt-5.6-sol-medium"
-    assert phase.signoff_variant_id == "gpt-5.6-sol-medium"
-    assert pr.discovery_variant_id == "gpt-5.6-sol-medium"
-    assert pr.signoff_variant_id == "gpt-6-astra-xhigh"
     steps = load_orchestrator_profiles(load_config(tmp_path))["stable"]["deep"].steps
     signoffs = [step for step in steps if step.kind != "arena"]
     assert [(step.model, step.reasoning_effort) for step in signoffs] == [
@@ -59,11 +53,8 @@ def test_legacy_migration_preserves_non_model_settings_only(tmp_path: Path) -> N
         "orchestrator": {
             "selection": "stable",
             "stable_defaults": {
-                "discovery_phase_model": "gpt-5.5-medium",
-                "discovery_deep_model": "gpt-5.5-xhigh",
                 "signoff_normal_model": "gpt-5.5-medium",
                 "signoff_deep_model": "gpt-5.5-xhigh",
-                "discovery_loops": 2,
             },
             "profiles": {
                 "stable": {
@@ -80,13 +71,6 @@ def test_legacy_migration_preserves_non_model_settings_only(tmp_path: Path) -> N
                     }
                 }
             },
-        },
-        "gates": {
-            "phase_gate": {
-                "discovery_reviewer_count": 3,
-                "discovery_model_ref": "old_model",
-                "backup_variant_ids": ["gpt-5.5-medium"],
-            }
         },
         "future_setting": {
             "path": 'C:\\some folder\\"quoted"',
@@ -113,9 +97,6 @@ def test_legacy_migration_preserves_non_model_settings_only(tmp_path: Path) -> N
     assert config["future_setting"]["tags"] == ["one", "two"]
     assert migrated["jobs"]["deslop"]["service_tier"] == "fast"
     assert migrated["normal"]["service_tier"] == "flex"
-    phase = gate_config("phase_gate", state_dir=tmp_path)
-    assert phase.discovery_reviewer_count == 3
-    assert phase.discovery_loops == 2
     fast = load_orchestrator_profiles(config)["stable"]["fast"].steps[0]
     assert fast.count == 1
     assert fast.max_review_rounds == 2
@@ -158,13 +139,13 @@ def test_concurrent_first_loads_publish_complete_settings(tmp_path: Path) -> Non
     from concurrent.futures import ThreadPoolExecutor
 
     (tmp_path / "config.json").write_text(
-        json.dumps({"gates": {"phase_gate": {"discovery_reviewer_count": 3}}}),
+        json.dumps({"arena": {"enabled": True}}),
         encoding="utf-8",
     )
     with ThreadPoolExecutor(max_workers=8) as pool:
         results = list(pool.map(load_config, [tmp_path] * 16))
     assert all(result == results[0] for result in results)
-    assert gate_config("phase_gate", state_dir=tmp_path).discovery_reviewer_count == 3
+    assert load_config(tmp_path)["arena"]["enabled"] is True
     assert list(tmp_path.glob("*.tmp")) == []
 
 

@@ -16,7 +16,6 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import review
-import review_gate
 import review_suite_arena
 import review_suite_runtime_bootstrap as runtime_bootstrap
 from review_suite_local import _review_status_command
@@ -41,9 +40,7 @@ LAUNCHER_ENTRYPOINTS = (
     "review_plan.py",
     "review_suite_arena.py",
     "review_t1.py",
-    "review_t2.py",
     "review_t3.py",
-    "review_t4.py",
 )
 
 
@@ -371,9 +368,6 @@ def test_action_command_helpers_use_launcher_paths_after_reexec(
         review_suite_arena._grade_command(
             round_id="round", state_dir=tmp_path / "state"
         ),
-        review_gate.gate_signoff_action_payload(
-            round_id="round", state_dir=tmp_path / "state"
-        )["cmd"],
         _review_status_command(review_cwd=tmp_path, base="main"),
     ]
     command_text = "\n".join(commands).replace("\\", "/")
@@ -398,12 +392,12 @@ def test_runtime_loads_split_settings_with_existing_user_overrides(
             sys.executable,
             "-c",
             "import sys; from pathlib import Path; sys.path.insert(0, sys.argv[1]); "
-            "from review_suite_core.config import load_config, gate_config; "
+            "from review_suite_core.config import load_config; "
             "state = Path(sys.argv[2]); config = load_config(state); "
             "assert config['arena']['enabled'] is True; "
             "assert config['arena']['pools']['arena_phase']['variant_groups']; "
             "assert config['orchestrator']['stable_defaults']['normal_arena_loops'] == 2; "
-            "assert gate_config('phase_gate', state_dir=state).discovery_reviewer_count == 4",
+            "assert config['normal']['model'] == 'gpt-6-astra'",
             str(runtime / "scripts"),
             str(state),
         ],

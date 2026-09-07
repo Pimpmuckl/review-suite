@@ -363,7 +363,7 @@ def test_guard_no_stage_step_down_blocks_lower_tier_with_override_hint(
 ) -> None:
     monkeypatch.setattr(
         "review_suite_local.inspect_workflow_status",
-        lambda **kwargs: {"current_stage_lane": "review_t2"},
+        lambda **kwargs: {"current_stage_lane": "review_t3"},
     )
 
     with pytest.raises(
@@ -379,7 +379,7 @@ def test_guard_no_stage_step_down_blocks_lower_tier_with_override_hint(
     assert "--allow-stage-step-down" in str(exc_info.value)
 
     guard_no_stage_step_down(
-        lane="review_t2",
+        lane="review_t3",
         review_cwd=tmp_path,
         base="main",
         state_dir=tmp_path / "state",

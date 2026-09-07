@@ -105,8 +105,8 @@ model = "gpt-6-astra"
 reasoning = "xhigh"
 ```
 
-Discovery and earlier review passes use `normal`. The final signoff in deep
-mode and PR-gate signoff use `deep`. Per-job overrides still take precedence.
+Earlier review passes use `normal`. The final correctness signoff in deep
+mode uses `deep`. Per-job overrides still take precedence.
 
 Optional user overrides live at:
 
@@ -127,8 +127,8 @@ reasoning = "high" # inherits the normal model
 
 ```
 
-Job names: `plan`, `deslop`, `followup`, `phase_discovery`, `pr_discovery`,
-`normal_signoff`, and `deep_signoff`. Each can override `model`, `reasoning`,
+Job names: `plan`, `deslop`, `followup`, `normal_signoff`, and `deep_signoff`.
+Each can override `model`, `reasoning`,
 and `service_tier` (`fast` or `flex`; empty string clears an inherited tier).
 Partial job overrides inherit from their normal/deep group.
 

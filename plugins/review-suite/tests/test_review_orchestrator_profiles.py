@@ -137,7 +137,7 @@ def test_disabled_first_step_in_loop_block_does_not_drop_enabled_steps(
         {
             "name": "broad-discovery",
             "count": 1,
-            "model_ref": "discovery_phase_model",
+            "model_ref": "signoff_normal_model",
             "loop_ref": "test_loops",
         },
     ]

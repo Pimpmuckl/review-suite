@@ -213,9 +213,7 @@ def test_cached_row_with_folder_repo_folds_wt_suffix() -> None:
             "latest_review": "2026-04-27T00:00:00Z",
             "lane_sessions": {
                 "review_t1": 0,
-                "review_t2": 0,
                 "review_t3": 1,
-                "review_t4": 0,
                 "review_followup": 0,
             },
             "review_seconds": 60,
@@ -338,7 +336,7 @@ def _write_codex_thread(
         )
 
 
-def test_collect_review_cost_rows_groups_t1_to_t4_by_worktree(
+def test_collect_review_cost_rows_groups_local_reviews_by_worktree(
     monkeypatch, tmp_path: Path
 ) -> None:
     state_dir = tmp_path / "state"
@@ -398,62 +396,6 @@ def test_collect_review_cost_rows_groups_t1_to_t4_by_worktree(
             ],
         },
     )
-    (state_dir / "gate_runs.jsonl").write_text(
-        json.dumps(
-            {
-                "round_id": "t2-round",
-                "task_class": "phase_gate",
-                "task_id": "feat/cost-ledger",
-                "recorded_at": "2026-04-27T10:05:00Z",
-                "round_started_at": "2026-04-27T10:03:00Z",
-                "review_completed_at": "2026-04-27T10:05:00Z",
-                "review_cwd_normalized": normalized,
-                "caller_id": "019dd132-4116-71f3-b013-beaa9e5e95bd",
-                "retry_runs": [
-                    {
-                        "slot": "alpha",
-                        "usage": {"input_tokens": 10, "output_tokens": 1},
-                        "cost_usd": 0.0001,
-                    }
-                ],
-                "runs": [
-                    {
-                        "slot": "alpha",
-                        "usage": {"input_tokens": 400, "output_tokens": 50},
-                        "cost_usd": 0.004,
-                    },
-                    {"slot": "bravo", "tokens_used": 75, "cost_usd": 0.005},
-                ],
-            }
-        )
-        + "\n"
-        + json.dumps(
-            {
-                "round_id": "t4-round",
-                "task_class": "pr_gate",
-                "task_id": "feat/cost-ledger",
-                "recorded_at": "2026-04-27T11:10:00Z",
-                "review_cwd_normalized": normalized,
-                "runs": [
-                    {
-                        "slot": "alpha",
-                        "elapsed_seconds": 90,
-                        "usage": {"input_tokens": 500, "output_tokens": 60},
-                        "cost_usd": 0.006,
-                    },
-                    {
-                        "slot": "bravo",
-                        "elapsed_seconds": 70,
-                        "usage": {"input_tokens": 600, "output_tokens": 70},
-                        "cost_usd": 0.007,
-                    },
-                ],
-            }
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-
     codex_home = tmp_path / "codex-home"
     _write_codex_thread(
         codex_home,
@@ -496,14 +438,12 @@ def test_collect_review_cost_rows_groups_t1_to_t4_by_worktree(
     assert row.implementation_cost_usd == 0.0044
     assert row.lane_sessions == {
         "review_t1": 2,
-        "review_t2": 3,
         "review_t3": 1,
-        "review_t4": 2,
         "review_followup": 0,
     }
-    assert row.review_seconds == 570
-    assert row.tokens == 2456
-    assert row.cost_usd == 0.0281
+    assert row.review_seconds == 360
+    assert row.tokens == 690
+    assert row.cost_usd == 0.006
     assert row.review_cost_cutover_at == ""
 
 
@@ -685,11 +625,11 @@ def test_render_review_cost_markdown_groups_by_repo(
 
     assert "# sample-api" in markdown
     assert (
-        "| Date | Folder | Branch | PR | Worker Model | Impl Tokens | Impl Cost | T1 | T2 | T3 | T4 | FU | Review Time | Review Tokens | Review Cost | Total Cost |"
+        "| Date | Folder | Branch | PR | Worker Model | Impl Tokens | Impl Cost | T1 | T3 | FU | Review Time | Review Tokens | Review Cost | Total Cost |"
         in markdown
     )
     assert (
-        "| 2026-04-27 | sample-api-wt-alpha | feat/cost-ledger | 123 | gpt-5.4 medium | 1k | $0.00 | 1 | 0 | 0 | 0 | 0 | 1m 00s | 120 | $0.00 | $0.01 |"
+        "| 2026-04-27 | sample-api-wt-alpha | feat/cost-ledger | 123 | gpt-5.4 medium | 1k | $0.00 | 1 | 0 | 0 | 1m 00s | 120 | $0.00 | $0.01 |"
         in markdown
     )
 
@@ -1043,9 +983,7 @@ def test_update_review_cost_row_cache_replaces_pr_number_changes(
         latest_review="2026-04-27T10:00:00Z",
         lane_sessions={
             "review_t1": 1,
-            "review_t2": 0,
             "review_t3": 0,
-            "review_t4": 0,
             "review_followup": 0,
         },
         review_seconds=60,
@@ -1064,9 +1002,7 @@ def test_update_review_cost_row_cache_replaces_pr_number_changes(
         latest_review="2026-04-27T10:00:00Z",
         lane_sessions={
             "review_t1": 1,
-            "review_t2": 0,
             "review_t3": 0,
-            "review_t4": 0,
             "review_followup": 0,
         },
         review_seconds=60,
@@ -1164,9 +1100,7 @@ def test_collect_review_cost_rows_includes_implementation_only_worktree(
     assert row.tokens == 0
     assert row.lane_sessions == {
         "review_t1": 0,
-        "review_t2": 0,
         "review_t3": 0,
-        "review_t4": 0,
         "review_followup": 0,
     }
 
@@ -1251,9 +1185,7 @@ def test_collect_review_cost_rows_includes_wrapper_caller_threads(
     assert rows[0].caller_threads == ("019dd132-4116-71f3-b013-beaa9e5e95bd",)
     assert rows[0].lane_sessions == {
         "review_t1": 0,
-        "review_t2": 0,
         "review_t3": 0,
-        "review_t4": 0,
         "review_followup": 0,
     }
 
@@ -1440,7 +1372,6 @@ def test_collect_review_cost_rows_excludes_support_review_sessions(
         "deslop": "Review the current repository changes against base branch `main`.",
         "followup": "Review this follow-up diff for correctness and regression risk.",
         "t1": "review-suite::phase_review-local",
-        "t2": "review-gate::phase_gate-local",
     }.items():
         _write_codex_thread(
             codex_home,
