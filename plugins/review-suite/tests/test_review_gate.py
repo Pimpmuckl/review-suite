@@ -28,6 +28,19 @@ from review_gate import (
 )
 
 
+@pytest.fixture(autouse=True)
+def fixed_model_defaults(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # These tests exercise routing and recovery independently of shipped model choices.
+    from review_suite_core import config as settings
+
+    defaults = tmp_path / "model-defaults.toml"
+    defaults.write_text(
+        '[normal]\nmodel = "gpt-5.6-sol"\nreasoning = "medium"\n[deep]\nmodel = "gpt-6-astra"\nreasoning = "high"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(settings, "default_config_path", lambda: defaults)
+
+
 def _write_json(path: Path, payload: dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")

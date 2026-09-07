@@ -240,7 +240,12 @@ def _resolved_config(config: dict[str, Any]) -> dict[str, Any]:
 
 
 def load_config(state_dir: Path | None = None) -> dict[str, Any]:
-    defaults = _read_toml(default_config_path())
+    references = plugin_root() / "references"
+    defaults = _deep_merge(
+        _read_toml(references / "workflow_settings.toml"),
+        _read_toml(references / "arena_settings.toml"),
+    )
+    defaults = _deep_merge(defaults, _read_toml(default_config_path()))
     path = user_config_path(state_dir)
     if not path.exists():
         _create_user_settings(path, defaults)
