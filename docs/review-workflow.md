@@ -4,33 +4,18 @@
 
 Shipped defaults, without personal overrides. Arena is optional and **disabled by default**; its configured loops are shown below.
 
-```mermaid
-flowchart LR
-  subgraph fast["fast"]
-    fast_0["Cleanup once<br/>Astra / medium"]
-    fast_1["Final signoff<br/>2 reviewers / Astra / medium"]
-    fast_2["Done"]
-    fast_0 --> fast_1 --> fast_2
-  end
-  subgraph normal["normal"]
-    normal_0["Optional Arena<br/>13 variants / 13 loops"]
-    normal_1["Cleanup once<br/>Astra / medium"]
-    normal_2["Final signoff<br/>2 reviewers / Astra / medium"]
-    normal_3["GitHub review<br/>Service-selected model"]
-    normal_4["Done"]
-    normal_0 --> normal_1 --> normal_2 --> normal_3 --> normal_4
-  end
-  subgraph deep["deep"]
-    deep_0["Review<br/>2 reviewers / Astra / medium"]
-    deep_1["Optional Arena<br/>20 variants / 13 loops"]
-    deep_2["Cleanup once<br/>Astra / medium"]
-    deep_3["Final signoff<br/>2 reviewers / Astra / xhigh"]
-    deep_4["GitHub review<br/>Service-selected model"]
-    deep_5["Done"]
-    deep_0 --> deep_1 --> deep_2 --> deep_3 --> deep_4 --> deep_5
-  end
+```text
+Review Fast:
+Cleanup once (Astra medium) -> Final signoff (2x Astra medium) -> Done
+
+Review Normal:
+Optional Arena (13 variants / 13 loops) -> Cleanup once (Astra medium) -> Final signoff (2x Astra medium) -> GitHub review -> Done
+
+Review Deep:
+Review (2x Astra medium) -> Optional Arena (20 variants / 13 loops) -> Cleanup once (Astra medium) -> Final signoff (2x Astra xhigh) -> GitHub review -> Done
+
 ```
 
-Reviewers report findings; fixes are reviewed before advancing. Cleanup runs once before final signoff and does not repeat after later fixes. Required validation must pass before completion.
+Reviewers report findings; fixes are reviewed before advancing. Cleanup runs once before final signoff and does not repeat after later fixes. Required validation must pass before completion. GitHub review uses its service-selected model.
 
 Regenerate with `uv run --locked python scripts/generate-workflow.py`. CI runs the same command with `--check` to catch stale output.

@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 from copy import deepcopy
 from dataclasses import asdict
-from html import escape
 from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
@@ -26,7 +25,7 @@ from review_suite_core.orchestrator_state import (
 
 def model_label(model: str, effort: str, tier: str | None = None) -> str:
     model = {"gpt-6-astra": "Astra"}.get(model, model)
-    return escape(" / ".join(part for part in (model, effort, tier) if part))
+    return " ".join(part for part in (model, effort, tier) if part)
 
 
 def render(config: dict) -> str:
@@ -47,8 +46,7 @@ def render(config: dict) -> str:
         "Shipped defaults, without personal overrides. Arena is optional and "
         f"**{arena_default} by default**; its configured loops are shown below.",
         "",
-        "```mermaid",
-        "flowchart LR",
+        "```text",
     ]
     for mode in SUPPORTED_MODES:
         steps = profiles[mode].steps
@@ -63,7 +61,7 @@ def render(config: dict) -> str:
         while index < len(steps):
             state["review_progress"] = {"next_step_index": index}
             if deslop_should_run(state):
-                labels.append(f"Cleanup once<br/>{cleanup_label}")
+                labels.append(f"Cleanup once ({cleanup_label})")
             step = steps[index]
             if step.kind == "arena":
                 end = index + 1
@@ -74,7 +72,7 @@ def render(config: dict) -> str:
                 ):
                     end += 1
                 labels.append(
-                    f"Optional Arena<br/>{len(step.variant_ids)} variants / {end - index} loops"
+                    f"Optional Arena ({len(step.variant_ids)} variants / {end - index} loops)"
                 )
                 index = end
             else:
@@ -82,25 +80,20 @@ def render(config: dict) -> str:
                     step.model, step.reasoning_effort, step.service_tier
                 )
                 title = "Final signoff" if index == len(steps) - 1 else "Review"
-                labels.append(f"{title}<br/>{step.count} reviewers / {label}")
+                labels.append(f"{title} ({step.count}x {label})")
                 index += 1
         if _github_review_required(state):
-            labels.append("GitHub review<br/>Service-selected model")
+            labels.append("GitHub review")
         labels.append("Done")
-        lines.append(f'  subgraph {mode}["{mode}"]')
-        for index, label in enumerate(labels):
-            lines.append(f'    {mode}_{index}["{label}"]')
-        lines.append(
-            "    " + " --> ".join(f"{mode}_{index}" for index in range(len(labels)))
-        )
-        lines.append("  end")
+        lines.extend([f"Review {mode.title()}:", " -> ".join(labels), ""])
     lines.extend(
         [
             "```",
             "",
             "Reviewers report findings; fixes are reviewed before advancing. Cleanup "
             "runs once before final signoff and does not repeat after later fixes. "
-            "Required validation must pass before completion.",
+            "Required validation must pass before completion. "
+            "GitHub review uses its service-selected model.",
             "",
             "Regenerate with `uv run --locked python scripts/generate-workflow.py`. "
             "CI runs the same command with `--check` to catch stale output.",
