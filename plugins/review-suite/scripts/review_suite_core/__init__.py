@@ -23,9 +23,7 @@ from .config import (
 )
 from .costing import normalize_usage_tokens, price_usage_tokens
 from .lens_runtime import (
-    DEFAULT_MODEL,
     DEFAULT_PROGRESS_INTERVAL_SECONDS,
-    DEFAULT_REASONING_EFFORT,
     DEFAULT_TIMEOUT_SECONDS,
     WRAPPER_SESSION_LOG_FILENAME,
     CodexReviewLaunch,
@@ -89,10 +87,8 @@ from .workflow_state import (
 )
 
 __all__ = [
-    "DEFAULT_MODEL",
     "EFFECTIVE_BASE_METADATA_KEYS",
     "DEFAULT_PROGRESS_INTERVAL_SECONDS",
-    "DEFAULT_REASONING_EFFORT",
     "DEFAULT_TIMEOUT_SECONDS",
     "WRAPPER_SESSION_LOG_FILENAME",
     "SUPPORTED_REASONING_EFFORTS",

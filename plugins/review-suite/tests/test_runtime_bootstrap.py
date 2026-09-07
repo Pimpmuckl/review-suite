@@ -63,7 +63,7 @@ def _make_cache_plugin(codex_home: Path, *, version: str = "1.2.3") -> Path:
         plugin_root / "scripts" / "review_suite_runtime_bootstrap.py",
         "print('bootstrap')\n",
     )
-    _write(plugin_root / "references" / "default_config.json", "{}\n")
+    _write(plugin_root / "default_settings.toml", '[normal]\nmodel = "first"\n')
     _write(plugin_root / "assets" / "logo.txt", "asset\n")
     return plugin_root
 
@@ -202,7 +202,17 @@ def test_runtime_directory_is_created_and_reused(tmp_path: Path) -> None:
     assert (first_root / "scripts" / "review.py").read_text(
         encoding="utf-8"
     ) == "print('review')\n"
-    assert (first_root / "references" / "default_config.json").is_file()
+    assert (
+        first_root / "default_settings.toml"
+    ).read_text() == '[normal]\nmodel = "first"\n'
+    (plugin_root / "default_settings.toml").write_text(
+        '[normal]\nmodel = "updated"\n', encoding="utf-8"
+    )
+    updated_root = ensure_runtime_copy(plugin_root, codex_home=codex_home)
+    assert updated_root != first_root
+    assert (
+        updated_root / "default_settings.toml"
+    ).read_text() == '[normal]\nmodel = "updated"\n'
     metadata = json.loads((first_root / METADATA_FILENAME).read_text(encoding="utf-8"))
     assert metadata["source_path"] == str(plugin_root.resolve(strict=False))
     assert metadata["version"] == "1.2.3"

@@ -19,7 +19,14 @@ PLUGIN_NAME = "review-suite"
 DISABLE_ENV = "REVIEW_SUITE_DISABLE_RUNTIME_BOOTSTRAP"
 LAUNCHER_SCRIPT_ENV = "REVIEW_SUITE_LAUNCHER_SCRIPT"
 METADATA_FILENAME = "runtime_metadata.json"
-RUNTIME_ITEMS = ("scripts", "references", "assets", "config", ".codex-plugin")
+RUNTIME_ITEMS = (
+    "scripts",
+    "references",
+    "assets",
+    "config",
+    ".codex-plugin",
+    "default_settings.toml",
+)
 EXCLUDED_NAMES = {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"}
 EXCLUDED_SUFFIXES = {".pyc", ".pyo"}
 RUNTIME_RETIRE_AFTER_SECONDS = (
