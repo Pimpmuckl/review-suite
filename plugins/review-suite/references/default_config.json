@@ -5,7 +5,7 @@
   },
   "lens": {
     "default": {
-      "model": "gpt-5.5",
+      "model": "gpt-5.6-sol",
       "reasoning_effort": "medium",
       "service_tier": null
     },
@@ -121,8 +121,8 @@
       "auto_promotion_enabled": false
     },
     "stable_defaults": {
-      "discovery_phase_model": "gpt-5.5-medium",
-      "discovery_deep_model": "gpt-5.5-xhigh",
+      "discovery_phase_model": "gpt-5.6-sol-medium",
+      "discovery_deep_model": "gpt-5.6-sol-xhigh",
       "discovery_loops": 1,
       "normal_arena_loops": 13,
       "deep_arena_loops": 13,
