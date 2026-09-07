@@ -24,12 +24,11 @@ from review_suite_core.orchestrator_profiles import (
 
 def _step_summary(
     step: OrchestratorProfileStep,
-) -> tuple[str, str, int | None, str | None, bool]:
+) -> tuple[str, str, int | None, bool]:
     return (
         step.kind,
         step.name,
         step.count,
-        step.reasoning_effort,
         step.rerun_on_findings,
     )
 
@@ -43,21 +42,17 @@ def test_default_stable_profiles_cover_all_modes(tmp_path: Path) -> None:
     assert config["arena"]["enabled"] is False
     assert config["orchestrator"]["calibration"]["auto_promotion_enabled"] is False
     assert [_step_summary(step) for step in profiles["stable"]["normal"].steps] == [
-        ("review", "precision-signoff", 2, "medium", True),
+        ("review", "precision-signoff", 2, True),
     ]
     assert [step.name for step in profiles["stable"]["deep"].steps] == [
         "precision-signoff",
         "deep-signoff",
     ]
-    assert [step.reasoning_effort for step in profiles["stable"]["deep"].steps] == [
-        "medium",
-        "medium",
-    ]
     assert profiles["stable"]["normal"].steps[-1].rerun_on_findings is True
     assert profiles["stable"]["deep"].steps[0].rerun_on_findings is True
     assert profiles["stable"]["deep"].steps[-1].rerun_on_findings is True
     assert [_step_summary(step) for step in profiles["stable"]["fast"].steps] == [
-        ("review", "fast-signoff", 2, "medium", False)
+        ("review", "fast-signoff", 2, False)
     ]
     assert profiles["stable"]["fast"].steps[0].max_review_rounds == 2
     assert set(profiles) == {"stable"}
@@ -104,30 +99,6 @@ def test_profile_step_rejects_conflicting_findings_policies(tmp_path: Path) -> N
         ValueError, match="cannot combine rerun_on_findings with max_review_rounds"
     ):
         load_orchestrator_profiles(config)
-
-
-def test_stable_signoff_model_defaults_drive_profile_steps(tmp_path: Path) -> None:
-    config = deepcopy(load_config(tmp_path / "state"))
-    config["orchestrator"]["stable_defaults"].update(
-        {
-            "discovery_phase_model": "gpt-5.5-medium",
-            "discovery_deep_model": "gpt-5.5-xhigh",
-            "signoff_normal_model": "gpt-5.4-high",
-            "signoff_deep_model": "gpt-5.4-xhigh",
-        }
-    )
-
-    profiles = load_orchestrator_profiles(config)
-
-    normal = profiles["stable"]["normal"].steps
-    deep = profiles["stable"]["deep"].steps
-    assert [(step.model, step.reasoning_effort) for step in normal if step.model] == [
-        ("gpt-5.4", "high")
-    ]
-    assert [(step.model, step.reasoning_effort) for step in deep if step.model] == [
-        ("gpt-5.4", "high"),
-        ("gpt-5.4", "xhigh"),
-    ]
 
 
 def test_arena_disabled_omits_all_multi_model_steps(
@@ -271,16 +242,6 @@ def test_arena_steps_reject_mismatched_lane_and_task_class(tmp_path: Path) -> No
 
     with pytest.raises(
         ValueError, match="lane must be review_t3 for task_class pr_review"
-    ):
-        load_orchestrator_profiles(config)
-
-
-def test_stable_model_refs_require_model_effort_labels(tmp_path: Path) -> None:
-    config = deepcopy(load_config(tmp_path / "state"))
-    config["orchestrator"]["stable_defaults"]["signoff_normal_model"] = "gpt-5.5"
-
-    with pytest.raises(
-        ValueError, match="orchestrator.stable_defaults.signoff_normal_model"
     ):
         load_orchestrator_profiles(config)
 
