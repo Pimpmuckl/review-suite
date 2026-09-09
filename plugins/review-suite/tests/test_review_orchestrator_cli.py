@@ -1335,6 +1335,7 @@ def test_head_change_waits_for_failed_deslop_retry(
     review_calls = _stub_review(monkeypatch)
     repo = tmp_path / "repo"
     state_dir = tmp_path / "state"
+    _use_single_step_normal_profile(monkeypatch, state_dir)
     _init_repo(repo)
     _commit_file(repo, "app.txt", "base\n", "base")
     _git(repo, "checkout", "-b", "feature/deslop-head-change")
@@ -1344,7 +1345,7 @@ def test_head_change_waits_for_failed_deslop_retry(
         monkeypatch,
         [
             "--mode",
-            "fast",
+            "normal",
             "--cd",
             str(repo),
             "--base",
@@ -2084,7 +2085,7 @@ def test_id_show_status_reports_cycle_without_advancing(
         payload["merge_base"] == str(dict(before_state["identity"])["merge_base"])[:12]
     )
     assert payload["rounds"] == 1
-    assert payload["deslop"] == "closed"
+    assert payload["deslop"] == "skipped"
     assert payload["review_brief"] == "unavailable"
     assert payload["design_conformance_context"] == "unavailable"
     assert dict(payload["worktree"]) == {
@@ -2608,8 +2609,8 @@ def test_continue_consumes_material_fix_head_at_budget_stop(
         assert set(classified["Action"]["choices"]) == {"REPLAN", "RESLICE"}
     else:
         clean = _cycle_payload(state_dir, public_id)
-        assert len(deslop_calls) == 1
-        assert clean["deslop"]["status"] == "closed"
+        assert len(deslop_calls) == 0
+        assert clean["deslop"]["status"] == "skipped"
         assert classified["done"] is True
         assert clean["validation"]["full_suite"] == "unknown"
         assert len(clean["convergence"]["accepted_findings_heads"]) == 3
@@ -2617,7 +2618,7 @@ def test_continue_consumes_material_fix_head_at_budget_stop(
             monkeypatch, ["--id", public_id, "--state-dir", str(state_dir)]
         )
         assert closure["done"] is True
-        assert len(deslop_calls) == 1
+        assert len(deslop_calls) == 0
 
 
 def test_repeat_continue_restores_completed_unclassified_round(
@@ -2682,7 +2683,7 @@ def test_repeat_continue_restores_completed_unclassified_round(
         ):
             assert recovered[key] == legacy[key]
     assert len(review_calls) == 1
-    assert len(deslop_calls) == 1
+    assert len(deslop_calls) == 0
     code, _ = _run_review_after_cleanup(monkeypatch, [*args, "--decision", "clean"])
     assert code == 0
     clean = _cycle_payload(state_dir, public_id)
@@ -2690,10 +2691,12 @@ def test_repeat_continue_restores_completed_unclassified_round(
     assert clean["decisions"][-1]["command"] == "clean"
     assert len(clean["convergence"]["decisions"]) == 1
     assert clean["validation"]["full_suite"] == "unknown"
-    assert clean["deslop"]["status"] == "closed"
+    assert clean["deslop"]["status"] == "skipped"
 
 
+@pytest.mark.parametrize("skip_cleanup", [False, True])
 def test_fast_review_can_restart_into_deep_without_becoming_a_restart_target(
+    skip_cleanup: bool,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -2712,7 +2715,7 @@ def test_fast_review_can_restart_into_deep_without_becoming_a_restart_target(
         [
             "--mode",
             "fast",
-            "--skip-deslop",
+            *(["--skip-deslop"] if skip_cleanup else []),
             "--cd",
             str(repo),
             "--base",
@@ -2746,11 +2749,11 @@ def test_fast_review_can_restart_into_deep_without_becoming_a_restart_target(
     new_state = _cycle_payload(state_dir, new_id)
     assert new_state["mode"] == {"requested": "deep", "effective": "deep"}
     assert new_state["restart"]["from_mode"] == "fast"
-    assert new_state["deslop"] == {
-        "tracked": False,
-        "status": "skipped",
-        "source": "cli",
-    }
+    assert new_state["deslop"] == (
+        {"tracked": False, "status": "skipped", "source": "cli"}
+        if skip_cleanup
+        else {"tracked": True, "status": "tracked"}
+    )
 
     restart_action = next(
         action
@@ -3059,6 +3062,7 @@ def test_cleanup_drift_requires_dismissal_after_changes_without_material_fixes(
     cleanup_calls = _stub_deslop(monkeypatch)
     reviews = _stub_review(monkeypatch)
     repo, state_dir = tmp_path / "repo", tmp_path / "state"
+    _use_single_step_normal_profile(monkeypatch, state_dir)
     _init_repo(repo)
     _commit_file(repo, "README.md", "base\n", "base")
     _git(repo, "checkout", "-b", "feature/drift")
@@ -3067,7 +3071,7 @@ def test_cleanup_drift_requires_dismissal_after_changes_without_material_fixes(
         monkeypatch,
         [
             "--mode",
-            "fast",
+            "normal",
             "--cd",
             str(repo),
             "--base",
@@ -4905,12 +4909,13 @@ def test_validation_flags_do_not_run_expensive_resume(
 
 @pytest.mark.parametrize("resume", ["id", "acknowledge", "mode"])
 @pytest.mark.parametrize("edit_kind", ["commit", "amend"])
-def test_cleanup_edits_precede_first_fast_signoff_and_final_fixes_do_not_repeat_cleanup(
+def test_cleanup_edits_precede_first_normal_signoff_and_final_fixes_do_not_repeat_cleanup(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, resume: str, edit_kind: str
 ) -> None:
     review_calls = _stub_review(monkeypatch, "signoff-1", "signoff-2")
     cleanup_calls = _stub_deslop(monkeypatch)
     repo, state_dir = tmp_path / "repo", tmp_path / "state"
+    _use_single_step_normal_profile(monkeypatch, state_dir)
     _init_repo(repo)
     _commit_file(repo, "app.txt", "base\n", "base")
     _git(repo, "checkout", "-b", "feature/cleanup")
@@ -4919,7 +4924,7 @@ def test_cleanup_edits_precede_first_fast_signoff_and_final_fixes_do_not_repeat_
         monkeypatch,
         [
             "--mode",
-            "fast",
+            "normal",
             "--cd",
             str(repo),
             "--base",
@@ -4946,7 +4951,7 @@ def test_cleanup_edits_precede_first_fast_signoff_and_final_fixes_do_not_repeat_
         else _commit_file(repo, "app.txt", "simplified\n", "cleanup")
     )
     resume_args = (
-        ["--mode", "fast", "--cd", str(repo), "--base", "main"]
+        ["--mode", "normal", "--cd", str(repo), "--base", "main"]
         if resume == "mode"
         else ["--id", public_id]
         + (["--deslop-done"] if resume == "acknowledge" else [])
@@ -4970,7 +4975,9 @@ def test_cleanup_edits_precede_first_fast_signoff_and_final_fixes_do_not_repeat_
     assert len(review_calls) == 2
     assert review_calls[-1]["review_scope"]["reviewed_head"] == fixed_head
     _, green = _run_review(monkeypatch, ["--id", public_id, "--decision", "clean"])
-    assert green["done"] is True
+    assert (
+        _cycle_payload(state_dir, public_id)["validation"]["review_green"] == "passed"
+    )
     _run_review(monkeypatch, ["--id", public_id])
     assert len(cleanup_calls) == 1
     assert _cycle_payload(state_dir, public_id)["deslop"]["status"] == "closed"

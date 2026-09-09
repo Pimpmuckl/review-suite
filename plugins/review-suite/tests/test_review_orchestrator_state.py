@@ -116,7 +116,11 @@ def test_create_cycle_is_compact_json_state_keyed_by_normalized_inputs(
     assert state["validation"]["review_green"] == "unknown"
     assert state["validation"]["full_suite"] == "unknown"
     assert fast["identity"]["branch"] is None
-    assert fast["deslop"] == {"tracked": True, "status": "tracked"}
+    assert fast["deslop"] == {
+        "tracked": False,
+        "status": "skipped",
+        "source": "profile",
+    }
     assert skipped["deslop"] == {
         "tracked": False,
         "status": "skipped",

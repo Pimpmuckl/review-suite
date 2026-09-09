@@ -53,7 +53,7 @@ def render(config: dict) -> str:
         state = {
             "stage": "created",
             "mode": {"effective": mode},
-            "deslop": {"tracked": True, "status": "tracked"},
+            "deslop": {"tracked": mode != "fast", "status": "tracked"},
             "review_plan": {"steps": [asdict(step) for step in steps]},
         }
         labels = []
@@ -90,7 +90,7 @@ def render(config: dict) -> str:
         [
             "```",
             "",
-            "Reviewers report findings; fixes are reviewed before advancing. Cleanup "
+            "Reviewers report findings; fixes are reviewed before advancing. In normal/deep modes, cleanup "
             "runs once before final signoff and does not repeat after later fixes. "
             "Required validation must pass before completion. "
             "GitHub review uses its service-selected model.",

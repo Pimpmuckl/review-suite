@@ -2056,9 +2056,7 @@ def _create_successor_cycle(
         config, mode=target_mode, selection=selection
     )
     source_deslop = dict(state.get("deslop") or {})
-    source_skipped_deslop = (
-        str(source_deslop.get("status") or "").strip() == DESLOP_STATUS_SKIPPED
-    )
+    source_skipped_deslop = _cycle_cli_skips_deslop(state)
     deslop_skip_source = (
         str(source_deslop.get("source") or "cli").strip()
         if source_skipped_deslop

@@ -6,7 +6,7 @@ Shipped defaults, without personal overrides. Arena is optional and **disabled b
 
 ```text
 Review Fast:
-Cleanup once (Astra medium) -> Final signoff (2x Astra medium) -> Done
+Final signoff (2x Astra medium) -> Done
 
 Review Normal:
 Optional Arena (13 variants / 13 loops) -> Cleanup once (Astra medium) -> Final signoff (2x Astra medium) -> GitHub review -> Done
@@ -16,6 +16,6 @@ Review (2x Astra medium) -> Optional Arena (20 variants / 13 loops) -> Cleanup o
 
 ```
 
-Reviewers report findings; fixes are reviewed before advancing. Cleanup runs once before final signoff and does not repeat after later fixes. Required validation must pass before completion. GitHub review uses its service-selected model.
+Reviewers report findings; fixes are reviewed before advancing. In normal/deep modes, cleanup runs once before final signoff and does not repeat after later fixes. Required validation must pass before completion. GitHub review uses its service-selected model.
 
 Regenerate with `uv run --locked python scripts/generate-workflow.py`. CI runs the same command with `--check` to catch stale output.

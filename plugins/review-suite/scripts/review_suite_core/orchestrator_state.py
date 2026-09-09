@@ -393,6 +393,9 @@ def create_cycle(
         effective_selection or requested_selection, field="effective_selection"
     )
     deslop_tracked = bool(deslop_enabled) if deslop_enabled is not None else True
+    # Fast mode currently excludes cleanup/deslop; run correctness review only.
+    if effective == "fast":
+        deslop_tracked = False
     if deslop_tracked:
         deslop_status = DESLOP_STATUS_TRACKED
         deslop_skip = None

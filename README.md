@@ -20,7 +20,7 @@ codex plugin marketplace upgrade review-suite
 
 | Mode | Use it for | Local review |
 | --- | --- | --- |
-| `fast` | UI-only, local presentation, and other small, well-tested changes | One cleanup pass, dual normal-model signoff until green; no GitHub review; at most two local rounds |
+| `fast` | UI-only, local presentation, and other small, well-tested changes | Dual normal-model signoff until green; no cleanup or GitHub review; at most two local rounds |
 | `normal` | Everything else | Optional Arena rounds, one cleanup pass, dual normal-model signoff until green, then GitHub review |
 | `deep` | Billing, login/auth, security, business-critical systems, database integrity/migrations, concurrency, and similarly critical logic | Dual normal-model signoff until green, optional Arena rounds, one cleanup pass, dual deep-model signoff until green, then GitHub review |
 
@@ -58,7 +58,7 @@ focused validation before review dispatch, then track the full suite and CI on
 the review id. Review green does not mean merge-ready while required validation
 is pending or unknown.
 
-Cleanup runs once per review cycle, immediately before the final signoff. Apply
+Cleanup runs once per normal/deep review cycle, immediately before the final signoff. Apply
 accepted simplifications before continuing; final signoff reviews the resulting
 code. Later review fixes do not restart cleanup.
 

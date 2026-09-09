@@ -25,7 +25,7 @@ Mode:
 
 Rules:
 - Run validation relevant to the changed surface before dispatch. Start any required slow checks after dispatch and track their final status. Run a full suite only when repository requirements or reachable effects justify it; record an explicit reason when waiving an unnecessary full-suite or CI gate.
-- Immediately before final correctness signoff, every mode runs one bounded pass for frozen-brief conformance and local cleanup. Handle or dismiss its output, then close it with `review.py --id <id> --deslop-done`. Accepted edits proceed to final signoff on the new exact head. Cleanup runs once per cycle and does not restart after final-review or GitHub fixes.
+- Immediately before final correctness signoff, normal and deep modes run one bounded pass for frozen-brief conformance and local cleanup. Fast mode currently excludes this pass. Handle or dismiss its output, then close it with `review.py --id <id> --deslop-done`. Accepted edits proceed to final signoff on the new exact head. Cleanup runs once per cycle and does not restart after final-review or GitHub fixes.
 - Three distinct caller-accepted findings heads require a durable `CONTINUE`, `REPLAN`, or `RESLICE` decision; `CONTINUE` is available once for one additional fix head and its correctness decision. Report conflicts with the frozen goal, acceptance, scope, stop condition, owner, authorized behavior, or unit boundary immediately with `review.py --id <id> --contract-conflict <dimension>`.
 - Review orchestration expects committed review changes. If `git diff` is non-empty but `base..HEAD` is empty, commit intended changes or stash unrelated worktree changes before rerunning.
 - There is no `--allow-dirty` override.

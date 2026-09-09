@@ -4,7 +4,7 @@ Public modes describe risk, not model experiments:
 
 | Mode | Use | Ladder |
 | --- | --- | --- |
-| `fast` | UI-only, local presentation, and other small, well-tested changes | One cleanup pass, dual configured normal-model signoff; at most two local rounds |
+| `fast` | UI-only, local presentation, and other small, well-tested changes | Dual configured normal-model signoff; no cleanup; at most two local rounds |
 | `normal` | Everything else | Optional phase Arena rounds, one cleanup pass, dual configured normal-model signoff until green, GitHub review |
 | `deep` | Billing, authentication/login, authorization/security, database integrity or migrations, concurrency, and similarly critical logic | Dual configured normal-model signoff until green, optional deep Arena rounds, one cleanup pass, dual configured deep-model signoff until green, GitHub review |
 
@@ -22,7 +22,7 @@ reviewer models, and optional Arena rounds from the shipped defaults.
 
 Arena uses its mixed-model roster when enabled. GitHub review uses the GitHub
 Codex service; these model settings do not select its model. Findings require
-fixes and repeat review before advancing. Cleanup runs once per cycle and checks
+fixes and repeat review before advancing. Cleanup runs once per normal/deep cycle and checks
 simplification and conformance to the review brief. Apply accepted cleanup changes
 before final signoff so that it reviews the resulting code. Later signoff or
 GitHub fixes do not restart cleanup.

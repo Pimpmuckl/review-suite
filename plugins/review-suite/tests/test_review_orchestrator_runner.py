@@ -266,7 +266,7 @@ def test_runner_runs_cleanup_before_final_correctness_and_waits_for_acknowledgme
 @pytest.mark.parametrize(
     ("mode", "expected"),
     [
-        ("fast", ["deslop", "review"]),
+        ("fast", ["review"]),
         ("normal", ["arena", "deslop", "review"]),
         ("deep", ["review", "arena", "deslop", "review"]),
     ],
@@ -1256,7 +1256,7 @@ def test_runner_rejects_mismatched_arena_lane_and_task_class(
         orchestrator_runner.run_one_expensive_step(state, state_dir=tmp_path / "state")
 
 
-def test_runner_fast_mode_failed_cleanup_blocks_signoff(
+def test_runner_normal_mode_failed_cleanup_blocks_signoff(
     monkeypatch, clean_worktree: None, tmp_path: Path
 ) -> None:
     review_calls = _stub_review(monkeypatch)
@@ -1271,7 +1271,7 @@ def test_runner_fast_mode_failed_cleanup_blocks_signoff(
     monkeypatch.setattr(orchestrator_runner, "run_deslop_subprocess", fake_run)
 
     result = orchestrator_runner.run_one_expensive_step(
-        _cycle(tmp_path, mode="fast"),
+        _cycle(tmp_path, mode="normal"),
         state_dir=tmp_path / "state",
     )
 
