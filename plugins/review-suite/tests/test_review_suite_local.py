@@ -2784,6 +2784,55 @@ def test_configured_reroll_preserves_four_model_cohort() -> None:
     assert payload["rating_pool_id"] == "fresh-pool"
 
 
+def test_configured_reroll_replaces_timed_out_variant() -> None:
+    variants = [_variant(name) for name in ("a", "b", "c", "d", "e")]
+    outsider = _variant("f")
+    previously_excluded = _variant("g")
+    runs = [
+        {
+            "slot": slot,
+            "variant_id": variant["id"],
+            "model": variant["model"],
+            "reasoning_effort": variant["reasoning_effort"],
+            "review_status": "timeout" if slot == "charlie" else "completed",
+            "grade_blocked": slot == "charlie",
+            "grade_block_reason": "review_timed_out" if slot == "charlie" else None,
+            "reviewer_output": "" if slot == "charlie" else "No findings.",
+        }
+        for slot, variant in zip(("alpha", "bravo", "charlie", "delta"), variants)
+    ]
+
+    payload = build_reroll_slot_payload(
+        round_payload={
+            "round_id": "round-1",
+            "status": "completed",
+            "task_class": "phase_review",
+            "selection_mode": "configured",
+            "selection_pairing": "configured_schedule",
+            "rating_pool_id": "fresh-pool",
+            "rating_pool_variant_ids": ["a", "b", "c", "d", "e", "g"],
+            "excluded_variant_ids": ["g"],
+            "runs": runs,
+        },
+        roster=_roster(*variants, outsider, previously_excluded),
+        operational_state=_operational_state(
+            champion_ids=[],
+            probation_ids=[],
+            cooling={"c": {"until": "2999-01-01T00:00:00Z", "failure_count": 1}},
+        ),
+        records=[],
+        slot="charlie",
+        seed=None,
+    )
+
+    assert [run["variant_id"] for run in payload["runs"]] == ["a", "b", "e", "d"]
+    assert payload["runs"][2]["rerolled_from_variant_id"] == "c"
+    assert payload["runs"][0]["reviewer_output"] == "No findings."
+    assert payload["rating_pool_id"] == "fresh-pool"
+    assert payload["rating_pool_variant_ids"] == ["a", "b", "c", "d", "e", "g"]
+    assert {"f", "g"} <= set(payload["excluded_variant_ids"])
+
+
 def test_configured_reroll_replaces_unsupported_model() -> None:
     variants = [_variant(name) for name in ("a", "b", "c", "d", "e", "g")]
     unsupported_peer = _variant("c-high")

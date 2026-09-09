@@ -2862,7 +2862,8 @@ def build_reroll_slot_payload(
         str(variant_id) for variant_id in round_payload.get("excluded_variant_ids", [])
     }
     unsupported_variant_ids: set[str] = set()
-    if replacement_source.get("grade_block_reason") == "selected_model_not_supported":
+    block_reason = replacement_source.get("grade_block_reason")
+    if block_reason == "selected_model_not_supported":
         unsupported_variant_ids = {
             str(variant["id"])
             for variant in roster.get("variants", [])
@@ -2875,7 +2876,7 @@ def build_reroll_slot_payload(
             "reasoning_effort": replacement_source["reasoning_effort"],
         }
         excluded_variant_ids = set(prior_excluded_variant_ids)
-        if unsupported_variant_ids:
+        if unsupported_variant_ids or block_reason == "review_timed_out":
             rating_pool_variant_ids = {
                 str(variant_id)
                 for variant_id in round_payload.get("rating_pool_variant_ids", [])

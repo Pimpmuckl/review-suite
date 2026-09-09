@@ -200,6 +200,32 @@ def test_rollout_activity_summary_tracks_custom_tool_activity(tmp_path: Path) ->
     assert summary["last_meaningful_type"] == "custom_tool_call"
 
 
+def test_rollout_activity_summary_preserves_activity_across_compaction(
+    tmp_path: Path,
+) -> None:
+    rollout = tmp_path / "compacted.jsonl"
+    _write_jsonl(
+        rollout,
+        [
+            {
+                "timestamp": "2026-04-23T20:00:00Z",
+                "type": "response_item",
+                "payload": {"type": "custom_tool_call_output"},
+            },
+            {
+                "timestamp": "2026-04-23T20:00:01Z",
+                "type": "turn_context",
+                "payload": {},
+            },
+        ],
+    )
+
+    summary = rollout_capture.rollout_activity_summary(rollout)
+
+    assert summary["last_meaningful_at"].isoformat() == "2026-04-23T20:00:00+00:00"
+    assert summary["last_meaningful_type"] == "custom_tool_call_output"
+
+
 def _insert_thread(
     con: sqlite3.Connection,
     *,

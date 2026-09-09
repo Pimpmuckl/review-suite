@@ -224,14 +224,10 @@ def _is_meaningful_activity(row: dict[str, Any]) -> bool:
 
 def rollout_activity_summary(path: Path) -> dict[str, Any]:
     rows = iter_jsonl(path)
-    last_turn_context_index = 0
-    for index, row in enumerate(rows):
-        if row.get("type") == "turn_context":
-            last_turn_context_index = index
     last_event_at: datetime | None = None
     last_meaningful_at: datetime | None = None
     last_meaningful_type: str | None = None
-    for row in rows[last_turn_context_index:]:
+    for row in rows:
         timestamp = _parse_event_timestamp(row.get("timestamp"))
         if timestamp is not None:
             last_event_at = timestamp
