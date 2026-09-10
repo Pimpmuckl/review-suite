@@ -28,7 +28,6 @@ from .lens_runtime import (
     codex_review_stdin_text,
     emit_result,
     normalize_service_tier,
-    prepare_codex_review_launch,
     progress_heartbeat_line,
     record_wrapper_session,
     run_codex,
@@ -56,6 +55,7 @@ from .process_runtime import (
     terminate_process_tree,
     wait_for_captured_child_process,
 )
+from .review_backend import prepare_review_launch
 from .workflow_state import (
     EFFECTIVE_BASE_METADATA_KEYS,
     anchor_updates_branch_state,
@@ -83,6 +83,10 @@ from .workflow_state import (
     worktree_status_entries,
     workflow_state_path,
 )
+
+# Existing callers import this name from review_suite_core. Keep that call site stable
+# while the package-level seam becomes provider-aware.
+prepare_codex_review_launch = prepare_review_launch
 
 __all__ = [
     "EFFECTIVE_BASE_METADATA_KEYS",
@@ -133,6 +137,7 @@ __all__ = [
     "parse_model_label",
     "price_usage_tokens",
     "prepare_codex_review_launch",
+    "prepare_review_launch",
     "record_review_anchor",
     "record_wrapper_session",
     "resolve_cd_path",
