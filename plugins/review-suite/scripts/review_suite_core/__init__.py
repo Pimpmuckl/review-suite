@@ -26,6 +26,11 @@ from .costing import (
     run_total_tokens,
 )
 from .opencode_driver import parse_opencode_review_metadata
+from .opencode_runtime import (
+    default_opencode_reasoning_effort,
+    opencode_reasoning_efforts,
+    validate_opencode_reasoning_effort,
+)
 from .lens_runtime import (
     DEFAULT_PROGRESS_INTERVAL_SECONDS,
     DEFAULT_TIMEOUT_SECONDS,
@@ -119,6 +124,7 @@ __all__ = [
     "current_branch",
     "current_head",
     "cwd_path_from_normalized",
+    "default_opencode_reasoning_effort",
     "diff_artifact",
     "diff_stats",
     "dirty_worktree_scope",
@@ -143,6 +149,7 @@ __all__ = [
     "normalize_cwd",
     "normalize_service_tier",
     "normalize_usage_tokens",
+    "opencode_reasoning_efforts",
     "parse_model_label",
     "parse_opencode_review_metadata",
     "prepare_codex_review_launch",
@@ -165,6 +172,7 @@ __all__ = [
     "utc_now",
     "utc_now_iso",
     "validate_codex_runtime",
+    "validate_opencode_reasoning_effort",
     "validated_linear_review_range",
     "wait_for_captured_child_process",
     "workflow_state_path",

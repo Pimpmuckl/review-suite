@@ -7,7 +7,7 @@ Use an explicit `opencode::` model prefix. The remainder is passed to OpenCode a
 ```toml
 [normal]
 model = "opencode::opencode-go/deepseek-flash"
-reasoning = "medium"
+reasoning = "high"
 ```
 
 For GLM-5.3-Flash, only the model value changes:
@@ -15,10 +15,10 @@ For GLM-5.3-Flash, only the model value changes:
 ```toml
 [normal]
 model = "opencode::opencode-go/glm-5.3-flash"
-reasoning = "medium"
+reasoning = "high"
 ```
 
-The `reasoning` field remains required by Review Suite's model contract, but OpenCode uses the provider's default reasoning behavior. If a provider exposes a native OpenCode model variant, encode it in the OpenCode model identifier rather than assuming Codex reasoning levels map one-for-one.
+OpenCode maps `reasoning` to `opencode run --variant`. The OpenCode Go models expose `low`, `high`, and `max` thinking levels (`opencode-go/deepseek-flash` is DeepSeek V4.1 Flash, `opencode-go/glm-5.3-flash` is GLM-5.3-Flash). An explicit `reasoning` outside that set is rejected with the supported values; an unsupported level inherited from settings is normalized to the model's default (`high`). Models without a known mapping run at the provider's default reasoning behavior and no `--variant` is sent.
 
 ## Runtime contract
 

@@ -24,6 +24,7 @@ from review_suite_core import (
     current_branch,
     current_head,
     cwd_path_from_normalized,
+    default_opencode_reasoning_effort,
     EFFECTIVE_BASE_METADATA_KEYS,
     effective_base_ref,
     emit_error,
@@ -39,6 +40,7 @@ from review_suite_core import (
     resolve_ref,
     resolve_repo_root,
     SUPPORTED_REASONING_EFFORTS,
+    validate_opencode_reasoning_effort,
     write_text,
 )
 from review_suite_core.config import default_state_dir, load_config
@@ -1950,7 +1952,6 @@ def _config_with_model_override(
     merged = deepcopy(config)
     orchestrator = merged.setdefault("orchestrator", {})
     defaults = dict(orchestrator.get("stable_defaults") or {})
-    opencode_model = model.startswith(OPENCODE_MODEL_PREFIX)
     for ref, group in (
         ("signoff_normal_model", "normal"),
         ("signoff_deep_model", "deep"),
@@ -1959,14 +1960,17 @@ def _config_with_model_override(
             defaults.get(ref), field=ref
         )
         chosen_model = model or existing_model
-        if reasoning and chosen_model.startswith(OPENCODE_MODEL_PREFIX):
-            raise ValueError(
-                "--reasoning is not supported by the OpenCode backend "
-                f"({chosen_model}); OpenCode uses the provider's default reasoning "
-                "effort."
-            )
         effort = reasoning or existing_effort
-        tier = None if (opencode_model and model) else existing_tier
+        if chosen_model.startswith(OPENCODE_MODEL_PREFIX):
+            opencode_name = chosen_model[len(OPENCODE_MODEL_PREFIX) :]
+            if reasoning:
+                effort = validate_opencode_reasoning_effort(opencode_name, reasoning)
+            else:
+                try:
+                    effort = validate_opencode_reasoning_effort(opencode_name, effort)
+                except ValueError:
+                    effort = default_opencode_reasoning_effort(opencode_name)
+        tier = None if chosen_model.startswith(OPENCODE_MODEL_PREFIX) else existing_tier
         defaults[ref] = "-".join([chosen_model, effort] + ([tier] if tier else []))
         section = merged.get(group)
         if isinstance(section, dict):

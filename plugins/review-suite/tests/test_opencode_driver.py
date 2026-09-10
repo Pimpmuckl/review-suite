@@ -16,8 +16,10 @@ from review_suite_core.opencode_driver import (
     _exported_review_text,
     _format_metadata_line,
     _git_diff_command,
+    _opencode_run_command,
     _parse_event_stream,
     _usage_from_export,
+    build_parser,
     parse_opencode_review_metadata,
 )
 from review_suite_core.opencode_runtime import opencode_review_env
@@ -59,6 +61,37 @@ def test_git_show_uses_first_parent_for_single_commit_review() -> None:
         "--no-textconv",
         "abc",
     ]
+
+
+def _run_args(tmp_path: Path, *extra: str) -> argparse.Namespace:
+    return build_parser().parse_args(
+        [
+            "--model",
+            "opencode-go/deepseek-flash",
+            "--dir",
+            str(tmp_path),
+            "--title",
+            "review-suite::test",
+            *extra,
+        ]
+    )
+
+
+def test_run_command_includes_variant_when_set(tmp_path: Path) -> None:
+    patch = tmp_path / "target.patch"
+    command = _opencode_run_command(
+        "opencode", _run_args(tmp_path, "--variant", "high"), tmp_path, patch
+    )
+
+    assert command[command.index("--variant") + 1] == "high"
+    assert command[-2:] == ["--file", str(patch)]
+
+
+def test_run_command_omits_variant_when_unset(tmp_path: Path) -> None:
+    patch = tmp_path / "target.patch"
+    command = _opencode_run_command("opencode", _run_args(tmp_path), tmp_path, patch)
+
+    assert "--variant" not in command
 
 
 def test_event_stream_prefers_final_terminal_review_message() -> None:
