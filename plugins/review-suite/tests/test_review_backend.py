@@ -34,9 +34,17 @@ def test_prefixed_model_uses_opencode_backend() -> None:
     )
 
 
-def test_opencode_model_requires_provider_qualified_id() -> None:
+@pytest.mark.parametrize(
+    "model",
+    [
+        "opencode::deepseek-flash",
+        "opencode::/deepseek-flash",
+        "opencode::opencode-go/",
+    ],
+)
+def test_opencode_model_requires_provider_qualified_id(model: str) -> None:
     with pytest.raises(ValueError, match="provider/model"):
-        split_review_backend_model("opencode::deepseek-flash")
+        split_review_backend_model(model)
 
 
 def test_package_launch_seam_is_provider_aware() -> None:
@@ -50,13 +58,19 @@ def test_opencode_review_env_is_read_only(monkeypatch: pytest.MonkeyPatch) -> No
     agent = config["agent"][OPENCODE_REVIEW_AGENT]
     permission = agent["permission"]
 
+    assert config["share"] == "disabled"
     assert agent["mode"] == "primary"
     assert permission["edit"] == "deny"
     assert permission["bash"] == "deny"
     assert permission["task"] == "deny"
     assert permission["webfetch"] == "deny"
     assert permission["websearch"] == "deny"
-    assert permission["read"] == "allow"
+    assert permission["read"] == {
+        "*": "allow",
+        "*.env": "deny",
+        "*.env.*": "deny",
+        "*.env.example": "allow",
+    }
     assert permission["glob"] == "allow"
     assert permission["grep"] == "allow"
     assert env["OPENCODE_DISABLE_AUTOUPDATE"] == "true"
@@ -95,7 +109,10 @@ def test_prepare_opencode_review_launch_uses_driver_and_no_final_message_file(
     assert isinstance(launch, CodexReviewLaunch)
     assert launch.command[0] == sys.executable
     assert launch.command[1].endswith("opencode_driver.py")
-    assert launch.command[launch.command.index("--model") + 1] == "opencode-go/deepseek-flash"
+    assert (
+        launch.command[launch.command.index("--model") + 1]
+        == "opencode-go/deepseek-flash"
+    )
     assert launch.command[launch.command.index("--base") + 1] == "main"
     assert launch.final_message_path is None
     assert launch.cwd == tmp_path.resolve()
