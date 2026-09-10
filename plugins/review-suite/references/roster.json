@@ -247,6 +247,54 @@
       "pricing": { "input_per_million_usd": 10.0, "cached_input_per_million_usd": 1.0, "cache_write_input_per_million_usd": 12.5, "output_per_million_usd": 50.0 }
     },
     {
+      "id": "deepseek-v4.1-flash-low",
+      "model": "opencode::opencode-go/deepseek-flash",
+      "reasoning_effort": "low",
+      "task_classes": ["phase_review"],
+      "state": "active",
+      "bootstrap_target_samples": 10
+    },
+    {
+      "id": "deepseek-v4.1-flash-high",
+      "model": "opencode::opencode-go/deepseek-flash",
+      "reasoning_effort": "high",
+      "task_classes": ["phase_review", "pr_review"],
+      "state": "active",
+      "bootstrap_target_samples": 10
+    },
+    {
+      "id": "deepseek-v4.1-flash-max",
+      "model": "opencode::opencode-go/deepseek-flash",
+      "reasoning_effort": "max",
+      "task_classes": ["phase_review", "pr_review"],
+      "state": "active",
+      "bootstrap_target_samples": 10
+    },
+    {
+      "id": "glm-5.3-flash-low",
+      "model": "opencode::opencode-go/glm-5.3-flash",
+      "reasoning_effort": "low",
+      "task_classes": ["phase_review"],
+      "state": "active",
+      "bootstrap_target_samples": 10
+    },
+    {
+      "id": "glm-5.3-flash-high",
+      "model": "opencode::opencode-go/glm-5.3-flash",
+      "reasoning_effort": "high",
+      "task_classes": ["phase_review", "pr_review"],
+      "state": "active",
+      "bootstrap_target_samples": 10
+    },
+    {
+      "id": "glm-5.3-flash-max",
+      "model": "opencode::opencode-go/glm-5.3-flash",
+      "reasoning_effort": "max",
+      "task_classes": ["phase_review", "pr_review"],
+      "state": "active",
+      "bootstrap_target_samples": 10
+    },
+    {
       "id": "gpt-5.6-terra-low",
       "model": "gpt-5.6-terra",
       "reasoning_effort": "low",

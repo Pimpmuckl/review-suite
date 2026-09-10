@@ -433,7 +433,7 @@ def test_profile_resolution_serializes_configured_arena_pool(tmp_path: Path) -> 
     assert arena_step["rating_pool_id"] == "arena-phase-gpt-5.6-v1"
     assert arena_step["reporting_pool"] is True
     assert len(arena_step["variant_groups"]) == 13
-    assert len(arena_step["variant_ids"]) == 13
+    assert len(arena_step["variant_ids"]) == 19
 
 
 def test_model_override_prefixes_provider_model_and_defaults_reasoning(
