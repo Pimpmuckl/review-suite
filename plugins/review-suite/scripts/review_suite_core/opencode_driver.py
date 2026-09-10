@@ -110,21 +110,17 @@ def _parse_event_stream(stdout: str) -> tuple[str | None, str | None]:
                 current_parts.append(text)
             continue
         if event_type == "step_finish" and current_parts:
-            message = "\n".join(current_parts).strip()
-            part = event.get("part") or {}
-            if (
-                part.get("reason") == "stop"
-                or TERMINAL_REVIEW_RESULT_PREFIX.lower() in message.lower()
-            ):
-                completed_messages.append(message)
+            completed_messages.append("\n".join(current_parts).strip())
             current_parts = []
-    if (
-        current_parts
-        and TERMINAL_REVIEW_RESULT_PREFIX.lower() in "\n".join(current_parts).lower()
-    ):
+    if current_parts:
         completed_messages.append("\n".join(current_parts).strip())
 
-    return session_id, completed_messages[-1] if completed_messages else None
+    terminal_messages = [
+        text
+        for text in completed_messages
+        if TERMINAL_REVIEW_RESULT_PREFIX.lower() in text.lower()
+    ]
+    return session_id, terminal_messages[-1] if terminal_messages else None
 
 
 def _assistant_text_candidates(value: Any) -> list[str]:
