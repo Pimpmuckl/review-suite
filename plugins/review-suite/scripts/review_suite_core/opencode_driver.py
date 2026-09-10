@@ -56,8 +56,6 @@ _UNAVAILABLE_ERROR_MARKERS = (
     "access denied",
     "no access",
 )
-_CAPACITY_ERROR_CODES = ("429",)
-_UNAVAILABLE_ERROR_CODES = ("401", "403")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -349,13 +347,12 @@ def classify_opencode_error(
             parts.append(str(error.get("message") or ""))
     parts.append(str(stderr_text or ""))
     haystack = " ".join(parts).lower()
-    if any(marker in haystack for marker in _CAPACITY_ERROR_MARKERS) or any(
-        re.search(rf"\b{re.escape(code)}\b", haystack) for code in _CAPACITY_ERROR_CODES
+    if any(marker in haystack for marker in _CAPACITY_ERROR_MARKERS) or re.search(
+        r"\b429\b", haystack
     ):
         return OPENCODE_ERROR_CLASS_CAPACITY
-    if any(marker in haystack for marker in _UNAVAILABLE_ERROR_MARKERS) or any(
-        re.search(rf"\b{re.escape(code)}\b", haystack)
-        for code in _UNAVAILABLE_ERROR_CODES
+    if any(marker in haystack for marker in _UNAVAILABLE_ERROR_MARKERS) or re.search(
+        r"\b(?:401|403)\b", haystack
     ):
         return OPENCODE_ERROR_CLASS_UNAVAILABLE
     if returncode != 0 or errors:

@@ -3189,13 +3189,6 @@ def _capacity_interruption_detected(*, stderr_text: str, reviewer_output: str) -
     return "selected model is at capacity" in haystack
 
 
-def _opencode_error_metadata(stderr_text: str) -> dict[str, Any]:
-    text = str(stderr_text or "")
-    if not text.strip():
-        return {}
-    return parse_opencode_review_metadata(text)
-
-
 def _review_interrupted_detected(*, stderr_text: str, reviewer_output: str) -> bool:
     output_first_line = _first_nonempty_line(reviewer_output)
     if output_first_line:
@@ -3297,7 +3290,7 @@ def _classify_review_result(
             "grade_blocked": True,
             "grade_block_reason": "selected_model_at_capacity",
         }
-    opencode_metadata = _opencode_error_metadata(stderr_text)
+    opencode_metadata = parse_opencode_review_metadata(stderr_text)
     opencode_error = str(opencode_metadata.get("error_class") or "").strip().lower()
     if (not output or interrupted) and opencode_error:
         reason = OPENCODE_ERROR_BLOCK_REASONS.get(opencode_error)
