@@ -592,7 +592,20 @@ def load_operational_state(path: Path) -> dict[str, Any]:
             },
         )
         payload["task_classes"][task_class].setdefault("cooldowns", {})
-        payload["task_classes"][task_class].setdefault("cooldown_failures", {})
+        cooldown_failures = payload["task_classes"][task_class].setdefault(
+            "cooldown_failures", {}
+        )
+        if not cooldown_failures:
+            for variant_id, entry in dict(
+                payload["task_classes"][task_class].get("cooldowns") or {}
+            ).items():
+                cooldown_failures[str(variant_id)] = {
+                    "failure_count": int((entry or {}).get("failure_count", 1) or 1),
+                    "last_reason": str((entry or {}).get("last_reason") or ""),
+                    "last_triggered_at": str(
+                        (entry or {}).get("last_triggered_at") or ""
+                    ),
+                }
         payload["task_classes"][task_class].setdefault("champion_variant_ids", [])
         payload["task_classes"][task_class].setdefault("probation_variant_ids", [])
     _prune_expired_cooldowns(payload)

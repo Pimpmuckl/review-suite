@@ -46,6 +46,8 @@ _UNAVAILABLE_ERROR_MARKERS = (
     "model unavailable",
     "model is not available",
     "model is unavailable",
+    "unsupported model",
+    "unsupported",
     "not supported",
     "does not exist",
     "unauthorized",

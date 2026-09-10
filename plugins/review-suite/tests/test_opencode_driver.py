@@ -420,6 +420,13 @@ def test_classify_opencode_error_maps_unavailable_signatures() -> None:
         )
         == OPENCODE_ERROR_CLASS_UNAVAILABLE
     )
+    assert (
+        classify_opencode_error(
+            returncode=1,
+            errors=[{"name": "ProviderError", "message": "Unsupported model"}],
+        )
+        == OPENCODE_ERROR_CLASS_UNAVAILABLE
+    )
 
 
 def test_classify_opencode_error_treats_service_unavailable_as_failure() -> None:

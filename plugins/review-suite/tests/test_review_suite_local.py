@@ -1175,6 +1175,39 @@ def test_apply_capacity_cooldowns_clears_failure_history_on_success(
     assert "model-y" not in task_state["cooldown_failures"]
 
 
+def test_load_operational_state_seeds_cooldown_failure_history(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "operational_state.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "generated_at": "2000-01-01T00:00:00Z",
+                "task_classes": {
+                    "phase_review": {
+                        "cooldowns": {
+                            "model-z": {
+                                "until": "2999-01-01T00:00:00Z",
+                                "failure_count": 4,
+                                "last_reason": "opencode_review_failed",
+                                "last_triggered_at": "2000-01-01T00:00:00Z",
+                            }
+                        },
+                    },
+                    "pr_review": {"cooldowns": {}},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    state = review_suite_local.load_operational_state(state_path)
+
+    failures = state["task_classes"]["phase_review"]["cooldown_failures"]
+    assert failures["model-z"]["failure_count"] == 4
+    assert failures["model-z"]["last_reason"] == "opencode_review_failed"
+
+
 def test_ensure_clean_git_worktree_ignores_untracked_review_suite_scratch(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
