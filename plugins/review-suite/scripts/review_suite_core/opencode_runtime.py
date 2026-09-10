@@ -29,6 +29,7 @@ OPENCODE_REVIEW_SYSTEM_PROMPT = (
 def _allow_gitless_review_config() -> dict[str, object]:
     return {
         "$schema": "https://opencode.ai/config.json",
+        "share": "disabled",
         "agent": {
             OPENCODE_REVIEW_AGENT: {
                 "description": "Read-only Review Suite code reviewer",
@@ -36,7 +37,12 @@ def _allow_gitless_review_config() -> dict[str, object]:
                 "prompt": OPENCODE_REVIEW_SYSTEM_PROMPT,
                 "permission": {
                     "*": "deny",
-                    "read": "allow",
+                    "read": {
+                        "*": "allow",
+                        "*.env": "deny",
+                        "*.env.*": "deny",
+                        "*.env.example": "allow",
+                    },
                     "glob": "allow",
                     "grep": "allow",
                     "list": "allow",
