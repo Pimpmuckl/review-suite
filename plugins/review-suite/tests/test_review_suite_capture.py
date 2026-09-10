@@ -1359,6 +1359,55 @@ def test_collect_completed_review_capture_uses_opencode_metadata(
     assert capture["tokens_used"] == 1560
     assert capture["cost_usd"] == pytest.approx(0.0123)
     assert capture["reviewer_output"] == "Review result: clean"
+    assert capture["cooldown_eligible"] is False
+
+
+def test_collect_completed_review_capture_marks_opencode_failure_cooldown_eligible(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    stdout_path = tmp_path / "review.stdout.txt"
+    stderr_path = tmp_path / "review.stderr.txt"
+    stdout_path.write_text("", encoding="utf-8")
+    metadata = {
+        "session_id": "ses_opencode",
+        "usage": {},
+        "error_class": "capacity",
+        "error_name": "ProviderError",
+        "error_message": "rate limit exceeded",
+    }
+    stderr_path.write_text(
+        REVIEW_METADATA_PREFIX + json.dumps(metadata) + "\n", encoding="utf-8"
+    )
+
+    def fail_codex_lookup(**_kwargs: object) -> None:
+        raise AssertionError("OpenCode reviews must not query Codex threads")
+
+    monkeypatch.setattr(review_suite_local, "find_thread_by_id", fail_codex_lookup)
+    monkeypatch.setattr(
+        review_suite_local, "find_review_child_thread", fail_codex_lookup
+    )
+
+    capture = review_suite_local.collect_completed_review_capture(
+        slot="review-1",
+        variant_id="deepseek-v4.1-flash-low",
+        variant={
+            "id": "deepseek-v4.1-flash-low",
+            "model": "opencode::opencode-go/deepseek-v4.1-flash",
+            "reasoning_effort": "low",
+        },
+        title="review-suite::round::review-1",
+        command=["python", "opencode_driver.py"],
+        stdout_path=stdout_path,
+        stderr_path=stderr_path,
+        started_at=None,
+        sqlite_path=tmp_path / "state_5.sqlite",
+        review_cwd=tmp_path,
+    )
+
+    assert capture["review_status"] == "interrupted_capacity"
+    assert capture["grade_blocked"] is True
+    assert capture["grade_block_reason"] == "selected_model_at_capacity"
+    assert capture["cooldown_eligible"] is True
 
 
 def test_collect_completed_review_capture_maps_unsupported_model_error(

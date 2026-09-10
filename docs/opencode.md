@@ -38,6 +38,18 @@ Usage is normalized to Review Suite's token shape and the provider cost is store
 
 This intentionally keeps provider quirks inside the backend. Adding another OpenCode Go model should normally be a model/configuration change, not a new execution path.
 
+## Availability, rate limits, and cooldowns
+
+OpenCode reports provider failures as structured `{"type":"error", ...}` events with an `error.name` and `error.data.message` (and usually an empty stderr). The adapter classifies each failed run into one of three buckets and records it as `error_class` in its metadata line:
+
+- `capacity` — rate limits, `429`, `Too Many Requests`, quota/usage limits, `resource_exhausted`, overloaded, or an "at capacity" message;
+- `unavailable` — model not found / invalid / unsupported, authentication or authorization failures;
+- `failed` — any other non-zero exit, including provider server errors that carry no recognizable message.
+
+Review Suite maps these to `selected_model_at_capacity`, `selected_model_unavailable`, and `opencode_review_failed`. All three feed the same Arena cooldown/backoff already used for Codex capacity (`30m → 2h → 6h → 12h`). The failure count is retained across cooldown expiry so consecutive failures keep escalating, and it is cleared by the next successful review. The `capacity` bucket also gets the existing single 10-second retry before the round is finalized. OpenCode runs that fail without a usable review are marked cooldown-eligible, so a repeated provider failure rests the model instead of being re-selected every round.
+
+Environment-level adapter failures (OpenCode CLI missing, an empty prompt, or a failed target-diff generation) are not provider failures and do not cool the variant down; they surface as tooling failures for the operator to fix.
+
 ## Prerequisites
 
 Install and authenticate the OpenCode CLI normally, including the OpenCode Go subscription/provider. Review Suite does not copy or manage OpenCode credentials.

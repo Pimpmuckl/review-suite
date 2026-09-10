@@ -471,6 +471,7 @@ def default_operational_state() -> dict[str, Any]:
                 "probation_variant_ids": [],
                 "stable_variant_ids": [],
                 "cooldowns": {},
+                "cooldown_failures": {},
             }
             for task_class in TASK_CLASSES
         },
@@ -587,9 +588,24 @@ def load_operational_state(path: Path) -> dict[str, Any]:
                 "probation_variant_ids": [],
                 "stable_variant_ids": [],
                 "cooldowns": {},
+                "cooldown_failures": {},
             },
         )
         payload["task_classes"][task_class].setdefault("cooldowns", {})
+        cooldown_failures = payload["task_classes"][task_class].setdefault(
+            "cooldown_failures", {}
+        )
+        if not cooldown_failures:
+            for variant_id, entry in dict(
+                payload["task_classes"][task_class].get("cooldowns") or {}
+            ).items():
+                cooldown_failures[str(variant_id)] = {
+                    "failure_count": int((entry or {}).get("failure_count", 1) or 1),
+                    "last_reason": str((entry or {}).get("last_reason") or ""),
+                    "last_triggered_at": str(
+                        (entry or {}).get("last_triggered_at") or ""
+                    ),
+                }
         payload["task_classes"][task_class].setdefault("champion_variant_ids", [])
         payload["task_classes"][task_class].setdefault("probation_variant_ids", [])
     _prune_expired_cooldowns(payload)
@@ -681,6 +697,8 @@ def _capacity_cooldown_seconds(failure_count: int) -> int:
 
 COOLDOWN_BLOCK_REASONS = {
     "selected_model_at_capacity",
+    "selected_model_unavailable",
+    "opencode_review_failed",
     "review_timed_out",
     "review_transport_stalled",
 }
@@ -688,6 +706,24 @@ MARKED_COOLDOWN_BLOCK_REASONS = {
     "review_interrupted",
     "missing_reviewer_output",
     "reviewer_process_exited",
+}
+OPENCODE_ERROR_BLOCK_REASONS = {
+    "capacity": "selected_model_at_capacity",
+    "unavailable": "selected_model_unavailable",
+    "failed": "opencode_review_failed",
+    "adapter": "review_tooling_failure",
+}
+OPENCODE_ERROR_REVIEW_STATUSES = {
+    "capacity": "interrupted_capacity",
+    "unavailable": "opencode_unavailable",
+    "failed": "opencode_failed",
+    "adapter": "tooling_failure",
+}
+OPENCODE_ERROR_STATUS_SUMMARIES = {
+    "capacity": "selected_model_at_capacity",
+    "unavailable": "OpenCode model is not available.",
+    "failed": "OpenCode review failed before a usable result was captured.",
+    "adapter": "OpenCode adapter failed before a review was launched.",
 }
 
 
@@ -3270,6 +3306,38 @@ def _classify_review_result(
             "grade_blocked": True,
             "grade_block_reason": "selected_model_at_capacity",
         }
+    opencode_metadata = parse_opencode_review_metadata(stderr_text)
+    opencode_error = str(opencode_metadata.get("error_class") or "").strip().lower()
+    if (not output or interrupted) and opencode_error:
+        reason = OPENCODE_ERROR_BLOCK_REASONS.get(opencode_error)
+        review_status = OPENCODE_ERROR_REVIEW_STATUSES.get(opencode_error)
+        if reason and review_status:
+            if opencode_error == "capacity":
+                return {
+                    "review_status": review_status,
+                    "status_summary": "selected_model_at_capacity",
+                    "grade_blocked": True,
+                    "grade_block_reason": reason,
+                }
+            detail = " / ".join(
+                part
+                for part in (
+                    str(opencode_metadata.get("error_name") or "").strip(),
+                    str(opencode_metadata.get("error_message") or "").strip(),
+                )
+                if part
+            )
+            summary = OPENCODE_ERROR_STATUS_SUMMARIES.get(
+                opencode_error, "OpenCode review failed before a usable result."
+            )
+            if detail:
+                summary = f"{summary} ({detail})"
+            return {
+                "review_status": review_status,
+                "status_summary": summary,
+                "grade_blocked": True,
+                "grade_block_reason": reason,
+            }
     if _tooling_failure_detected(stderr_text=stderr_text, reviewer_output=output):
         return {
             "review_status": "tooling_failure",
@@ -3528,6 +3596,7 @@ def collect_completed_review_capture(
         "reviewer_output_ref": (
             f"rollout://{thread_id}/{variant_id}" if thread_id else None
         ),
+        "cooldown_eligible": bool(opencode_backend and classification["grade_blocked"]),
     }
 
 
@@ -3588,6 +3657,7 @@ def _apply_capacity_cooldowns(
         operational_state = load_operational_state(state_path)
         task_state = operational_state["task_classes"][str(round_payload["task_class"])]
         cooldowns = dict(task_state.get("cooldowns") or {})
+        cooldown_failures = dict(task_state.get("cooldown_failures") or {})
         changed = False
         now = utc_now()
         now_iso = now.isoformat().replace("+00:00", "Z")
@@ -3604,13 +3674,22 @@ def _apply_capacity_cooldowns(
                 and block_reason in MARKED_COOLDOWN_BLOCK_REASONS
             ):
                 triggered_variants.add(variant_id)
-                current = cooldowns.get(variant_id) or {}
+                current = (
+                    cooldown_failures.get(variant_id) or cooldowns.get(variant_id) or {}
+                )
                 failure_count = int(current.get("failure_count", 0) or 0) + 1
-                until = now + timedelta(
-                    seconds=_capacity_cooldown_seconds(failure_count)
+                until_iso = (
+                    (now + timedelta(seconds=_capacity_cooldown_seconds(failure_count)))
+                    .isoformat()
+                    .replace("+00:00", "Z")
                 )
                 cooldowns[variant_id] = {
-                    "until": until.isoformat().replace("+00:00", "Z"),
+                    "until": until_iso,
+                    "failure_count": failure_count,
+                    "last_reason": block_reason,
+                    "last_triggered_at": now_iso,
+                }
+                cooldown_failures[variant_id] = {
                     "failure_count": failure_count,
                     "last_reason": block_reason,
                     "last_triggered_at": now_iso,
@@ -3620,7 +3699,7 @@ def _apply_capacity_cooldowns(
                         "variant_id": variant_id,
                         "reason": block_reason,
                         "failure_count": failure_count,
-                        "until": cooldowns[variant_id]["until"],
+                        "until": until_iso,
                     }
                 )
                 changed = True
@@ -3631,9 +3710,13 @@ def _apply_capacity_cooldowns(
             if variant_id in cooldowns:
                 cooldowns.pop(variant_id, None)
                 changed = True
+            if variant_id in cooldown_failures:
+                cooldown_failures.pop(variant_id, None)
+                changed = True
         if not changed:
             return updates
         task_state["cooldowns"] = cooldowns
+        task_state["cooldown_failures"] = cooldown_failures
         operational_state["generated_at"] = utc_now_iso()
         _prune_expired_cooldowns(operational_state)
         write_json(state_path, operational_state)
@@ -4150,7 +4233,7 @@ def collect_round_results(
         round_payload["cooldown_updates"] = cooldown_updates
         for update in cooldown_updates:
             print(
-                f"[review-suite] cooling {update['variant_id']} for {round_payload['task_class']} until {format_cooldown_until_for_display(update['until'])} after capacity hit (failure_count={update['failure_count']})",
+                f"[review-suite] cooling {update['variant_id']} for {round_payload['task_class']} until {format_cooldown_until_for_display(update['until'])} after {update['reason']} (failure_count={update['failure_count']})",
                 file=sys.stderr,
                 flush=True,
             )

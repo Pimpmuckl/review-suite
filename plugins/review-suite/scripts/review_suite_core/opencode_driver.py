@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -13,6 +14,50 @@ from typing import Any
 TERMINAL_REVIEW_RESULT_PREFIX = "Review result:"
 REVIEW_METADATA_PREFIX = "[review-suite] opencode-metadata: "
 REVIEW_EXPORT_TIMEOUT_SECONDS = 120
+
+OPENCODE_ERROR_CLASS_CAPACITY = "capacity"
+OPENCODE_ERROR_CLASS_UNAVAILABLE = "unavailable"
+OPENCODE_ERROR_CLASS_FAILED = "failed"
+OPENCODE_ERROR_CLASS_ADAPTER = "adapter"
+OPENCODE_ERROR_MESSAGE_LIMIT = 500
+
+_CAPACITY_ERROR_MARKERS = (
+    "at capacity",
+    "capacity",
+    "rate limit",
+    "rate-limit",
+    "rate_limit",
+    "ratelimit",
+    "too many requests",
+    "quota",
+    "usage limit",
+    "resource_exhausted",
+    "resource exhausted",
+    "overloaded",
+    "throttl",
+    "limit reached",
+    "limit exceeded",
+)
+_UNAVAILABLE_ERROR_MARKERS = (
+    "model not found",
+    "unknown model",
+    "invalid model",
+    "no such model",
+    "model unavailable",
+    "model is not available",
+    "model is unavailable",
+    "unsupported model",
+    "unsupported",
+    "not supported",
+    "does not exist",
+    "unauthorized",
+    "forbidden",
+    "authentication",
+    "invalid api key",
+    "api key",
+    "access denied",
+    "no access",
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -147,10 +192,29 @@ def _usage_totals_to_usage(totals: dict[str, Any]) -> dict[str, int]:
     return usage
 
 
+def _error_event_fields(event: dict[str, Any]) -> dict[str, str]:
+    error = event.get("error")
+    name = ""
+    message = ""
+    if isinstance(error, dict):
+        name = str(error.get("name") or "").strip()
+        data = error.get("data")
+        if isinstance(data, dict):
+            message = str(data.get("message") or "").strip()
+        if not message:
+            message = str(error.get("message") or "").strip()
+    elif error is not None:
+        message = str(error).strip()
+    if not name and not message:
+        message = str(event.get("message") or "").strip()
+    return {"name": name, "message": message}
+
+
 def _parse_event_stream(stdout: str) -> dict[str, Any]:
     session_id: str | None = None
     current_parts: list[str] = []
     completed_messages: list[str] = []
+    error_events: list[dict[str, str]] = []
     totals = _new_usage_totals()
     saw_tokens = False
     saw_cost = False
@@ -165,6 +229,11 @@ def _parse_event_stream(stdout: str) -> dict[str, Any]:
         if candidate_session:
             session_id = candidate_session
         event_type = str(event.get("type") or "")
+        if event_type == "error":
+            fields = _error_event_fields(event)
+            if fields["name"] or fields["message"]:
+                error_events.append(fields)
+            continue
         if event_type == "step_start":
             current_parts = []
             continue
@@ -198,6 +267,7 @@ def _parse_event_stream(stdout: str) -> dict[str, Any]:
         "reviewer_output": terminal_messages[-1] if terminal_messages else None,
         "usage": _usage_totals_to_usage(totals) if saw_tokens else {},
         "cost_usd": round(totals["cost"], 9) if saw_cost else None,
+        "errors": error_events,
     }
 
 
@@ -228,11 +298,23 @@ def _usage_from_export(payload: Any) -> tuple[dict[str, int], float | None]:
 
 
 def _format_metadata_line(
-    session_id: str | None, usage: dict[str, int], cost_usd: float | None
+    session_id: str | None,
+    usage: dict[str, int],
+    cost_usd: float | None,
+    *,
+    error_class: str | None = None,
+    error_name: str | None = None,
+    error_message: str | None = None,
 ) -> str:
     payload: dict[str, Any] = {"session_id": session_id, "usage": usage}
     if cost_usd is not None:
         payload["cost_usd"] = cost_usd
+    if error_class:
+        payload["error_class"] = error_class
+    if error_name:
+        payload["error_name"] = error_name
+    if error_message:
+        payload["error_message"] = error_message
     return REVIEW_METADATA_PREFIX + json.dumps(payload, separators=(",", ":")) + "\n"
 
 
@@ -249,6 +331,35 @@ def parse_opencode_review_metadata(text: str) -> dict[str, Any]:
         if isinstance(payload, dict):
             metadata = payload
     return metadata
+
+
+def classify_opencode_error(
+    *,
+    returncode: int,
+    errors: list[dict[str, Any]] | None = None,
+    stderr_text: str = "",
+    reviewer_output: str = "",
+) -> str | None:
+    if str(reviewer_output or "").strip():
+        return None
+    parts: list[str] = []
+    for error in errors or []:
+        if isinstance(error, dict):
+            parts.append(str(error.get("name") or ""))
+            parts.append(str(error.get("message") or ""))
+    parts.append(str(stderr_text or ""))
+    haystack = " ".join(parts).lower()
+    if any(marker in haystack for marker in _CAPACITY_ERROR_MARKERS) or re.search(
+        r"\b429\b", haystack
+    ):
+        return OPENCODE_ERROR_CLASS_CAPACITY
+    if any(marker in haystack for marker in _UNAVAILABLE_ERROR_MARKERS) or re.search(
+        r"\b(?:401|403)\b", haystack
+    ):
+        return OPENCODE_ERROR_CLASS_UNAVAILABLE
+    if returncode != 0 or errors:
+        return OPENCODE_ERROR_CLASS_FAILED
+    return None
 
 
 def _assistant_text_candidates(value: Any) -> list[str]:
@@ -357,12 +468,25 @@ def _truncate(value: str, limit: int = 4000) -> str:
     return text[:limit].rstrip() + "\n...[truncated]..."
 
 
+def _emit_adapter_error(message: str) -> None:
+    print(message, file=sys.stderr)
+    sys.stderr.write(
+        _format_metadata_line(
+            None,
+            {},
+            None,
+            error_class=OPENCODE_ERROR_CLASS_ADAPTER,
+            error_message=_truncate(message, OPENCODE_ERROR_MESSAGE_LIMIT) or None,
+        )
+    )
+
+
 def main() -> int:
     args = build_parser().parse_args()
     review_root = Path(args.dir).resolve()
     prompt = sys.stdin.read()
     if not prompt.strip():
-        print("OpenCode review prompt is empty", file=sys.stderr)
+        _emit_adapter_error("OpenCode review prompt is empty")
         return 2
 
     opencode = (
@@ -371,7 +495,7 @@ def main() -> int:
         or shutil.which("opencode.cmd")
     )
     if not opencode:
-        print("OpenCode CLI was not found on PATH", file=sys.stderr)
+        _emit_adapter_error("OpenCode CLI was not found on PATH")
         return 127
 
     patch_path: Path | None = None
@@ -397,6 +521,7 @@ def main() -> int:
         reviewer_output = stream["reviewer_output"]
         usage = stream["usage"]
         cost_usd = stream["cost_usd"]
+        errors = list(stream.get("errors") or [])
         export_payload = (
             _fetch_export_payload(opencode, session_id, review_root)
             if session_id
@@ -410,8 +535,27 @@ def main() -> int:
             usage = export_usage
         if export_cost is not None:
             cost_usd = export_cost
-        if session_id or usage:
-            sys.stderr.write(_format_metadata_line(session_id, usage, cost_usd))
+        error_class = classify_opencode_error(
+            returncode=proc.returncode,
+            errors=errors,
+            stderr_text=proc.stderr,
+            reviewer_output=reviewer_output or "",
+        )
+        if session_id or usage or error_class:
+            primary_error = errors[0] if errors else {}
+            error_message = _truncate(
+                str(primary_error.get("message") or ""), OPENCODE_ERROR_MESSAGE_LIMIT
+            )
+            sys.stderr.write(
+                _format_metadata_line(
+                    session_id,
+                    usage,
+                    cost_usd,
+                    error_class=error_class,
+                    error_name=str(primary_error.get("name") or "") or None,
+                    error_message=error_message or None,
+                )
+            )
         if proc.returncode != 0:
             if proc.stdout:
                 print(f"[opencode stdout]\n{_truncate(proc.stdout)}", file=sys.stderr)
@@ -426,7 +570,7 @@ def main() -> int:
         sys.stdout.write(reviewer_output.strip() + "\n")
         return 0
     except (OSError, RuntimeError, ValueError) as exc:
-        print(f"OpenCode review adapter failed: {exc}", file=sys.stderr)
+        _emit_adapter_error(f"OpenCode review adapter failed: {exc}")
         return 2
     finally:
         if patch_path is not None:
