@@ -458,9 +458,7 @@ def test_model_override_prefixes_provider_model_and_keeps_reasoning(
     assert resolved["normal"]["model"] == "opencode::opencode-go/deepseek-flash"
 
 
-def test_model_override_applies_reasoning_and_drops_opencode_service_tier(
-    tmp_path: Path,
-) -> None:
+def test_model_override_drops_opencode_service_tier(tmp_path: Path) -> None:
     config = review.load_config(tmp_path / "state")
     config["orchestrator"]["stable_defaults"]["signoff_normal_model"] = (
         "gpt-6-astra-medium-fast"
@@ -468,12 +466,12 @@ def test_model_override_applies_reasoning_and_drops_opencode_service_tier(
 
     resolved = review._config_with_model_override(
         config,
-        {"model": "opencode::opencode-go/glm-5.3-flash", "reasoning": "high"},
+        {"model": "opencode::opencode-go/glm-5.3-flash"},
     )
 
     defaults = resolved["orchestrator"]["stable_defaults"]
     assert (
-        defaults["signoff_normal_model"] == "opencode::opencode-go/glm-5.3-flash-high"
+        defaults["signoff_normal_model"] == "opencode::opencode-go/glm-5.3-flash-medium"
     )
     fast_step = review.resolve_orchestrator_profile(
         resolved, mode="fast", selection="stable"
@@ -487,6 +485,16 @@ def test_model_override_applies_reasoning_and_drops_opencode_service_tier(
         codex_resolved, mode="fast", selection="stable"
     ).steps[0]
     assert codex_step.service_tier == "fast"
+
+
+def test_opencode_model_override_rejects_reasoning(tmp_path: Path) -> None:
+    config = review.load_config(tmp_path / "state")
+
+    with pytest.raises(ValueError, match="not supported by the OpenCode backend"):
+        review._config_with_model_override(
+            config,
+            {"model": "opencode::opencode-go/glm-5.3-flash", "reasoning": "high"},
+        )
 
 
 def test_model_override_accepts_codex_model_and_reasoning_only(tmp_path: Path) -> None:
@@ -3397,6 +3405,47 @@ def test_id_rejects_model_override(
 
     assert exit_code == 2
     assert "remove --model" in errors[0][0]
+
+
+def test_reject_model_override_on_existing_names_review() -> None:
+    with pytest.raises(ValueError, match="frozen plan"):
+        review._reject_model_override_on_existing(
+            {"model": "gpt-6-astra"}, {"public_id": "rvw_example"}
+        )
+
+    review._reject_model_override_on_existing({}, {"public_id": "rvw_example"})
+
+
+def test_status_rejects_model_override(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    errors: list[tuple[str, dict[str, object]]] = []
+
+    def fake_error(message: str, **kwargs: object) -> int:
+        errors.append((message, dict(kwargs)))
+        return 2
+
+    monkeypatch.setattr(review, "emit_error", fake_error)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "review.py",
+            "--status",
+            "--model",
+            "opencode-go/deepseek-flash",
+            "--cd",
+            str(repo),
+        ],
+    )
+
+    exit_code = review.main()
+
+    assert exit_code == 2
+    assert "--status cannot be combined" in errors[0][0]
 
 
 def test_github_review_rejects_cycle_before_local_green(

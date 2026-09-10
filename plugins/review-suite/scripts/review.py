@@ -1956,6 +1956,12 @@ def _config_with_model_override(
             defaults.get(ref), field=ref
         )
         chosen_model = model or existing_model
+        if reasoning and chosen_model.startswith(OPENCODE_MODEL_PREFIX):
+            raise ValueError(
+                "--reasoning is not supported by the OpenCode backend "
+                f"({chosen_model}); OpenCode uses the provider's default reasoning "
+                "effort."
+            )
         effort = reasoning or existing_effort
         tier = None if (opencode_model and model) else existing_tier
         defaults[ref] = "-".join([chosen_model, effort] + ([tier] if tier else []))
@@ -1971,6 +1977,20 @@ def _config_with_model_override(
 def _record_model_override(state: dict[str, Any], override: dict[str, str]) -> None:
     if override:
         state["model_override"] = dict(override)
+
+
+def _reject_model_override_on_existing(
+    override: dict[str, str], state: dict[str, Any]
+) -> None:
+    if not override:
+        return
+    public_id = str(state.get("public_id") or "").strip()
+    raise ValueError(
+        "--model/--reasoning apply when a review is created; "
+        f"{f'review {public_id} already' if public_id else 'a review already'} "
+        "has a frozen plan. Remove the override to continue it, or start a new "
+        "review once this one closes."
+    )
 
 
 def _create_or_resume_cycle(
@@ -2001,14 +2021,7 @@ def _create_or_resume_cycle(
         skip_deslop=skip_deslop,
     )
     if continuation is not None:
-        if model_override:
-            public_id = str(continuation.get("public_id") or "").strip()
-            raise ValueError(
-                "--model/--reasoning apply when a review is created; "
-                f"{f'review {public_id} already' if public_id else 'a review already'} "
-                "has a frozen plan. Remove the override to continue it, or start a "
-                "new review once this one closes."
-            )
+        _reject_model_override_on_existing(model_override, continuation)
         return _apply_runtime_options(continuation, args)
     state = create_cycle(
         cwd=review_root,
@@ -2033,6 +2046,7 @@ def _create_or_resume_cycle(
     state = _apply_runtime_options(state, args)
     existing = load_cycle_by_key(state_dir, str(state["cycle_key"]))
     if existing is not None:
+        _reject_model_override_on_existing(model_override, existing)
         _reject_review_brief_replacement(existing, args.review_brief)
         return _apply_runtime_options(existing, args)
     state = _apply_profile_resolution(state, resolution)
@@ -2851,6 +2865,8 @@ def main() -> int:
                 or args.deslop_done
                 or args.skip_deslop
                 or args.review_brief
+                or args.model
+                or args.reasoning
                 or args.show_findings
                 or args.show_status
             ):
