@@ -22,6 +22,7 @@ OPENCODE_REVIEW_SYSTEM_PROMPT = (
     "Before reporting a finding, inspect enough surrounding code and repository instructions to verify the affected path and concrete failure scenario. "
     "Return every qualifying finding rather than stopping after the first. Keep each finding concise, matter-of-fact, and specific about the conditions in which it occurs. "
     "Prefer the smallest changed line range that identifies the defect. Do not modify files. "
+    "Write in the language of the caller's instructions and never translate machine-readable result lines. "
     "Follow the caller's review-output contract exactly; it overrides any default formatting preference in this prompt."
 )
 
@@ -69,6 +70,7 @@ def opencode_review_env() -> dict[str, str]:
         _allow_gitless_review_config(), separators=(",", ":")
     )
     env["OPENCODE_DISABLE_AUTOUPDATE"] = "true"
+    env["PYTHONIOENCODING"] = "utf-8"
     return env
 
 
@@ -85,7 +87,9 @@ def _opencode_review_prompt(
     commit_end_ref = str(commit_end or "").strip()
     if commit_end_ref:
         if not base_ref or commit_ref:
-            raise ValueError("OpenCode commit-range review requires base and commit_end")
+            raise ValueError(
+                "OpenCode commit-range review requires base and commit_end"
+            )
         target = f"review commit range `{base_ref}..{commit_end_ref}`"
     elif bool(base_ref) == bool(commit_ref):
         raise ValueError("OpenCode review requires exactly one of base or commit")

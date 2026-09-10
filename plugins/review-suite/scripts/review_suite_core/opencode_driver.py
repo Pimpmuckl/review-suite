@@ -68,7 +68,9 @@ def _write_target_patch(args: argparse.Namespace, review_root: Path) -> Path:
         check=False,
     )
     if proc.returncode != 0:
-        raise RuntimeError(proc.stderr.strip() or "failed to produce review target diff")
+        raise RuntimeError(
+            proc.stderr.strip() or "failed to produce review target diff"
+        )
     handle = tempfile.NamedTemporaryFile(
         mode="w",
         encoding="utf-8",
@@ -108,17 +110,21 @@ def _parse_event_stream(stdout: str) -> tuple[str | None, str | None]:
                 current_parts.append(text)
             continue
         if event_type == "step_finish" and current_parts:
-            completed_messages.append("\n".join(current_parts).strip())
+            message = "\n".join(current_parts).strip()
+            part = event.get("part") or {}
+            if (
+                part.get("reason") == "stop"
+                or TERMINAL_REVIEW_RESULT_PREFIX.lower() in message.lower()
+            ):
+                completed_messages.append(message)
             current_parts = []
-    if current_parts:
+    if (
+        current_parts
+        and TERMINAL_REVIEW_RESULT_PREFIX.lower() in "\n".join(current_parts).lower()
+    ):
         completed_messages.append("\n".join(current_parts).strip())
 
-    terminal_messages = [
-        text
-        for text in completed_messages
-        if TERMINAL_REVIEW_RESULT_PREFIX.lower() in text.lower()
-    ]
-    return session_id, terminal_messages[-1] if terminal_messages else None
+    return session_id, completed_messages[-1] if completed_messages else None
 
 
 def _assistant_text_candidates(value: Any) -> list[str]:
@@ -143,7 +149,14 @@ def _assistant_text_candidates(value: Any) -> list[str]:
             and str(part.get("type") or "") == "text"
             and str(part.get("text") or "")
         ).strip()
-        if text:
+        if (
+            text
+            and not (isinstance(info, dict) and info.get("summary"))
+            and (
+                TERMINAL_REVIEW_RESULT_PREFIX.lower() in text.lower()
+                or (isinstance(info, dict) and info.get("finish") == "stop")
+            )
+        ):
             candidates.append(text)
     for nested in value.values():
         if isinstance(nested, dict | list):
@@ -170,12 +183,7 @@ def _exported_review_text(
     except json.JSONDecodeError:
         return None
     candidates = _assistant_text_candidates(payload)
-    terminal = [
-        text
-        for text in candidates
-        if TERMINAL_REVIEW_RESULT_PREFIX.lower() in text.lower()
-    ]
-    return terminal[-1] if terminal else None
+    return candidates[-1] if candidates else None
 
 
 def _truncate(value: str, limit: int = 4000) -> str:

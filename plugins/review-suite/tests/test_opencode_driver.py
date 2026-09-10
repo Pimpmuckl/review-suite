@@ -1,4 +1,6 @@
 import argparse
+import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -12,6 +14,7 @@ from review_suite_core.opencode_driver import (
     _git_diff_command,
     _parse_event_stream,
 )
+from review_suite_core.opencode_runtime import opencode_review_env
 
 
 def _args(**overrides: str | None) -> argparse.Namespace:
@@ -101,3 +104,42 @@ def test_export_parser_collects_assistant_message_parts() -> None:
     assert _assistant_text_candidates(payload) == [
         "Finding one\nReview result: findings"
     ]
+
+
+def test_completed_unmarked_response_is_preserved_for_classification() -> None:
+    text = "[P1] Rejected reservation changes stock."
+    events = [
+        {"type": "step_start", "sessionID": "ses_1"},
+        {"type": "text", "part": {"text": text}},
+        {"type": "step_finish", "part": {"reason": "stop"}},
+    ]
+    assert _parse_event_stream("\n".join(map(json.dumps, events))) == ("ses_1", text)
+    assert _assistant_text_candidates(
+        {
+            "messages": [
+                {
+                    "info": {"role": "assistant", "finish": "stop", "summary": True},
+                    "parts": [{"type": "text", "text": "compaction summary"}],
+                },
+                {
+                    "info": {"role": "assistant", "finish": "stop"},
+                    "parts": [{"type": "text", "text": text}],
+                },
+            ]
+        }
+    ) == [text]
+
+
+def test_driver_stdio_roundtrips_unicode(monkeypatch) -> None:
+    monkeypatch.setenv("PYTHONIOENCODING", "cp1252")
+    text = "Review: café → 修复"
+    proc = subprocess.run(
+        [sys.executable, "-c", "import sys; sys.stdout.write(sys.stdin.read())"],
+        input=text,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=opencode_review_env(),
+        check=True,
+    )
+    assert proc.stdout == text
