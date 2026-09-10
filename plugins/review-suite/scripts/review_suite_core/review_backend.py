@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .lens_runtime import CodexReviewLaunch, prepare_codex_review_launch as _prepare_codex_review_launch
+from .lens_runtime import (
+    CodexReviewLaunch,
+    prepare_codex_review_launch as _prepare_codex_review_launch,
+)
 from .opencode_runtime import prepare_opencode_review_launch
 
 
@@ -15,7 +18,8 @@ def split_review_backend_model(model: str) -> tuple[str, str]:
         raise ValueError("review model is required")
     if model_name.startswith(OPENCODE_MODEL_PREFIX):
         resolved = model_name[len(OPENCODE_MODEL_PREFIX) :].strip()
-        if not resolved or "/" not in resolved:
+        provider, separator, provider_model = resolved.partition("/")
+        if not separator or not provider.strip() or not provider_model.strip():
             raise ValueError(
                 "OpenCode review models must use opencode::provider/model"
             )
