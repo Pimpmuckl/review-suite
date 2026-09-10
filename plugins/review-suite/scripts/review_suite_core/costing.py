@@ -24,6 +24,54 @@ def normalize_usage_tokens(value: dict[str, Any] | None) -> dict[str, int] | Non
     return usage
 
 
+def core_usage_tokens(usage: dict[str, Any] | None) -> int:
+    """Return the shared comparison token total for a run.
+
+    Cache reads are reused context and are excluded. Cache writes remain part of
+    input because they are freshly processed prompt tokens. Reasoning tokens are
+    billed as output and are folded into output. This is the token total shown by
+    both the Arena leaderboard and the review cost ledger.
+    """
+    if not isinstance(usage, dict):
+        return 0
+    input_tokens = int(usage.get("input_tokens", 0) or 0)
+    cached_input_tokens = int(usage.get("cached_input_tokens", 0) or 0)
+    output_tokens = int(usage.get("output_tokens", 0) or 0)
+    reasoning_tokens = int(usage.get("reasoning_output_tokens", 0) or 0)
+    return max(0, input_tokens - cached_input_tokens) + output_tokens + reasoning_tokens
+
+
+_USAGE_TOKEN_KEYS = (
+    "input_tokens",
+    "cached_input_tokens",
+    "output_tokens",
+    "cache_write_tokens",
+    "reasoning_output_tokens",
+)
+
+
+def _has_structured_usage(usage: Any) -> bool:
+    return isinstance(usage, dict) and any(key in usage for key in _USAGE_TOKEN_KEYS)
+
+
+def run_total_tokens(run: dict[str, Any] | None) -> int:
+    """Return the shared token total for a stored run record.
+
+    Uses the usage components when structured usage is present, even if the
+    computed total is zero, so a recorded usage breakdown is always authoritative.
+    Falls back to the provider-reported total only when usage is missing.
+    """
+    if not isinstance(run, dict):
+        return 0
+    usage = run.get("usage")
+    if _has_structured_usage(usage):
+        return core_usage_tokens(usage)
+    tokens_used = run.get("tokens_used")
+    if isinstance(tokens_used, int) and not isinstance(tokens_used, bool):
+        return max(0, int(tokens_used))
+    return 0
+
+
 def _pricing_rate(pricing: dict[str, Any], *keys: str) -> float | None:
     for key in keys:
         value = pricing.get(key)

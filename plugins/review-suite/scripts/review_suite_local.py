@@ -31,6 +31,7 @@ from rollout_capture import (
     rollout_activity_summary,
 )
 from review_suite_core import (
+    core_usage_tokens,
     EFFECTIVE_BASE_METADATA_KEYS,
     current_head,
     effective_base_ref,
@@ -48,6 +49,7 @@ from review_suite_core import (
     parse_opencode_review_metadata,
     prepare_codex_review_launch,
     price_usage_tokens,
+    run_total_tokens,
     terminate_process_tree,
     utc_now,
     utc_now_iso,
@@ -1003,9 +1005,9 @@ def format_cost_cents(value: float | None) -> str:
 
 
 def total_usage_tokens(usage: dict[str, Any]) -> int:
-    return int(usage.get("input_tokens", 0) or 0) + int(
-        usage.get("output_tokens", 0) or 0
-    )
+    # Shared comparison total: uncached input (cache writes included) + output
+    # (including reasoning). Keep this aligned with review_costs and Arena.
+    return core_usage_tokens(usage)
 
 
 def rounds_dir(state_dir: Path) -> Path:
@@ -4177,6 +4179,10 @@ def compact_benchmark_run(run: dict[str, Any]) -> dict[str, Any]:
         "usage": deepcopy(run.get("usage", {})),
         "cost_usd": run.get("cost_usd"),
     }
+    if isinstance(run.get("tokens_used"), int) and not isinstance(
+        run.get("tokens_used"), bool
+    ):
+        compacted["tokens_used"] = int(run["tokens_used"])
     if not compacted["service_tier"]:
         compacted.pop("service_tier", None)
     reviewer_output = run.get("reviewer_output")
@@ -4513,7 +4519,7 @@ def aggregate_records(
                 elapsed_seconds = run.get("elapsed_seconds")
                 if isinstance(elapsed_seconds, (int, float)):
                     bucket["elapsed_values"].append(float(elapsed_seconds))
-                total_tokens = total_usage_tokens(usage)
+                total_tokens = run_total_tokens(run)
                 if total_tokens > 0:
                     bucket["total_token_values"].append(total_tokens)
                 if cost_usd is not None:
@@ -4680,6 +4686,9 @@ def write_reports(state_dir: Path, summary: dict[str, Any]) -> None:
     )
     lines.append(
         "- `found %` is valid findings over bug-present opportunities, including all participants on `tie_both_useful` and multi-finding coverage wins. `missed %` is missed-bug losses over bug-present opportunities. `low-quality %` is validity, false-positive, hallucinated, fringe, or scope-bloat losses over all samples."
+    )
+    lines.append(
+        "- `tok/job` is uncached input (cache writes included) plus output, with reasoning folded into output; cache reads are excluded. `cost/job` is the authoritative per-run cost."
     )
     lines.append("")
     lines.append("## round history")
