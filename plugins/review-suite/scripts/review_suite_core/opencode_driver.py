@@ -11,6 +11,8 @@ from typing import Any
 
 
 TERMINAL_REVIEW_RESULT_PREFIX = "Review result:"
+REVIEW_METADATA_PREFIX = "[review-suite] opencode-metadata: "
+REVIEW_EXPORT_TIMEOUT_SECONDS = 120
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -85,10 +87,72 @@ def _write_target_patch(args: argparse.Namespace, review_root: Path) -> Path:
         handle.close()
 
 
-def _parse_event_stream(stdout: str) -> tuple[str | None, str | None]:
+def _int_value(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except TypeError, ValueError:
+        return 0
+
+
+def _new_usage_totals() -> dict[str, Any]:
+    return {
+        "input": 0,
+        "output": 0,
+        "reasoning": 0,
+        "cache_read": 0,
+        "cache_write": 0,
+        "total": 0,
+        "cost": 0.0,
+    }
+
+
+def _add_usage_totals(
+    totals: dict[str, Any], tokens: Any, cost: Any
+) -> tuple[bool, bool]:
+    saw_tokens = False
+    if isinstance(tokens, dict):
+        cache = tokens.get("cache")
+        if not isinstance(cache, dict):
+            cache = {}
+        totals["input"] += _int_value(tokens.get("input"))
+        totals["output"] += _int_value(tokens.get("output"))
+        totals["reasoning"] += _int_value(tokens.get("reasoning"))
+        totals["cache_read"] += _int_value(cache.get("read"))
+        totals["cache_write"] += _int_value(cache.get("write"))
+        totals["total"] += _int_value(tokens.get("total"))
+        saw_tokens = True
+    saw_cost = False
+    if isinstance(cost, (int, float)) and not isinstance(cost, bool):
+        totals["cost"] += float(cost)
+        saw_cost = True
+    return saw_tokens, saw_cost
+
+
+def _usage_totals_to_usage(totals: dict[str, Any]) -> dict[str, int]:
+    cache_read = int(totals["cache_read"])
+    cache_write = int(totals["cache_write"])
+    reasoning = int(totals["reasoning"])
+    usage = {
+        "input_tokens": int(totals["input"]) + cache_read + cache_write,
+        "cached_input_tokens": cache_read,
+        "output_tokens": int(totals["output"]),
+    }
+    if cache_write:
+        usage["cache_write_tokens"] = cache_write
+    if reasoning:
+        usage["reasoning_output_tokens"] = reasoning
+    if int(totals["total"]):
+        usage["total_tokens"] = int(totals["total"])
+    return usage
+
+
+def _parse_event_stream(stdout: str) -> dict[str, Any]:
     session_id: str | None = None
     current_parts: list[str] = []
     completed_messages: list[str] = []
+    totals = _new_usage_totals()
+    saw_tokens = False
+    saw_cost = False
     for raw_line in stdout.splitlines():
         try:
             event = json.loads(raw_line)
@@ -109,9 +173,17 @@ def _parse_event_stream(stdout: str) -> tuple[str | None, str | None]:
             if text:
                 current_parts.append(text)
             continue
-        if event_type == "step_finish" and current_parts:
-            completed_messages.append("\n".join(current_parts).strip())
-            current_parts = []
+        if event_type == "step_finish":
+            part = event.get("part")
+            if isinstance(part, dict):
+                tokens_seen, cost_seen = _add_usage_totals(
+                    totals, part.get("tokens"), part.get("cost")
+                )
+                saw_tokens = saw_tokens or tokens_seen
+                saw_cost = saw_cost or cost_seen
+            if current_parts:
+                completed_messages.append("\n".join(current_parts).strip())
+                current_parts = []
     if current_parts:
         completed_messages.append("\n".join(current_parts).strip())
 
@@ -120,7 +192,62 @@ def _parse_event_stream(stdout: str) -> tuple[str | None, str | None]:
         for text in completed_messages
         if TERMINAL_REVIEW_RESULT_PREFIX.lower() in text.lower()
     ]
-    return session_id, terminal_messages[-1] if terminal_messages else None
+    return {
+        "session_id": session_id,
+        "reviewer_output": terminal_messages[-1] if terminal_messages else None,
+        "usage": _usage_totals_to_usage(totals) if saw_tokens else {},
+        "cost_usd": round(totals["cost"], 9) if saw_cost else None,
+    }
+
+
+def _usage_from_export(payload: Any) -> tuple[dict[str, int], float | None]:
+    if not isinstance(payload, dict):
+        return {}, None
+    messages = payload.get("messages")
+    if not isinstance(messages, list):
+        return {}, None
+    totals = _new_usage_totals()
+    saw_tokens = False
+    saw_cost = False
+    for message in messages:
+        info = message.get("info") if isinstance(message, dict) else None
+        if not isinstance(info, dict) or str(info.get("role") or "") != "assistant":
+            continue
+        tokens_seen, cost_seen = _add_usage_totals(
+            totals, info.get("tokens"), info.get("cost")
+        )
+        saw_tokens = saw_tokens or tokens_seen
+        saw_cost = saw_cost or cost_seen
+    if not (saw_tokens or saw_cost):
+        return {}, None
+    return (
+        _usage_totals_to_usage(totals) if saw_tokens else {},
+        round(totals["cost"], 9) if saw_cost else None,
+    )
+
+
+def _format_metadata_line(
+    session_id: str | None, usage: dict[str, int], cost_usd: float | None
+) -> str:
+    payload: dict[str, Any] = {"session_id": session_id, "usage": usage}
+    if cost_usd is not None:
+        payload["cost_usd"] = cost_usd
+    return REVIEW_METADATA_PREFIX + json.dumps(payload, separators=(",", ":")) + "\n"
+
+
+def parse_opencode_review_metadata(text: str) -> dict[str, Any]:
+    metadata: dict[str, Any] = {}
+    for line in str(text or "").splitlines():
+        if not line.startswith(REVIEW_METADATA_PREFIX):
+            continue
+        raw_payload = line[len(REVIEW_METADATA_PREFIX) :].strip()
+        try:
+            payload = json.loads(raw_payload)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            metadata = payload
+    return metadata
 
 
 def _assistant_text_candidates(value: Any) -> list[str]:
@@ -160,23 +287,36 @@ def _assistant_text_candidates(value: Any) -> list[str]:
     return candidates
 
 
-def _exported_review_text(
+def _fetch_export_payload(
     opencode: str, session_id: str, review_root: Path
-) -> str | None:
-    proc = subprocess.run(
-        [opencode, "export", session_id],
-        cwd=review_root,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        check=False,
-    )
+) -> dict[str, Any] | None:
+    try:
+        proc = subprocess.run(
+            [opencode, "export", session_id],
+            cwd=review_root,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+            timeout=REVIEW_EXPORT_TIMEOUT_SECONDS,
+        )
+    except OSError, subprocess.TimeoutExpired:
+        return None
     if proc.returncode != 0:
         return None
     try:
         payload = json.loads(proc.stdout)
     except json.JSONDecodeError:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _exported_review_text(
+    opencode: str, session_id: str, review_root: Path
+) -> str | None:
+    payload = _fetch_export_payload(opencode, session_id, review_root)
+    if payload is None:
         return None
     candidates = _assistant_text_candidates(payload)
     return candidates[-1] if candidates else None
@@ -240,9 +380,26 @@ def main() -> int:
             sys.stderr.write(proc.stderr)
             if not proc.stderr.endswith("\n"):
                 sys.stderr.write("\n")
-        session_id, reviewer_output = _parse_event_stream(proc.stdout)
-        if not reviewer_output and session_id:
-            reviewer_output = _exported_review_text(opencode, session_id, review_root)
+        stream = _parse_event_stream(proc.stdout)
+        session_id = stream["session_id"]
+        reviewer_output = stream["reviewer_output"]
+        usage = stream["usage"]
+        cost_usd = stream["cost_usd"]
+        export_payload = (
+            _fetch_export_payload(opencode, session_id, review_root)
+            if session_id
+            else None
+        )
+        if not reviewer_output and export_payload is not None:
+            candidates = _assistant_text_candidates(export_payload)
+            reviewer_output = candidates[-1] if candidates else None
+        export_usage, export_cost = _usage_from_export(export_payload)
+        if export_usage:
+            usage = export_usage
+        if export_cost is not None:
+            cost_usd = export_cost
+        if session_id or usage:
+            sys.stderr.write(_format_metadata_line(session_id, usage, cost_usd))
         if proc.returncode != 0:
             if proc.stdout:
                 print(f"[opencode stdout]\n{_truncate(proc.stdout)}", file=sys.stderr)

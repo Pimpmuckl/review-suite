@@ -13,6 +13,7 @@ if str(SCRIPTS_DIR) not in sys.path:
 
 import rollout_capture  # noqa: E402
 import review_suite_local  # noqa: E402
+from review_suite_core.opencode_driver import REVIEW_METADATA_PREFIX  # noqa: E402
 
 
 THREAD_SCHEMA = """
@@ -1167,6 +1168,60 @@ def test_collect_completed_review_capture_prefers_final_message_path(
 
     assert capture["review_status"] == "completed"
     assert capture["reviewer_output"] == "No findings from output file."
+
+
+def test_collect_completed_review_capture_uses_opencode_metadata(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    stdout_path = tmp_path / "review.stdout.txt"
+    stderr_path = tmp_path / "review.stderr.txt"
+    stdout_path.write_text("Review result: clean\n", encoding="utf-8")
+    metadata = {
+        "session_id": "ses_opencode",
+        "usage": {
+            "input_tokens": 1500,
+            "cached_input_tokens": 1200,
+            "output_tokens": 60,
+            "total_tokens": 1560,
+        },
+        "cost_usd": 0.0123,
+    }
+    stderr_path.write_text(
+        REVIEW_METADATA_PREFIX + json.dumps(metadata) + "\n", encoding="utf-8"
+    )
+
+    def fail_codex_lookup(**_kwargs: object) -> None:
+        raise AssertionError("OpenCode reviews must not query Codex threads")
+
+    monkeypatch.setattr(review_suite_local, "find_thread_by_id", fail_codex_lookup)
+    monkeypatch.setattr(
+        review_suite_local, "find_review_child_thread", fail_codex_lookup
+    )
+
+    capture = review_suite_local.collect_completed_review_capture(
+        slot="review-1",
+        variant_id="deepseek-flash-medium",
+        variant={
+            "id": "deepseek-flash-medium",
+            "model": "opencode::opencode-go/deepseek-flash",
+            "reasoning_effort": "medium",
+        },
+        title="review-suite::round::review-1",
+        command=["python", "opencode_driver.py"],
+        stdout_path=stdout_path,
+        stderr_path=stderr_path,
+        started_at=None,
+        sqlite_path=tmp_path / "state_5.sqlite",
+        review_cwd=tmp_path,
+    )
+
+    assert capture["review_status"] == "completed"
+    assert capture["session_id"] == "ses_opencode"
+    assert capture["thread_id"] is None
+    assert capture["usage"]["cached_input_tokens"] == 1200
+    assert capture["tokens_used"] == 1560
+    assert capture["cost_usd"] == pytest.approx(0.0123)
+    assert capture["reviewer_output"] == "Review result: clean"
 
 
 def test_collect_completed_review_capture_maps_unsupported_model_error(

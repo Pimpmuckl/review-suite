@@ -20,9 +20,7 @@ def split_review_backend_model(model: str) -> tuple[str, str]:
         resolved = model_name[len(OPENCODE_MODEL_PREFIX) :].strip()
         provider, separator, provider_model = resolved.partition("/")
         if not separator or not provider.strip() or not provider_model.strip():
-            raise ValueError(
-                "OpenCode review models must use opencode::provider/model"
-            )
+            raise ValueError("OpenCode review models must use opencode::provider/model")
         return "opencode", resolved
     return "codex", model_name
 
