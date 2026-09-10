@@ -3361,6 +3361,44 @@ def test_id_rejects_creation_context_flags(
     assert str(repo.resolve()) in message
 
 
+def test_id_rejects_model_override(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _stub_deslop(monkeypatch)
+    _stub_review(monkeypatch)
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+
+    _, created = _run_review(
+        monkeypatch,
+        ["--mode", "fast", "--cd", str(repo), "--base", "main"],
+    )
+    errors: list[tuple[str, dict[str, object]]] = []
+
+    def fake_error(message: str, **kwargs: object) -> int:
+        errors.append((message, dict(kwargs)))
+        return 2
+
+    monkeypatch.setattr(review, "emit_error", fake_error)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "review.py",
+            "--id",
+            str(created["review"]),
+            "--model",
+            "opencode-go/deepseek-flash",
+        ],
+    )
+
+    exit_code = review.main()
+
+    assert exit_code == 2
+    assert "remove --model" in errors[0][0]
+
+
 def test_github_review_rejects_cycle_before_local_green(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

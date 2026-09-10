@@ -699,7 +699,7 @@ def _load_cycle_and_state_dir(
 def _reject_id_creation_args(args: argparse.Namespace, state: dict[str, Any]) -> None:
     sent = [
         name
-        for name in ("mode", "cd", "base", "review_brief")
+        for name in ("mode", "cd", "base", "review_brief", "model", "reasoning")
         if getattr(args, name) is not None
     ]
     if not sent:
@@ -2004,9 +2004,10 @@ def _create_or_resume_cycle(
         if model_override:
             public_id = str(continuation.get("public_id") or "").strip()
             raise ValueError(
-                "--model/--reasoning apply when creating a review; "
+                "--model/--reasoning apply when a review is created; "
                 f"{f'review {public_id} already' if public_id else 'a review already'} "
-                "has a frozen plan. Use --new-cycle or --restart-mode to start a new cycle."
+                "has a frozen plan. Remove the override to continue it, or start a "
+                "new review once this one closes."
             )
         return _apply_runtime_options(continuation, args)
     state = create_cycle(
