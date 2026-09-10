@@ -2590,3 +2590,88 @@ def test_cmd_sample_emits_public_task_alias(monkeypatch, tmp_path) -> None:
             "reviewers": [],
         }
     ]
+
+
+def test_cmd_sample_dry_run_emits_selection_without_writing(
+    monkeypatch, tmp_path
+) -> None:
+    emitted: list[dict[str, object]] = []
+    writes: list[object] = []
+    cleanup_calls: list[object] = []
+    repo_root = tmp_path / "repo-root"
+
+    monkeypatch.setattr(
+        "review_suite_arena.resolve_caller_id", lambda caller_id: (None, None)
+    )
+    monkeypatch.setattr("review_suite_arena._resolve_review_cwd", lambda cd: repo_root)
+    monkeypatch.setattr("review_suite_arena.load_roster", lambda path: {"variants": []})
+    monkeypatch.setattr("review_suite_arena.read_jsonl", lambda path: [])
+    monkeypatch.setattr(
+        "review_suite_arena.load_operational_state", lambda path: {"task_classes": {}}
+    )
+    monkeypatch.setattr(
+        "review_suite_arena._raise_if_blocking_round_exists",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("dry run must skip the blocking check")
+        ),
+    )
+    monkeypatch.setattr(
+        "review_suite_arena.select_pair",
+        lambda **kwargs: {
+            "round_id": "round-1",
+            "task_class": "phase_review",
+            "status": "sampled",
+            "runs": [
+                {
+                    "slot": "alpha",
+                    "variant_id": "deepseek-v4.1-flash-low",
+                    "model": "opencode::opencode-go/deepseek-v4.1-flash",
+                    "reasoning_effort": "low",
+                }
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        "review_suite_arena.write_round", lambda *args, **kwargs: writes.append(args)
+    )
+    monkeypatch.setattr(
+        "review_suite_arena.emit_toon", lambda payload: emitted.append(payload)
+    )
+    monkeypatch.setattr(
+        "review_suite_local.cleanup_stale_ungraded_rounds",
+        lambda state_dir: cleanup_calls.append(state_dir),
+    )
+
+    result = __import__("review_suite_arena").cmd_sample(
+        Namespace(
+            task_class="review_t1",
+            caller_id=None,
+            roster=str(tmp_path / "roster.json"),
+            state_dir=str(tmp_path / "state"),
+            ignore_pending_grades=True,
+            seed=None,
+            exclude_variant_id=[],
+            dry_run=True,
+        )
+    )
+
+    assert result == 0
+    assert writes == []
+    assert cleanup_calls == []
+    assert emitted == [
+        {
+            "status": "dry_run",
+            "task": "review_t1",
+            "round_id": "round-1",
+            "selection_mode": None,
+            "selection_pairing": None,
+            "reviewers": [
+                {
+                    "slot": "alpha",
+                    "variant_id": "deepseek-v4.1-flash-low",
+                    "model": "opencode::opencode-go/deepseek-v4.1-flash",
+                    "reasoning_effort": "low",
+                }
+            ],
+        }
+    ]

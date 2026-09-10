@@ -209,7 +209,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument(
         "--dry-run",
         action="store_true",
-        help="Select and print the round without launching reviewers or writing state.",
+        help="Preview the round selection only. Does not launch reviewers, write state, or run preflight guards (pending grades, worktree, runtime).",
     )
     run.add_argument("--rating-pool-id", help="rating pool/epoch")
     run.add_argument(
@@ -231,7 +231,7 @@ def build_parser() -> argparse.ArgumentParser:
     sample.add_argument(
         "--dry-run",
         action="store_true",
-        help="Select and print the round without writing state.",
+        help="Preview the round selection only. Does not write state or run preflight guards.",
     )
     sample.add_argument("--exclude-variant-id", action="append", default=[])
 
