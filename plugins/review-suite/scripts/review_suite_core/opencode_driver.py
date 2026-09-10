@@ -29,14 +29,27 @@ def _git_diff_command(args: argparse.Namespace) -> list[str]:
     if args.commit_end:
         if not args.base or args.commit:
             raise ValueError("commit range requires --base and --commit-end")
-        return [*common, "diff", "--no-ext-diff", "--no-textconv", f"{args.base}..{args.commit_end}"]
+        return [
+            *common,
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            f"{args.base}..{args.commit_end}",
+        ]
     if bool(args.base) == bool(args.commit):
         raise ValueError("review requires exactly one of --base or --commit")
     if args.base:
-        return [*common, "diff", "--no-ext-diff", "--no-textconv", f"{args.base}...HEAD"]
+        return [
+            *common,
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            f"{args.base}...HEAD",
+        ]
     return [
         *common,
         "show",
+        "--first-parent",
         "--format=fuller",
         "--no-ext-diff",
         "--no-textconv",
@@ -74,7 +87,6 @@ def _parse_event_stream(stdout: str) -> tuple[str | None, str | None]:
     session_id: str | None = None
     current_parts: list[str] = []
     completed_messages: list[str] = []
-    all_text_parts: list[str] = []
     for raw_line in stdout.splitlines():
         try:
             event = json.loads(raw_line)
@@ -94,7 +106,6 @@ def _parse_event_stream(stdout: str) -> tuple[str | None, str | None]:
             text = str(part.get("text") or "") if isinstance(part, dict) else ""
             if text:
                 current_parts.append(text)
-                all_text_parts.append(text)
             continue
         if event_type == "step_finish" and current_parts:
             completed_messages.append("\n".join(current_parts).strip())
@@ -103,15 +114,11 @@ def _parse_event_stream(stdout: str) -> tuple[str | None, str | None]:
         completed_messages.append("\n".join(current_parts).strip())
 
     terminal_messages = [
-        text for text in completed_messages if TERMINAL_REVIEW_RESULT_PREFIX.lower() in text.lower()
+        text
+        for text in completed_messages
+        if TERMINAL_REVIEW_RESULT_PREFIX.lower() in text.lower()
     ]
-    if terminal_messages:
-        return session_id, terminal_messages[-1]
-    if completed_messages:
-        return session_id, completed_messages[-1]
-    if all_text_parts:
-        return session_id, "\n".join(all_text_parts).strip()
-    return session_id, None
+    return session_id, terminal_messages[-1] if terminal_messages else None
 
 
 def _assistant_text_candidates(value: Any) -> list[str]:
@@ -144,7 +151,9 @@ def _assistant_text_candidates(value: Any) -> list[str]:
     return candidates
 
 
-def _exported_review_text(opencode: str, session_id: str, review_root: Path) -> str | None:
+def _exported_review_text(
+    opencode: str, session_id: str, review_root: Path
+) -> str | None:
     proc = subprocess.run(
         [opencode, "export", session_id],
         cwd=review_root,
@@ -162,11 +171,11 @@ def _exported_review_text(opencode: str, session_id: str, review_root: Path) -> 
         return None
     candidates = _assistant_text_candidates(payload)
     terminal = [
-        text for text in candidates if TERMINAL_REVIEW_RESULT_PREFIX.lower() in text.lower()
+        text
+        for text in candidates
+        if TERMINAL_REVIEW_RESULT_PREFIX.lower() in text.lower()
     ]
-    if terminal:
-        return terminal[-1]
-    return candidates[-1] if candidates else None
+    return terminal[-1] if terminal else None
 
 
 def _truncate(value: str, limit: int = 4000) -> str:
@@ -184,7 +193,11 @@ def main() -> int:
         print("OpenCode review prompt is empty", file=sys.stderr)
         return 2
 
-    opencode = shutil.which("opencode") or shutil.which("opencode.exe") or shutil.which("opencode.cmd")
+    opencode = (
+        shutil.which("opencode")
+        or shutil.which("opencode.exe")
+        or shutil.which("opencode.cmd")
+    )
     if not opencode:
         print("OpenCode CLI was not found on PATH", file=sys.stderr)
         return 127
@@ -233,7 +246,9 @@ def main() -> int:
         if not reviewer_output:
             if proc.stdout:
                 print(f"[opencode stdout]\n{_truncate(proc.stdout)}", file=sys.stderr)
-            print("OpenCode completed without a usable reviewer response", file=sys.stderr)
+            print(
+                "OpenCode completed without a usable reviewer response", file=sys.stderr
+            )
             return 2
         sys.stdout.write(reviewer_output.strip() + "\n")
         return 0
