@@ -44,6 +44,8 @@ from review_suite_core import (
     merge_base,
     normalize_cwd,
     normalize_service_tier,
+    OPENCODE_MODEL_PREFIX,
+    parse_opencode_review_metadata,
     prepare_codex_review_launch,
     price_usage_tokens,
     terminate_process_tree,
@@ -3421,9 +3423,13 @@ def collect_completed_review_capture(
         stderr_path=stderr_path,
         final_message_path=final_message_path,
     )
+    metadata = parse_opencode_review_metadata(stderr_text)
+    opencode_backend = (
+        str(variant.get("model") or "").strip().startswith(OPENCODE_MODEL_PREFIX)
+    )
     session_id = extract_session_id(stderr_text)
     thread = None
-    if session_id:
+    if not opencode_backend and session_id:
         for attempt in range(6):
             candidate = find_thread_by_id(sqlite_path=sqlite_path, thread_id=session_id)
             if (
@@ -3442,11 +3448,35 @@ def collect_completed_review_capture(
     enriched = enrich_thread_record(thread) if thread else {}
     if not reviewer_output and enriched.get("reviewer_output"):
         reviewer_output = enriched["reviewer_output"]
+    if opencode_backend:
+        metadata_usage = metadata.get("usage")
+        usage = dict(metadata_usage) if isinstance(metadata_usage, dict) else {}
+        captured_cost = metadata.get("cost_usd")
+        cost_usd = (
+            float(captured_cost)
+            if isinstance(captured_cost, (int, float))
+            and not isinstance(captured_cost, bool)
+            else None
+        )
+        session_id = str(metadata.get("session_id") or "").strip() or session_id
+        thread_id = None
+        rollout_path = None
+        tokens_used = (
+            int(usage["total_tokens"])
+            if isinstance(usage.get("total_tokens"), int)
+            else total_usage_tokens(usage)
+        )
+    else:
+        usage = dict(enriched.get("usage") or {})
+        cost_usd = compute_cost_usd(variant, usage)
+        thread_id = enriched.get("id")
+        rollout_path = enriched.get("rollout_path")
+        tokens_used = enriched.get("tokens_used")
     classification = classify_review_capture(
         reviewer_output=reviewer_output,
         stderr_text=stderr_text,
         session_id=session_id,
-        thread_id=str(enriched.get("id") or "") or None,
+        thread_id=str(thread_id or "") or None,
         rollout_error=str(enriched.get("task_error") or ""),
         timed_out=timed_out,
         transport_stalled=transport_stalled,
@@ -3469,11 +3499,11 @@ def collect_completed_review_capture(
         "returncode": 0 if session_id or reviewer_output else None,
         "elapsed_seconds": elapsed_seconds,
         "session_id": session_id,
-        "thread_id": enriched.get("id"),
-        "rollout_path": enriched.get("rollout_path"),
-        "tokens_used": enriched.get("tokens_used"),
-        "usage": enriched.get("usage", {}),
-        "cost_usd": compute_cost_usd(variant, enriched.get("usage", {})),
+        "thread_id": thread_id,
+        "rollout_path": rollout_path,
+        "tokens_used": tokens_used,
+        "usage": usage,
+        "cost_usd": cost_usd,
         "reviewer_output": reviewer_output,
         "stderr": stderr_text,
         "review_status": classification["review_status"],
@@ -3482,7 +3512,7 @@ def collect_completed_review_capture(
         "grade_block_reason": classification["grade_block_reason"],
         "terminal_command": classification.get("terminal_command"),
         "reviewer_output_ref": (
-            f"rollout://{enriched['id']}/{variant_id}" if enriched.get("id") else None
+            f"rollout://{thread_id}/{variant_id}" if thread_id else None
         ),
     }
 
@@ -4311,7 +4341,10 @@ def build_record_from_grade(
         if variant_id not in indexed:
             raise ValueError(f"unknown roster variant: {variant_id}")
         run["grader_notes"] = shared_note or str(run["slot"])
-        run["cost_usd"] = compute_cost_usd(indexed[variant_id], run.get("usage", {}))
+        if run.get("cost_usd") is None:
+            run["cost_usd"] = compute_cost_usd(
+                indexed[variant_id], run.get("usage", {})
+            )
     recorded_at = utc_now_iso()
     record = {
         "recorded_at": recorded_at,

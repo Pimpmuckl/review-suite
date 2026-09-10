@@ -20,6 +20,7 @@ from .config import (
     load_config,
 )
 from .costing import normalize_usage_tokens, price_usage_tokens
+from .opencode_driver import parse_opencode_review_metadata
 from .lens_runtime import (
     DEFAULT_PROGRESS_INTERVAL_SECONDS,
     DEFAULT_TIMEOUT_SECONDS,
@@ -55,7 +56,10 @@ from .process_runtime import (
     terminate_process_tree,
     wait_for_captured_child_process,
 )
-from .review_backend import prepare_review_launch
+from .review_backend import (
+    OPENCODE_MODEL_PREFIX,
+    prepare_review_launch,
+)
 from .workflow_state import (
     EFFECTIVE_BASE_METADATA_KEYS,
     anchor_updates_branch_state,
@@ -133,6 +137,8 @@ __all__ = [
     "normalize_cwd",
     "normalize_usage_tokens",
     "normalize_service_tier",
+    "OPENCODE_MODEL_PREFIX",
+    "parse_opencode_review_metadata",
     "progress_heartbeat_line",
     "parse_model_label",
     "price_usage_tokens",
