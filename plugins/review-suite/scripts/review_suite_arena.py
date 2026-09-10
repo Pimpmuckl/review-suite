@@ -206,6 +206,11 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--wsl", action="store_true")
     run.add_argument("--caller-id")
     run.add_argument("--ignore-pending-grades", action="store_true")
+    run.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Select and print the round without launching reviewers or writing state.",
+    )
     run.add_argument("--rating-pool-id", help="rating pool/epoch")
     run.add_argument(
         "--rank",
@@ -223,6 +228,11 @@ def build_parser() -> argparse.ArgumentParser:
     sample.add_argument("--state-dir", default=str(default_state_dir()))
     sample.add_argument("--caller-id")
     sample.add_argument("--ignore-pending-grades", action="store_true")
+    sample.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Select and print the round without writing state.",
+    )
     sample.add_argument("--exclude-variant-id", action="append", default=[])
 
     run = sub.add_parser("run-round")
@@ -337,6 +347,28 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _dry_run_round_payload(
+    payload: dict[str, object], *, task_name: str
+) -> dict[str, object]:
+    return {
+        "status": "dry_run",
+        "task": task_name,
+        "round_id": str(payload.get("round_id") or ""),
+        "selection_mode": payload.get("selection_mode"),
+        "selection_pairing": payload.get("selection_pairing"),
+        "reviewers": [
+            {
+                "slot": str(run.get("slot") or ""),
+                "variant_id": run.get("variant_id"),
+                "model": run.get("model"),
+                "reasoning_effort": run.get("reasoning_effort"),
+            }
+            for run in list(payload.get("runs") or [])
+            if isinstance(run, dict)
+        ],
+    }
+
+
 def cmd_sample(args: argparse.Namespace) -> int:
     task_class = _normalize_arena_task_class(str(args.task_class))
     caller_id, caller_id_source = resolve_caller_id(args.caller_id)
@@ -367,6 +399,13 @@ def cmd_sample(args: argparse.Namespace) -> int:
         caller_id_source=caller_id_source,
         excluded_variant_ids=set(args.exclude_variant_id),
     )
+    if args.dry_run:
+        emit_toon(
+            _dry_run_round_payload(
+                payload, task_name=_public_local_task_name(task_class)
+            )
+        )
+        return 0
     write_round(state_dir, payload)
     emit_toon(
         public_round_payload(payload, task_name=_public_local_task_name(task_class))
@@ -1434,6 +1473,7 @@ def run_benchmarked_round(
     note: str | None,
     public_task_name: str | None = None,
     allow_stage_step_down: bool = False,
+    dry_run: bool = False,
 ) -> int:
     public_task = str(public_task_name or _public_local_task_name(task_class))
     direct_grade_requested = _has_direct_grade_inputs(
@@ -1446,6 +1486,27 @@ def run_benchmarked_round(
         raise ValueError(
             "direct grading requires --task-id, --rating-pool-id, --rank, and --basis"
         )
+    if dry_run:
+        roster = load_roster(roster_path)
+        records = read_jsonl(
+            state_dir / RUN_LOG_FILENAME
+        ) + ungraded_round_exposure_records(state_dir)
+        operational_state = load_operational_state(
+            state_dir / OPERATIONAL_STATE_FILENAME
+        )
+        payload = select_pair(
+            roster=roster,
+            operational_state=operational_state,
+            records=records,
+            task_class=task_class,
+            review_cwd=review_cwd,
+            seed=seed,
+            caller_id=caller_id,
+            caller_id_source=caller_id_source,
+            excluded_variant_ids=set(),
+        )
+        emit_toon(_dry_run_round_payload(payload, task_name=public_task))
+        return 0
     if direct_grade_requested:
         pending_round = _resolve_pending_round_for_direct_grade(
             state_dir=state_dir,
@@ -1740,6 +1801,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         basis=args.basis,
         note=args.note,
         public_task_name=_public_local_task_name(task_class),
+        dry_run=bool(args.dry_run),
     )
 
 

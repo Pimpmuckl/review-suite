@@ -1374,6 +1374,78 @@ def test_run_benchmarked_round_warns_for_deep_review_without_model_names(
     assert "xhigh" not in err
 
 
+def test_run_benchmarked_round_dry_run_does_not_persist_or_launch(
+    monkeypatch, tmp_path
+) -> None:
+    emitted: list[dict[str, object]] = []
+    writes: list[dict[str, object]] = []
+    roster = {
+        "settings": {"selection_mode": "true_scramble"},
+        "variants": [
+            {
+                "id": "alpha-low",
+                "model": "gpt-5.5",
+                "reasoning_effort": "low",
+                "task_classes": ["phase_review"],
+                "state": "active",
+            },
+            {
+                "id": "bravo-low",
+                "model": "gpt-5.6",
+                "reasoning_effort": "low",
+                "task_classes": ["phase_review"],
+                "state": "active",
+            },
+        ],
+    }
+    monkeypatch.setattr("review_suite_arena.load_roster", lambda path: roster)
+    monkeypatch.setattr("review_suite_arena.emit_toon", emitted.append)
+    monkeypatch.setattr(
+        "review_suite_arena.write_round",
+        lambda state_dir, payload: writes.append(dict(payload)),
+    )
+    monkeypatch.setattr(
+        "review_suite_arena.run_round",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("dry run must not launch reviewers")
+        ),
+    )
+
+    exit_code = run_benchmarked_round(
+        task_class="phase_review",
+        review_cwd=tmp_path,
+        roster_path=tmp_path / "roster.json",
+        rubric_path=tmp_path / "rubric.json",
+        state_dir=tmp_path / "state",
+        sqlite_path=tmp_path / "state.sqlite",
+        seed=1,
+        progress_interval_seconds=30,
+        allow_unsafe_windows_wsl_fallback=False,
+        review_scope={"base": "main"},
+        prompt="",
+        caller_id="caller-1",
+        caller_id_source="explicit",
+        ignore_pending_grades=False,
+        task_id=None,
+        rating_pool_id=None,
+        rank_groups=None,
+        basis=None,
+        note=None,
+        public_task_name="review_t1",
+        dry_run=True,
+    )
+
+    assert exit_code == 0
+    assert writes == []
+    assert len(emitted) == 1
+    payload = emitted[0]
+    assert payload["status"] == "dry_run"
+    assert {run["variant_id"] for run in payload["reviewers"]} == {
+        "alpha-low",
+        "bravo-low",
+    }
+
+
 def test_run_benchmarked_round_dirty_base_guard_does_not_persist_sampled_round(
     monkeypatch, tmp_path
 ) -> None:
