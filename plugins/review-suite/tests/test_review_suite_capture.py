@@ -1065,19 +1065,19 @@ def test_opencode_arena_candidates_are_registered(tmp_path: Path) -> None:
     }
     assert opencode_layout == {
         "deepseek-v4.1-flash-low": (
-            "opencode::opencode-go/deepseek-flash",
+            "opencode::opencode-go/deepseek-v4.1-flash",
             "low",
             ["phase_review"],
             "active",
         ),
         "deepseek-v4.1-flash-high": (
-            "opencode::opencode-go/deepseek-flash",
+            "opencode::opencode-go/deepseek-v4.1-flash",
             "high",
             ["phase_review", "pr_review"],
             "active",
         ),
         "deepseek-v4.1-flash-max": (
-            "opencode::opencode-go/deepseek-flash",
+            "opencode::opencode-go/deepseek-v4.1-flash",
             "max",
             ["phase_review", "pr_review"],
             "active",
@@ -1340,7 +1340,7 @@ def test_collect_completed_review_capture_uses_opencode_metadata(
         variant_id="deepseek-flash-medium",
         variant={
             "id": "deepseek-flash-medium",
-            "model": "opencode::opencode-go/deepseek-flash",
+            "model": "opencode::opencode-go/deepseek-v4.1-flash",
             "reasoning_effort": "medium",
         },
         title="review-suite::round::review-1",

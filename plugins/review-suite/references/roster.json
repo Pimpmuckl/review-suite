@@ -248,7 +248,7 @@
     },
     {
       "id": "deepseek-v4.1-flash-low",
-      "model": "opencode::opencode-go/deepseek-flash",
+      "model": "opencode::opencode-go/deepseek-v4.1-flash",
       "reasoning_effort": "low",
       "task_classes": ["phase_review"],
       "state": "active",
@@ -256,7 +256,7 @@
     },
     {
       "id": "deepseek-v4.1-flash-high",
-      "model": "opencode::opencode-go/deepseek-flash",
+      "model": "opencode::opencode-go/deepseek-v4.1-flash",
       "reasoning_effort": "high",
       "task_classes": ["phase_review", "pr_review"],
       "state": "active",
@@ -264,7 +264,7 @@
     },
     {
       "id": "deepseek-v4.1-flash-max",
-      "model": "opencode::opencode-go/deepseek-flash",
+      "model": "opencode::opencode-go/deepseek-v4.1-flash",
       "reasoning_effort": "max",
       "task_classes": ["phase_review", "pr_review"],
       "state": "active",

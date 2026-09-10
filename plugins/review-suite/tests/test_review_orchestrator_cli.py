@@ -441,18 +441,22 @@ def test_model_override_prefixes_provider_model_and_defaults_reasoning(
 ) -> None:
     config = review.load_config(tmp_path / "state")
     override = review._requested_model_override(
-        argparse.Namespace(model="opencode-go/deepseek-flash", reasoning=None)
+        argparse.Namespace(model="opencode-go/deepseek-v4.1-flash", reasoning=None)
     )
 
-    assert override == {"model": "opencode::opencode-go/deepseek-flash"}
+    assert override == {"model": "opencode::opencode-go/deepseek-v4.1-flash"}
 
     resolved = review._config_with_model_override(config, override)
     defaults = resolved["orchestrator"]["stable_defaults"]
     assert (
-        defaults["signoff_normal_model"] == "opencode::opencode-go/deepseek-flash-high"
+        defaults["signoff_normal_model"]
+        == "opencode::opencode-go/deepseek-v4.1-flash-high"
     )
-    assert defaults["signoff_deep_model"] == "opencode::opencode-go/deepseek-flash-high"
-    assert resolved["normal"]["model"] == "opencode::opencode-go/deepseek-flash"
+    assert (
+        defaults["signoff_deep_model"]
+        == "opencode::opencode-go/deepseek-v4.1-flash-high"
+    )
+    assert resolved["normal"]["model"] == "opencode::opencode-go/deepseek-v4.1-flash"
 
 
 def test_model_override_drops_opencode_service_tier(tmp_path: Path) -> None:
@@ -550,7 +554,7 @@ def test_model_override_persists_into_fast_cycle_plan(
             "--mode",
             "fast",
             "--model",
-            "opencode-go/deepseek-flash",
+            "opencode-go/deepseek-v4.1-flash",
             "--cd",
             str(repo),
             "--base",
@@ -561,10 +565,12 @@ def test_model_override_persists_into_fast_cycle_plan(
     )
 
     state = _cycle_payload(state_dir, str(created["review"]))
-    assert state["model_override"] == {"model": "opencode::opencode-go/deepseek-flash"}
+    assert state["model_override"] == {
+        "model": "opencode::opencode-go/deepseek-v4.1-flash"
+    }
     step = state["review_plan"]["steps"][0]
     assert step["name"] == "fast-signoff"
-    assert step["model"] == "opencode::opencode-go/deepseek-flash"
+    assert step["model"] == "opencode::opencode-go/deepseek-v4.1-flash"
     assert step["reasoning_effort"] == "high"
     assert step["service_tier"] is None
 
@@ -588,7 +594,7 @@ def test_model_override_survives_restart_mode(
             "--mode",
             "fast",
             "--model",
-            "opencode-go/deepseek-flash",
+            "opencode-go/deepseek-v4.1-flash",
             "--cd",
             str(repo),
             "--base",
@@ -616,10 +622,10 @@ def test_model_override_survives_restart_mode(
 
     new_state = _cycle_payload(state_dir, str(restarted["review"]))
     assert new_state["model_override"] == {
-        "model": "opencode::opencode-go/deepseek-flash"
+        "model": "opencode::opencode-go/deepseek-v4.1-flash"
     }
     steps = {step["name"]: step for step in new_state["review_plan"]["steps"]}
-    assert steps["deep-signoff"]["model"] == "opencode::opencode-go/deepseek-flash"
+    assert steps["deep-signoff"]["model"] == "opencode::opencode-go/deepseek-v4.1-flash"
     assert steps["deep-signoff"]["reasoning_effort"] == "high"
 
 
@@ -3508,7 +3514,7 @@ def test_id_rejects_model_override(
             "--id",
             str(created["review"]),
             "--model",
-            "opencode-go/deepseek-flash",
+            "opencode-go/deepseek-v4.1-flash",
         ],
     )
 
@@ -3547,7 +3553,7 @@ def test_status_rejects_model_override(
             "review.py",
             "--status",
             "--model",
-            "opencode-go/deepseek-flash",
+            "opencode-go/deepseek-v4.1-flash",
             "--cd",
             str(repo),
         ],
