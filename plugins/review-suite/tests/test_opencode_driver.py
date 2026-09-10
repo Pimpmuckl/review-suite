@@ -223,6 +223,62 @@ def test_usage_from_export_treats_zero_cost_as_authoritative() -> None:
     assert cost_usd == 0.0
 
 
+def test_event_stream_omits_cost_when_provider_cost_absent() -> None:
+    stdout = json.dumps(
+        {
+            "type": "step_finish",
+            "sessionID": "ses_1",
+            "part": {
+                "type": "step-finish",
+                "tokens": {"input": 10, "output": 2},
+            },
+        }
+    )
+
+    result = _parse_event_stream(stdout)
+
+    assert result["usage"] == {
+        "input_tokens": 10,
+        "cached_input_tokens": 0,
+        "output_tokens": 2,
+    }
+    assert result["cost_usd"] is None
+
+
+def test_usage_from_export_omits_cost_when_provider_cost_absent() -> None:
+    payload = {
+        "messages": [
+            {
+                "info": {
+                    "role": "assistant",
+                    "tokens": {"input": 5, "output": 1},
+                    "cost": None,
+                }
+            }
+        ]
+    }
+
+    usage, cost_usd = _usage_from_export(payload)
+
+    assert usage == {
+        "input_tokens": 5,
+        "cached_input_tokens": 0,
+        "output_tokens": 1,
+    }
+    assert cost_usd is None
+
+
+def test_usage_from_export_reports_cost_without_tokens() -> None:
+    payload = {
+        "messages": [{"info": {"role": "assistant", "tokens": None, "cost": 0.25}}]
+    }
+
+    usage, cost_usd = _usage_from_export(payload)
+
+    assert usage == {}
+    assert cost_usd == pytest.approx(0.25)
+
+
 def test_metadata_line_roundtrips() -> None:
     line = _format_metadata_line("ses_1", {"input_tokens": 5}, 0.25)
 
@@ -234,6 +290,23 @@ def test_metadata_line_roundtrips() -> None:
         "cost_usd": 0.25,
     }
     assert parse_opencode_review_metadata("no metadata here") == {}
+
+
+def test_metadata_parser_prefers_final_driver_record() -> None:
+    child_line = _format_metadata_line("ses_child", {"input_tokens": 1}, 0.1)
+    driver_line = _format_metadata_line("ses_driver", {"input_tokens": 2}, 0.2)
+
+    assert parse_opencode_review_metadata(f"{child_line}{driver_line}") == {
+        "session_id": "ses_driver",
+        "usage": {"input_tokens": 2},
+        "cost_usd": 0.2,
+    }
+
+
+def test_metadata_parser_requires_prefix_at_line_start() -> None:
+    indented = "  " + _format_metadata_line("ses_x", {}, None).rstrip("\n")
+
+    assert parse_opencode_review_metadata(f"noise\n{indented}\n") == {}
 
 
 def test_export_parser_collects_assistant_message_parts() -> None:

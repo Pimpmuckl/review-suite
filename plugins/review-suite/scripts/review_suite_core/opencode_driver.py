@@ -106,8 +106,10 @@ def _new_usage_totals() -> dict[str, Any]:
     }
 
 
-def _add_usage_totals(totals: dict[str, Any], tokens: Any, cost: Any) -> bool:
-    saw = False
+def _add_usage_totals(
+    totals: dict[str, Any], tokens: Any, cost: Any
+) -> tuple[bool, bool]:
+    saw_tokens = False
     if isinstance(tokens, dict):
         cache = tokens.get("cache")
         if not isinstance(cache, dict):
@@ -118,11 +120,12 @@ def _add_usage_totals(totals: dict[str, Any], tokens: Any, cost: Any) -> bool:
         totals["cache_read"] += _int_value(cache.get("read"))
         totals["cache_write"] += _int_value(cache.get("write"))
         totals["total"] += _int_value(tokens.get("total"))
-        saw = True
+        saw_tokens = True
+    saw_cost = False
     if isinstance(cost, (int, float)) and not isinstance(cost, bool):
         totals["cost"] += float(cost)
-        saw = True
-    return saw
+        saw_cost = True
+    return saw_tokens, saw_cost
 
 
 def _usage_totals_to_usage(totals: dict[str, Any]) -> dict[str, int]:
@@ -148,7 +151,8 @@ def _parse_event_stream(stdout: str) -> dict[str, Any]:
     current_parts: list[str] = []
     completed_messages: list[str] = []
     totals = _new_usage_totals()
-    saw_usage = False
+    saw_tokens = False
+    saw_cost = False
     for raw_line in stdout.splitlines():
         try:
             event = json.loads(raw_line)
@@ -171,10 +175,12 @@ def _parse_event_stream(stdout: str) -> dict[str, Any]:
             continue
         if event_type == "step_finish":
             part = event.get("part")
-            if isinstance(part, dict) and _add_usage_totals(
-                totals, part.get("tokens"), part.get("cost")
-            ):
-                saw_usage = True
+            if isinstance(part, dict):
+                tokens_seen, cost_seen = _add_usage_totals(
+                    totals, part.get("tokens"), part.get("cost")
+                )
+                saw_tokens = saw_tokens or tokens_seen
+                saw_cost = saw_cost or cost_seen
             if current_parts:
                 completed_messages.append("\n".join(current_parts).strip())
                 current_parts = []
@@ -189,8 +195,8 @@ def _parse_event_stream(stdout: str) -> dict[str, Any]:
     return {
         "session_id": session_id,
         "reviewer_output": terminal_messages[-1] if terminal_messages else None,
-        "usage": _usage_totals_to_usage(totals) if saw_usage else {},
-        "cost_usd": round(totals["cost"], 9) if saw_usage else None,
+        "usage": _usage_totals_to_usage(totals) if saw_tokens else {},
+        "cost_usd": round(totals["cost"], 9) if saw_cost else None,
     }
 
 
@@ -201,16 +207,23 @@ def _usage_from_export(payload: Any) -> tuple[dict[str, int], float | None]:
     if not isinstance(messages, list):
         return {}, None
     totals = _new_usage_totals()
-    saw_usage = False
+    saw_tokens = False
+    saw_cost = False
     for message in messages:
         info = message.get("info") if isinstance(message, dict) else None
         if not isinstance(info, dict) or str(info.get("role") or "") != "assistant":
             continue
-        if _add_usage_totals(totals, info.get("tokens"), info.get("cost")):
-            saw_usage = True
-    if not saw_usage:
+        tokens_seen, cost_seen = _add_usage_totals(
+            totals, info.get("tokens"), info.get("cost")
+        )
+        saw_tokens = saw_tokens or tokens_seen
+        saw_cost = saw_cost or cost_seen
+    if not (saw_tokens or saw_cost):
         return {}, None
-    return _usage_totals_to_usage(totals), round(totals["cost"], 9)
+    return (
+        _usage_totals_to_usage(totals) if saw_tokens else {},
+        round(totals["cost"], 9) if saw_cost else None,
+    )
 
 
 def _format_metadata_line(
@@ -223,18 +236,18 @@ def _format_metadata_line(
 
 
 def parse_opencode_review_metadata(text: str) -> dict[str, Any]:
+    metadata: dict[str, Any] = {}
     for line in str(text or "").splitlines():
-        marker = line.find(REVIEW_METADATA_PREFIX)
-        if marker == -1:
+        if not line.startswith(REVIEW_METADATA_PREFIX):
             continue
-        raw_payload = line[marker + len(REVIEW_METADATA_PREFIX) :].strip()
+        raw_payload = line[len(REVIEW_METADATA_PREFIX) :].strip()
         try:
             payload = json.loads(raw_payload)
         except json.JSONDecodeError:
             continue
         if isinstance(payload, dict):
-            return payload
-    return {}
+            metadata = payload
+    return metadata
 
 
 def _assistant_text_candidates(value: Any) -> list[str]:
