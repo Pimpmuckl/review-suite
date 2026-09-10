@@ -206,16 +206,17 @@ def test_default_arena_pool_schedules_are_balanced(tmp_path: Path) -> None:
     for pool_name in ("arena_phase", "arena_deep"):
         candidates = set(pools[pool_name]["variant_ids"])
         groups = pools[pool_name]["variant_groups"]
+        scheduled = [variant for group in groups for variant in group]
         assert all(len(group) == 4 and len(set(group)) == 4 for group in groups)
-        assert {variant for group in groups for variant in group} == candidates
-        assert Counter(variant for group in groups for variant in group) == Counter(
-            {variant: 4 for variant in candidates}
-        )
+        # Candidates may exceed the round-robin schedule; new candidates join the
+        # balanced phase without a new schedule. Scheduled variants stay balanced.
+        assert set(scheduled) <= candidates
+        assert Counter(scheduled) == Counter({variant: 4 for variant in set(scheduled)})
         pairs = Counter(
             pair for group in groups for pair in combinations(sorted(group), 2)
         )
         assert max(pairs.values()) <= 2
-        assert sum(map(len, groups)) == 4 * len(candidates)
+        assert len(scheduled) == 4 * len(set(scheduled))
 
 
 def test_arena_candidate_list_must_cover_bootstrap_schedule(tmp_path: Path) -> None:
