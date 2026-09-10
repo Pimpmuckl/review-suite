@@ -18,7 +18,7 @@ model = "opencode::opencode-go/glm-5.3-flash"
 reasoning = "high"
 ```
 
-OpenCode maps `reasoning` to `opencode run --variant`. The OpenCode Go models expose `low`, `high`, and `max` thinking levels (`opencode-go/deepseek-flash` is DeepSeek V4.1 Flash, `opencode-go/glm-5.3-flash` is GLM-5.3-Flash). A level outside that set is rejected with the supported values. Models without a known mapping run at the provider's default reasoning behavior and no `--variant` is sent.
+OpenCode maps `reasoning` to `opencode run --variant`. The OpenCode Go models expose `low`, `high`, and `max` thinking levels (`opencode-go/deepseek-flash` is DeepSeek V4.1 Flash, `opencode-go/glm-5.3-flash` is GLM-5.3-Flash). An explicit `reasoning` outside that set is rejected with the supported values; an unsupported level inherited from settings is normalized to the model's default (`high`). Models without a known mapping run at the provider's default reasoning behavior and no `--variant` is sent.
 
 ## Runtime contract
 
