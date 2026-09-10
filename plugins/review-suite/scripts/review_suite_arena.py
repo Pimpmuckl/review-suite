@@ -375,18 +375,20 @@ def cmd_sample(args: argparse.Namespace) -> int:
     review_cwd = _resolve_review_cwd(getattr(args, "cd", None))
     roster = load_roster(Path(args.roster))
     state_dir = Path(args.state_dir)
-    _raise_if_blocking_round_exists(
-        action="sampling another round",
-        ignore_pending_grades=bool(args.ignore_pending_grades),
-        state_dir=state_dir,
-        caller_id=caller_id,
-        review_cwd=review_cwd,
-        roster_path=Path(args.roster),
-        rubric_path=Path(getattr(args, "rubric", default_rubric_path())),
-    )
+    dry_run = bool(getattr(args, "dry_run", False))
+    if not dry_run:
+        _raise_if_blocking_round_exists(
+            action="sampling another round",
+            ignore_pending_grades=bool(args.ignore_pending_grades),
+            state_dir=state_dir,
+            caller_id=caller_id,
+            review_cwd=review_cwd,
+            roster_path=Path(args.roster),
+            rubric_path=Path(getattr(args, "rubric", default_rubric_path())),
+        )
     records = read_jsonl(
         state_dir / RUN_LOG_FILENAME
-    ) + ungraded_round_exposure_records(state_dir)
+    ) + ungraded_round_exposure_records(state_dir, cleanup=not dry_run)
     operational_state = load_operational_state(state_dir / OPERATIONAL_STATE_FILENAME)
     payload = select_pair(
         roster=roster,
@@ -399,7 +401,7 @@ def cmd_sample(args: argparse.Namespace) -> int:
         caller_id_source=caller_id_source,
         excluded_variant_ids=set(args.exclude_variant_id),
     )
-    if getattr(args, "dry_run", False):
+    if dry_run:
         emit_toon(
             _dry_run_round_payload(
                 payload, task_name=_public_local_task_name(task_class)
@@ -1490,7 +1492,7 @@ def run_benchmarked_round(
         roster = load_roster(roster_path)
         records = read_jsonl(
             state_dir / RUN_LOG_FILENAME
-        ) + ungraded_round_exposure_records(state_dir)
+        ) + ungraded_round_exposure_records(state_dir, cleanup=False)
         operational_state = load_operational_state(
             state_dir / OPERATIONAL_STATE_FILENAME
         )

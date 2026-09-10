@@ -1226,8 +1226,11 @@ def latest_rerolled_round_payload(
         seen.add(current_id)
 
 
-def ungraded_round_exposure_records(state_dir: Path) -> list[dict[str, Any]]:
-    cleanup_stale_ungraded_rounds(state_dir)
+def ungraded_round_exposure_records(
+    state_dir: Path, *, cleanup: bool = True
+) -> list[dict[str, Any]]:
+    if cleanup:
+        cleanup_stale_ungraded_rounds(state_dir)
     records: list[dict[str, Any]] = []
     payloads = iter_round_payloads(state_dir)
     replaced_round_ids = {

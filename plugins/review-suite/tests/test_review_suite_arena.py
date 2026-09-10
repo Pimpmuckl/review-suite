@@ -1379,6 +1379,7 @@ def test_run_benchmarked_round_dry_run_does_not_persist_or_launch(
 ) -> None:
     emitted: list[dict[str, object]] = []
     writes: list[dict[str, object]] = []
+    cleanup_calls: list[object] = []
     roster = {
         "settings": {"selection_mode": "true_scramble"},
         "variants": [
@@ -1410,6 +1411,10 @@ def test_run_benchmarked_round_dry_run_does_not_persist_or_launch(
             AssertionError("dry run must not launch reviewers")
         ),
     )
+    monkeypatch.setattr(
+        "review_suite_local.cleanup_stale_ungraded_rounds",
+        lambda state_dir: cleanup_calls.append(state_dir),
+    )
 
     exit_code = run_benchmarked_round(
         task_class="phase_review",
@@ -1437,6 +1442,7 @@ def test_run_benchmarked_round_dry_run_does_not_persist_or_launch(
 
     assert exit_code == 0
     assert writes == []
+    assert cleanup_calls == []
     assert len(emitted) == 1
     payload = emitted[0]
     assert payload["status"] == "dry_run"
