@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import shlex
@@ -433,6 +434,184 @@ def test_profile_resolution_serializes_configured_arena_pool(tmp_path: Path) -> 
     assert arena_step["reporting_pool"] is True
     assert len(arena_step["variant_groups"]) == 13
     assert len(arena_step["variant_ids"]) == 13
+
+
+def test_model_override_prefixes_provider_model_and_keeps_reasoning(
+    tmp_path: Path,
+) -> None:
+    config = review.load_config(tmp_path / "state")
+    override = review._requested_model_override(
+        argparse.Namespace(model="opencode-go/deepseek-flash", reasoning=None)
+    )
+
+    assert override == {"model": "opencode::opencode-go/deepseek-flash"}
+
+    resolved = review._config_with_model_override(config, override)
+    defaults = resolved["orchestrator"]["stable_defaults"]
+    assert (
+        defaults["signoff_normal_model"]
+        == "opencode::opencode-go/deepseek-flash-medium"
+    )
+    assert (
+        defaults["signoff_deep_model"] == "opencode::opencode-go/deepseek-flash-xhigh"
+    )
+    assert resolved["normal"]["model"] == "opencode::opencode-go/deepseek-flash"
+
+
+def test_model_override_drops_opencode_service_tier(tmp_path: Path) -> None:
+    config = review.load_config(tmp_path / "state")
+    config["orchestrator"]["stable_defaults"]["signoff_normal_model"] = (
+        "gpt-6-astra-medium-fast"
+    )
+
+    resolved = review._config_with_model_override(
+        config,
+        {"model": "opencode::opencode-go/glm-5.3-flash"},
+    )
+
+    defaults = resolved["orchestrator"]["stable_defaults"]
+    assert (
+        defaults["signoff_normal_model"] == "opencode::opencode-go/glm-5.3-flash-medium"
+    )
+    fast_step = review.resolve_orchestrator_profile(
+        resolved, mode="fast", selection="stable"
+    ).steps[0]
+    assert fast_step.service_tier is None
+
+    codex_resolved = review._config_with_model_override(
+        config, {"model": "gpt-6-astra"}
+    )
+    codex_step = review.resolve_orchestrator_profile(
+        codex_resolved, mode="fast", selection="stable"
+    ).steps[0]
+    assert codex_step.service_tier == "fast"
+
+
+def test_opencode_model_override_rejects_reasoning(tmp_path: Path) -> None:
+    config = review.load_config(tmp_path / "state")
+
+    with pytest.raises(ValueError, match="not supported by the OpenCode backend"):
+        review._config_with_model_override(
+            config,
+            {"model": "opencode::opencode-go/glm-5.3-flash", "reasoning": "high"},
+        )
+
+
+def test_model_override_accepts_codex_model_and_reasoning_only(tmp_path: Path) -> None:
+    assert review._requested_model_override(
+        argparse.Namespace(model="gpt-6-astra", reasoning=None)
+    ) == {"model": "gpt-6-astra"}
+    assert review._requested_model_override(
+        argparse.Namespace(model=None, reasoning="high")
+    ) == {"reasoning": "high"}
+
+    config = review.load_config(tmp_path / "state")
+    resolved = review._config_with_model_override(config, {"reasoning": "high"})
+    defaults = resolved["orchestrator"]["stable_defaults"]
+    assert defaults["signoff_normal_model"] == "gpt-6-astra-high"
+    assert defaults["signoff_deep_model"] == "gpt-6-astra-high"
+
+
+def test_requested_model_override_rejects_malformed_opencode() -> None:
+    with pytest.raises(ValueError, match="provider/model"):
+        review._requested_model_override(
+            argparse.Namespace(model="opencode::foo", reasoning=None)
+        )
+    with pytest.raises(ValueError, match="provider/model"):
+        review._requested_model_override(
+            argparse.Namespace(model="opencode-go/", reasoning=None)
+        )
+
+
+def test_model_override_persists_into_fast_cycle_plan(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _stub_deslop(monkeypatch)
+    _stub_review(monkeypatch)
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/model-override")
+    _commit_file(repo, "app.txt", "feature\n", "feature")
+
+    _, created = _run_review(
+        monkeypatch,
+        [
+            "--mode",
+            "fast",
+            "--model",
+            "opencode-go/deepseek-flash",
+            "--cd",
+            str(repo),
+            "--base",
+            "main",
+            "--state-dir",
+            str(state_dir),
+        ],
+    )
+
+    state = _cycle_payload(state_dir, str(created["review"]))
+    assert state["model_override"] == {"model": "opencode::opencode-go/deepseek-flash"}
+    step = state["review_plan"]["steps"][0]
+    assert step["name"] == "fast-signoff"
+    assert step["model"] == "opencode::opencode-go/deepseek-flash"
+    assert step["reasoning_effort"] == "medium"
+    assert step["service_tier"] is None
+
+
+def test_model_override_survives_restart_mode(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _stub_deslop(monkeypatch)
+    _stub_review(monkeypatch, "fast-round-1", "deep-round-1")
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _use_compact_normal_profile(monkeypatch, state_dir, include_deep=True)
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/model-restart")
+    _commit_file(repo, "app.txt", "feature\n", "feature")
+
+    _, created = _run_review(
+        monkeypatch,
+        [
+            "--mode",
+            "fast",
+            "--model",
+            "opencode-go/deepseek-flash",
+            "--cd",
+            str(repo),
+            "--base",
+            "main",
+            "--state-dir",
+            str(state_dir),
+        ],
+    )
+    old_id = str(created["review"])
+    _run_review(monkeypatch, ["--id", old_id, "--state-dir", str(state_dir)])
+
+    _, restarted = _run_review(
+        monkeypatch,
+        [
+            "--id",
+            old_id,
+            "--restart-mode",
+            "deep",
+            "--reason",
+            "test",
+            "--state-dir",
+            str(state_dir),
+        ],
+    )
+
+    new_state = _cycle_payload(state_dir, str(restarted["review"]))
+    assert new_state["model_override"] == {
+        "model": "opencode::opencode-go/deepseek-flash"
+    }
+    steps = {step["name"]: step for step in new_state["review_plan"]["steps"]}
+    assert steps["deep-signoff"]["model"] == "opencode::opencode-go/deepseek-flash"
+    assert steps["deep-signoff"]["reasoning_effort"] == "xhigh"
 
 
 def _assert_github_handoff(
@@ -3290,6 +3469,85 @@ def test_id_rejects_creation_context_flags(
     assert "remove --mode, --cd, --base" in message
     assert "mode normal" in message
     assert str(repo.resolve()) in message
+
+
+def test_id_rejects_model_override(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _stub_deslop(monkeypatch)
+    _stub_review(monkeypatch)
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+
+    _, created = _run_review(
+        monkeypatch,
+        ["--mode", "fast", "--cd", str(repo), "--base", "main"],
+    )
+    errors: list[tuple[str, dict[str, object]]] = []
+
+    def fake_error(message: str, **kwargs: object) -> int:
+        errors.append((message, dict(kwargs)))
+        return 2
+
+    monkeypatch.setattr(review, "emit_error", fake_error)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "review.py",
+            "--id",
+            str(created["review"]),
+            "--model",
+            "opencode-go/deepseek-flash",
+        ],
+    )
+
+    exit_code = review.main()
+
+    assert exit_code == 2
+    assert "remove --model" in errors[0][0]
+
+
+def test_reject_model_override_on_existing_names_review() -> None:
+    with pytest.raises(ValueError, match="frozen plan"):
+        review._reject_model_override_on_existing(
+            {"model": "gpt-6-astra"}, {"public_id": "rvw_example"}
+        )
+
+    review._reject_model_override_on_existing({}, {"public_id": "rvw_example"})
+
+
+def test_status_rejects_model_override(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    errors: list[tuple[str, dict[str, object]]] = []
+
+    def fake_error(message: str, **kwargs: object) -> int:
+        errors.append((message, dict(kwargs)))
+        return 2
+
+    monkeypatch.setattr(review, "emit_error", fake_error)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "review.py",
+            "--status",
+            "--model",
+            "opencode-go/deepseek-flash",
+            "--cd",
+            str(repo),
+        ],
+    )
+
+    exit_code = review.main()
+
+    assert exit_code == 2
+    assert "--status cannot be combined" in errors[0][0]
 
 
 def test_github_review_rejects_cycle_before_local_green(

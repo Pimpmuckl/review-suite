@@ -34,8 +34,11 @@ from review_suite_core import (
     merge_base,
     merge_base_drift_scope,
     normalize_cwd,
+    OPENCODE_MODEL_PREFIX,
+    parse_model_label,
     resolve_ref,
     resolve_repo_root,
+    SUPPORTED_REASONING_EFFORTS,
     write_text,
 )
 from review_suite_core.config import default_state_dir, load_config
@@ -45,6 +48,7 @@ from review_suite_core.orchestrator_profiles import (
     SUPPORTED_MODES,
     resolve_orchestrator_profile,
 )
+from review_suite_core.review_backend import split_review_backend_model
 from review_suite_core.review_branch_status import cmd_status as cmd_branch_status
 from review_suite_core.orchestrator_runner import run_one_expensive_step
 from review_suite_core.orchestrator_state import (
@@ -134,6 +138,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser = AxiArgumentParser(description="Run the review-suite orchestrator shell.")
     parser.add_argument("--id")
     parser.add_argument("--mode", choices=SUPPORTED_MODES)
+    parser.add_argument(
+        "--model",
+        help="Override the review model for this cycle. provider/model values select the OpenCode backend automatically.",
+    )
+    parser.add_argument(
+        "--reasoning",
+        choices=tuple(sorted(SUPPORTED_REASONING_EFFORTS)),
+        help="Override the review reasoning effort for this cycle.",
+    )
     parser.add_argument("--restart-mode", choices=RESTART_TARGET_MODES)
     parser.add_argument(
         "--contract-conflict", choices=tuple(sorted(CONTRACT_CONFLICTS))
@@ -687,7 +700,7 @@ def _load_cycle_and_state_dir(
 def _reject_id_creation_args(args: argparse.Namespace, state: dict[str, Any]) -> None:
     sent = [
         name
-        for name in ("mode", "cd", "base", "review_brief")
+        for name in ("mode", "cd", "base", "review_brief", "model", "reasoning")
         if getattr(args, name) is not None
     ]
     if not sent:
@@ -1912,6 +1925,79 @@ def _compatible_continuation_cycle(
     return resumed
 
 
+def _requested_model_override(args: argparse.Namespace) -> dict[str, str]:
+    model = str(getattr(args, "model", "") or "").strip()
+    if model and "/" in model and not model.startswith(OPENCODE_MODEL_PREFIX):
+        model = f"{OPENCODE_MODEL_PREFIX}{model}"
+    if model:
+        split_review_backend_model(model)
+    reasoning = str(getattr(args, "reasoning", "") or "").strip()
+    override: dict[str, str] = {}
+    if model:
+        override["model"] = model
+    if reasoning:
+        override["reasoning"] = reasoning
+    return override
+
+
+def _config_with_model_override(
+    config: dict[str, Any], override: dict[str, str]
+) -> dict[str, Any]:
+    model = str(override.get("model") or "").strip()
+    reasoning = str(override.get("reasoning") or "").strip()
+    if not model and not reasoning:
+        return config
+    merged = deepcopy(config)
+    orchestrator = merged.setdefault("orchestrator", {})
+    defaults = dict(orchestrator.get("stable_defaults") or {})
+    opencode_model = model.startswith(OPENCODE_MODEL_PREFIX)
+    for ref, group in (
+        ("signoff_normal_model", "normal"),
+        ("signoff_deep_model", "deep"),
+    ):
+        existing_model, existing_effort, existing_tier = parse_model_label(
+            defaults.get(ref), field=ref
+        )
+        chosen_model = model or existing_model
+        if reasoning and chosen_model.startswith(OPENCODE_MODEL_PREFIX):
+            raise ValueError(
+                "--reasoning is not supported by the OpenCode backend "
+                f"({chosen_model}); OpenCode uses the provider's default reasoning "
+                "effort."
+            )
+        effort = reasoning or existing_effort
+        tier = None if (opencode_model and model) else existing_tier
+        defaults[ref] = "-".join([chosen_model, effort] + ([tier] if tier else []))
+        section = merged.get(group)
+        if isinstance(section, dict):
+            section["model"] = chosen_model
+            if reasoning:
+                section["reasoning"] = reasoning
+            if chosen_model.startswith(OPENCODE_MODEL_PREFIX):
+                section.pop("service_tier", None)
+    orchestrator["stable_defaults"] = defaults
+    return merged
+
+
+def _record_model_override(state: dict[str, Any], override: dict[str, str]) -> None:
+    if override:
+        state["model_override"] = dict(override)
+
+
+def _reject_model_override_on_existing(
+    override: dict[str, str], state: dict[str, Any]
+) -> None:
+    if not override:
+        return
+    public_id = str(state.get("public_id") or "").strip()
+    raise ValueError(
+        "--model/--reasoning apply when a review is created; "
+        f"{f'review {public_id} already' if public_id else 'a review already'} "
+        "has a frozen plan. Remove the override to continue it, or start a new "
+        "review once this one closes."
+    )
+
+
 def _create_or_resume_cycle(
     *, args: argparse.Namespace, state_dir: Path
 ) -> dict[str, Any]:
@@ -1922,7 +2008,8 @@ def _create_or_resume_cycle(
     base_info = effective_base_ref(review_root, args.base)
     base = str(base_info["base"])
     merge_base_head = merge_base(review_root, base, "HEAD")
-    config = load_config(state_dir)
+    model_override = _requested_model_override(args)
+    config = _config_with_model_override(load_config(state_dir), model_override)
     resolution = resolve_orchestrator_profile(
         config, mode=mode, selection=_configured_selection(config)
     )
@@ -1939,6 +2026,7 @@ def _create_or_resume_cycle(
         skip_deslop=skip_deslop,
     )
     if continuation is not None:
+        _reject_model_override_on_existing(model_override, continuation)
         return _apply_runtime_options(continuation, args)
     state = create_cycle(
         cwd=review_root,
@@ -1963,9 +2051,12 @@ def _create_or_resume_cycle(
     state = _apply_runtime_options(state, args)
     existing = load_cycle_by_key(state_dir, str(state["cycle_key"]))
     if existing is not None:
+        _reject_model_override_on_existing(model_override, existing)
         _reject_review_brief_replacement(existing, args.review_brief)
         return _apply_runtime_options(existing, args)
-    return _apply_profile_resolution(state, resolution)
+    state = _apply_profile_resolution(state, resolution)
+    _record_model_override(state, model_override)
+    return state
 
 
 def _apply_runtime_options(
@@ -2047,7 +2138,8 @@ def _create_successor_cycle(
     review_root, base, branch, head, merge_base_head = _current_restart_identity(
         state, require_exact=require_exact_identity
     )
-    config = load_config(state_dir)
+    model_override = dict(state.get("model_override") or {})
+    config = _config_with_model_override(load_config(state_dir), model_override)
     selection = str(
         dict(state.get("selection") or {}).get("requested")
         or _configured_selection(config)
@@ -2082,6 +2174,7 @@ def _create_successor_cycle(
     if existing is not None:
         return _copy_runtime_options(existing, state), True
     replacement = _copy_runtime_options(replacement, state)
+    _record_model_override(replacement, model_override)
     replacement["restart"].update(
         {
             "supersedes": str(state.get("public_id") or ""),
@@ -2777,6 +2870,8 @@ def main() -> int:
                 or args.deslop_done
                 or args.skip_deslop
                 or args.review_brief
+                or args.model
+                or args.reasoning
                 or args.show_findings
                 or args.show_status
             ):
