@@ -1,4 +1,5 @@
 import argparse
+import io
 import json
 import subprocess
 import sys
@@ -12,6 +13,9 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from review_suite_core.opencode_driver import (
+    OPENCODE_ERROR_CLASS_CAPACITY,
+    OPENCODE_ERROR_CLASS_FAILED,
+    OPENCODE_ERROR_CLASS_UNAVAILABLE,
     _assistant_text_candidates,
     _exported_review_text,
     _format_metadata_line,
@@ -20,9 +24,11 @@ from review_suite_core.opencode_driver import (
     _parse_event_stream,
     _usage_from_export,
     build_parser,
+    classify_opencode_error,
     parse_opencode_review_metadata,
 )
 from review_suite_core.opencode_runtime import opencode_review_env
+from review_suite_core import opencode_driver as opencode_driver_module
 
 
 def _args(**overrides: str | None) -> argparse.Namespace:
@@ -342,6 +348,152 @@ def test_metadata_parser_requires_prefix_at_line_start() -> None:
     assert parse_opencode_review_metadata(f"noise\n{indented}\n") == {}
 
 
+def test_event_stream_captures_error_events() -> None:
+    stdout = "\n".join(
+        [
+            json.dumps({"type": "step_start", "sessionID": "ses_1"}),
+            json.dumps(
+                {
+                    "type": "error",
+                    "sessionID": "ses_1",
+                    "error": {
+                        "name": "ProviderError",
+                        "data": {"message": "Rate limit exceeded, retry later"},
+                    },
+                }
+            ),
+        ]
+    )
+
+    result = _parse_event_stream(stdout)
+
+    assert result["errors"] == [
+        {"name": "ProviderError", "message": "Rate limit exceeded, retry later"}
+    ]
+
+
+def test_event_stream_reports_no_errors_when_clean() -> None:
+    result = _parse_event_stream(
+        '{"type":"text","part":{"text":"Review result: clean"}}'
+    )
+
+    assert result["errors"] == []
+
+
+def test_classify_opencode_error_maps_capacity_signatures() -> None:
+    for message in (
+        "429 Too Many Requests",
+        "rate limit reached",
+        "usage limit exceeded for this account",
+        "insufficient quota",
+        "model is at capacity",
+        "resource_exhausted",
+    ):
+        assert (
+            classify_opencode_error(
+                returncode=1,
+                errors=[{"name": "APIError", "message": message}],
+            )
+            == OPENCODE_ERROR_CLASS_CAPACITY
+        )
+
+
+def test_classify_opencode_error_maps_unavailable_signatures() -> None:
+    assert (
+        classify_opencode_error(
+            returncode=1,
+            errors=[{"name": "ProviderError", "message": "Model not found"}],
+        )
+        == OPENCODE_ERROR_CLASS_UNAVAILABLE
+    )
+    assert (
+        classify_opencode_error(
+            returncode=1,
+            errors=[{"name": "AuthError", "message": "Unauthorized"}],
+        )
+        == OPENCODE_ERROR_CLASS_UNAVAILABLE
+    )
+
+
+def test_classify_opencode_error_defaults_to_failed_on_nonzero_exit() -> None:
+    assert (
+        classify_opencode_error(
+            returncode=1,
+            errors=[{"name": "UnknownError", "message": "Unexpected server error."}],
+        )
+        == OPENCODE_ERROR_CLASS_FAILED
+    )
+
+
+def test_classify_opencode_error_returns_none_for_success_or_output() -> None:
+    assert (
+        classify_opencode_error(
+            returncode=0,
+            errors=[],
+            reviewer_output="Review result: clean",
+        )
+        is None
+    )
+    assert (
+        classify_opencode_error(
+            returncode=1,
+            errors=[{"name": "UnknownError", "message": "boom"}],
+            reviewer_output="Review result: clean",
+        )
+        is None
+    )
+
+
+def test_classify_opencode_error_matches_standalone_status_codes() -> None:
+    assert (
+        classify_opencode_error(
+            returncode=1, errors=[{"name": "APIError", "message": "HTTP 429"}]
+        )
+        == OPENCODE_ERROR_CLASS_CAPACITY
+    )
+    assert (
+        classify_opencode_error(
+            returncode=1,
+            errors=[{"name": "APIError", "message": "server returned 403"}],
+        )
+        == OPENCODE_ERROR_CLASS_UNAVAILABLE
+    )
+
+
+def test_classify_opencode_error_ignores_numeric_substrings() -> None:
+    assert (
+        classify_opencode_error(
+            returncode=1,
+            errors=[
+                {
+                    "name": "UnknownError",
+                    "message": "request 4290 finished after 1403ms",
+                }
+            ],
+        )
+        == OPENCODE_ERROR_CLASS_FAILED
+    )
+
+
+def test_metadata_line_roundtrips_error_class() -> None:
+    line = _format_metadata_line(
+        "ses_1",
+        {},
+        None,
+        error_class=OPENCODE_ERROR_CLASS_CAPACITY,
+        error_name="ProviderError",
+        error_message="rate limit",
+    )
+
+    assert parse_opencode_review_metadata(line) == {
+        "session_id": "ses_1",
+        "usage": {},
+        "error_class": "capacity",
+        "error_name": "ProviderError",
+        "error_message": "rate limit",
+    }
+
+
 def test_export_parser_collects_assistant_message_parts() -> None:
     payload = {
         "messages": [
@@ -410,3 +562,78 @@ def test_driver_stdio_roundtrips_unicode(monkeypatch) -> None:
         check=True,
     )
     assert proc.stdout == text
+
+
+def test_driver_main_emits_error_class_metadata_on_provider_failure(
+    monkeypatch, tmp_path: Path, capsys
+) -> None:
+    error_event = json.dumps(
+        {
+            "type": "error",
+            "sessionID": "ses_err",
+            "error": {
+                "name": "ProviderError",
+                "data": {"message": "429 Too Many Requests"},
+            },
+        }
+    )
+
+    def fake_run(command, *args, **kwargs):
+        if command[:2] == ["opencode", "export"]:
+            return subprocess.CompletedProcess(command, 1, "")
+        return subprocess.CompletedProcess(command, 1, error_event)
+
+    monkeypatch.setattr(opencode_driver_module.shutil, "which", lambda name: "opencode")
+    monkeypatch.setattr(opencode_driver_module.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        opencode_driver_module,
+        "_write_target_patch",
+        lambda args, root: tmp_path / "target.patch",
+    )
+    monkeypatch.setattr(opencode_driver_module.sys, "stdin", io.StringIO("review this"))
+    monkeypatch.setattr(
+        opencode_driver_module.sys,
+        "argv",
+        [
+            "opencode_driver.py",
+            "--model",
+            "opencode-go/deepseek-v4.1-flash",
+            "--dir",
+            str(tmp_path),
+            "--title",
+            "review-suite::test",
+        ],
+    )
+
+    assert opencode_driver_module.main() == 1
+
+    metadata = parse_opencode_review_metadata(capsys.readouterr().err)
+    assert metadata["error_class"] == "capacity"
+    assert metadata["error_name"] == "ProviderError"
+    assert metadata["error_message"] == "429 Too Many Requests"
+
+
+def test_driver_main_emits_adapter_error_when_cli_missing(
+    monkeypatch, tmp_path: Path, capsys
+) -> None:
+    monkeypatch.setattr(opencode_driver_module.shutil, "which", lambda name: None)
+    monkeypatch.setattr(opencode_driver_module.sys, "stdin", io.StringIO("review this"))
+    monkeypatch.setattr(
+        opencode_driver_module.sys,
+        "argv",
+        [
+            "opencode_driver.py",
+            "--model",
+            "opencode-go/deepseek-v4.1-flash",
+            "--dir",
+            str(tmp_path),
+            "--title",
+            "review-suite::test",
+        ],
+    )
+
+    assert opencode_driver_module.main() == 127
+
+    metadata = parse_opencode_review_metadata(capsys.readouterr().err)
+    assert metadata["error_class"] == "adapter"
+    assert metadata["error_message"] == "OpenCode CLI was not found on PATH"

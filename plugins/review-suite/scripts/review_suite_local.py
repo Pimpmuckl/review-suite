@@ -681,6 +681,8 @@ def _capacity_cooldown_seconds(failure_count: int) -> int:
 
 COOLDOWN_BLOCK_REASONS = {
     "selected_model_at_capacity",
+    "selected_model_unavailable",
+    "opencode_review_failed",
     "review_timed_out",
     "review_transport_stalled",
 }
@@ -688,6 +690,24 @@ MARKED_COOLDOWN_BLOCK_REASONS = {
     "review_interrupted",
     "missing_reviewer_output",
     "reviewer_process_exited",
+}
+OPENCODE_ERROR_BLOCK_REASONS = {
+    "capacity": "selected_model_at_capacity",
+    "unavailable": "selected_model_unavailable",
+    "failed": "opencode_review_failed",
+    "adapter": "review_tooling_failure",
+}
+OPENCODE_ERROR_REVIEW_STATUSES = {
+    "capacity": "interrupted_capacity",
+    "unavailable": "opencode_unavailable",
+    "failed": "opencode_failed",
+    "adapter": "tooling_failure",
+}
+OPENCODE_ERROR_STATUS_SUMMARIES = {
+    "capacity": "selected_model_at_capacity",
+    "unavailable": "OpenCode model is not available.",
+    "failed": "OpenCode review failed before a usable result was captured.",
+    "adapter": "OpenCode adapter failed before a review was launched.",
 }
 
 
@@ -3169,6 +3189,13 @@ def _capacity_interruption_detected(*, stderr_text: str, reviewer_output: str) -
     return "selected model is at capacity" in haystack
 
 
+def _opencode_error_metadata(stderr_text: str) -> dict[str, Any]:
+    text = str(stderr_text or "")
+    if not text.strip():
+        return {}
+    return parse_opencode_review_metadata(text)
+
+
 def _review_interrupted_detected(*, stderr_text: str, reviewer_output: str) -> bool:
     output_first_line = _first_nonempty_line(reviewer_output)
     if output_first_line:
@@ -3270,6 +3297,38 @@ def _classify_review_result(
             "grade_blocked": True,
             "grade_block_reason": "selected_model_at_capacity",
         }
+    opencode_metadata = _opencode_error_metadata(stderr_text)
+    opencode_error = str(opencode_metadata.get("error_class") or "").strip().lower()
+    if (not output or interrupted) and opencode_error:
+        reason = OPENCODE_ERROR_BLOCK_REASONS.get(opencode_error)
+        review_status = OPENCODE_ERROR_REVIEW_STATUSES.get(opencode_error)
+        if reason and review_status:
+            if opencode_error == "capacity":
+                return {
+                    "review_status": review_status,
+                    "status_summary": "selected_model_at_capacity",
+                    "grade_blocked": True,
+                    "grade_block_reason": reason,
+                }
+            detail = " / ".join(
+                part
+                for part in (
+                    str(opencode_metadata.get("error_name") or "").strip(),
+                    str(opencode_metadata.get("error_message") or "").strip(),
+                )
+                if part
+            )
+            summary = OPENCODE_ERROR_STATUS_SUMMARIES.get(
+                opencode_error, "OpenCode review failed before a usable result."
+            )
+            if detail:
+                summary = f"{summary} ({detail})"
+            return {
+                "review_status": review_status,
+                "status_summary": summary,
+                "grade_blocked": True,
+                "grade_block_reason": reason,
+            }
     if _tooling_failure_detected(stderr_text=stderr_text, reviewer_output=output):
         return {
             "review_status": "tooling_failure",
@@ -3528,6 +3587,7 @@ def collect_completed_review_capture(
         "reviewer_output_ref": (
             f"rollout://{thread_id}/{variant_id}" if thread_id else None
         ),
+        "cooldown_eligible": bool(opencode_backend and classification["grade_blocked"]),
     }
 
 
@@ -4150,7 +4210,7 @@ def collect_round_results(
         round_payload["cooldown_updates"] = cooldown_updates
         for update in cooldown_updates:
             print(
-                f"[review-suite] cooling {update['variant_id']} for {round_payload['task_class']} until {format_cooldown_until_for_display(update['until'])} after capacity hit (failure_count={update['failure_count']})",
+                f"[review-suite] cooling {update['variant_id']} for {round_payload['task_class']} until {format_cooldown_until_for_display(update['until'])} after {update['reason']} (failure_count={update['failure_count']})",
                 file=sys.stderr,
                 flush=True,
             )
