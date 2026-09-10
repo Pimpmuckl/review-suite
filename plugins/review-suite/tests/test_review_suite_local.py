@@ -2305,6 +2305,34 @@ def test_ungraded_round_exposure_records_auto_skips_stale_rounds(
     assert payload["status"] == "dismissed"
 
 
+def test_ungraded_round_exposure_records_readonly_skips_stale_without_writing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        "review_suite_local.utc_now",
+        lambda: datetime(2026, 5, 3, 12, 0, tzinfo=timezone.utc),
+    )
+    monkeypatch.setattr("review_suite_local._process_is_running", lambda pid: False)
+    write_round(
+        tmp_path,
+        {
+            "round_id": "old-pending-round",
+            "task_class": "pr_review",
+            "status": "sampled",
+            "sampled_at": "2026-05-02T11:59:00Z",
+            "runs": [{"variant_id": "gpt-5.5-high"}, {"variant_id": "gpt-5.4-xhigh"}],
+        },
+    )
+    round_file = tmp_path / "rounds" / "old-pending-round.json"
+    before = round_file.read_text(encoding="utf-8")
+
+    assert ungraded_round_exposure_records(tmp_path, cleanup=False) == []
+
+    after = round_file.read_text(encoding="utf-8")
+    assert after == before
+    assert json.loads(after)["status"] == "sampled"
+
+
 def test_cleanup_stale_ungraded_rounds_keeps_live_round(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

@@ -1374,6 +1374,35 @@ def test_run_benchmarked_round_warns_for_deep_review_without_model_names(
     assert "xhigh" not in err
 
 
+def test_run_benchmarked_round_dry_run_rejects_direct_grade_inputs(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ValueError, match="cannot be combined with direct grading"):
+        run_benchmarked_round(
+            task_class="phase_review",
+            review_cwd=tmp_path,
+            roster_path=tmp_path / "roster.json",
+            rubric_path=tmp_path / "rubric.json",
+            state_dir=tmp_path / "state",
+            sqlite_path=tmp_path / "state.sqlite",
+            seed=None,
+            progress_interval_seconds=30,
+            allow_unsafe_windows_wsl_fallback=False,
+            review_scope={"base": "main"},
+            prompt="",
+            caller_id="caller-1",
+            caller_id_source="explicit",
+            ignore_pending_grades=False,
+            task_id="task-1",
+            rating_pool_id="pool-1",
+            rank_groups=["alpha"],
+            basis="valid_findings_vs_none",
+            note=None,
+            public_task_name="review_t1",
+            dry_run=True,
+        )
+
+
 def test_run_benchmarked_round_dry_run_does_not_persist_or_launch(
     monkeypatch, tmp_path
 ) -> None:
