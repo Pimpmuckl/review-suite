@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import shlex
@@ -433,6 +434,74 @@ def test_profile_resolution_serializes_configured_arena_pool(tmp_path: Path) -> 
     assert arena_step["reporting_pool"] is True
     assert len(arena_step["variant_groups"]) == 13
     assert len(arena_step["variant_ids"]) == 13
+
+
+def test_model_override_prefixes_provider_model_and_keeps_reasoning(
+    tmp_path: Path,
+) -> None:
+    config = review.load_config(tmp_path / "state")
+    override = review._requested_model_override(
+        argparse.Namespace(model="opencode-go/deepseek-flash", reasoning=None)
+    )
+
+    assert override == {"model": "opencode::opencode-go/deepseek-flash"}
+
+    resolved = review._config_with_model_override(config, override)
+    defaults = resolved["orchestrator"]["stable_defaults"]
+    assert (
+        defaults["signoff_normal_model"]
+        == "opencode::opencode-go/deepseek-flash-medium"
+    )
+    assert (
+        defaults["signoff_deep_model"] == "opencode::opencode-go/deepseek-flash-xhigh"
+    )
+    assert resolved["normal"]["model"] == "opencode::opencode-go/deepseek-flash"
+
+
+def test_model_override_applies_reasoning_and_drops_opencode_service_tier(
+    tmp_path: Path,
+) -> None:
+    config = review.load_config(tmp_path / "state")
+    config["orchestrator"]["stable_defaults"]["signoff_normal_model"] = (
+        "gpt-6-astra-medium-fast"
+    )
+
+    resolved = review._config_with_model_override(
+        config,
+        {"model": "opencode::opencode-go/glm-5.3-flash", "reasoning": "high"},
+    )
+
+    defaults = resolved["orchestrator"]["stable_defaults"]
+    assert (
+        defaults["signoff_normal_model"] == "opencode::opencode-go/glm-5.3-flash-high"
+    )
+    fast_step = review.resolve_orchestrator_profile(
+        resolved, mode="fast", selection="stable"
+    ).steps[0]
+    assert fast_step.service_tier is None
+
+    codex_resolved = review._config_with_model_override(
+        config, {"model": "gpt-6-astra"}
+    )
+    codex_step = review.resolve_orchestrator_profile(
+        codex_resolved, mode="fast", selection="stable"
+    ).steps[0]
+    assert codex_step.service_tier == "fast"
+
+
+def test_model_override_accepts_codex_model_and_reasoning_only(tmp_path: Path) -> None:
+    assert review._requested_model_override(
+        argparse.Namespace(model="gpt-6-astra", reasoning=None)
+    ) == {"model": "gpt-6-astra"}
+    assert review._requested_model_override(
+        argparse.Namespace(model=None, reasoning="high")
+    ) == {"reasoning": "high"}
+
+    config = review.load_config(tmp_path / "state")
+    resolved = review._config_with_model_override(config, {"reasoning": "high"})
+    defaults = resolved["orchestrator"]["stable_defaults"]
+    assert defaults["signoff_normal_model"] == "gpt-6-astra-high"
+    assert defaults["signoff_deep_model"] == "gpt-6-astra-high"
 
 
 def _assert_github_handoff(
