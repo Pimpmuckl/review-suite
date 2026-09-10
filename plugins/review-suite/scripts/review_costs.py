@@ -18,6 +18,7 @@ from review_suite_core import (
     load_config,
     normalize_usage_tokens,
     price_usage_tokens,
+    run_total_tokens,
 )
 from review_suite_core.orchestrator_store import orchestrator_store_lock
 from review_suite_local import (
@@ -26,7 +27,6 @@ from review_suite_local import (
     iter_round_payloads,
     normalize_record_review_cwd_value,
     normalize_review_cwd_value,
-    total_usage_tokens,
     write_json,
 )
 
@@ -172,9 +172,7 @@ def _run_seconds(record: dict[str, Any], runs: list[dict[str, Any]]) -> float:
 
 
 def _run_tokens(run: dict[str, Any]) -> int:
-    if isinstance(run.get("tokens_used"), int):
-        return int(run["tokens_used"])
-    return total_usage_tokens(dict(run.get("usage") or {}))
+    return run_total_tokens(run)
 
 
 def _run_model_name(run: dict[str, Any]) -> str:

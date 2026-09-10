@@ -19,7 +19,12 @@ from .config import (
     lens_model_config,
     load_config,
 )
-from .costing import normalize_usage_tokens, price_usage_tokens
+from .costing import (
+    core_usage_tokens,
+    normalize_usage_tokens,
+    price_usage_tokens,
+    run_total_tokens,
+)
 from .opencode_driver import parse_opencode_review_metadata
 from .lens_runtime import (
     DEFAULT_PROGRESS_INTERVAL_SECONDS,
@@ -139,6 +144,8 @@ __all__ = [
     "normalize_service_tier",
     "OPENCODE_MODEL_PREFIX",
     "parse_opencode_review_metadata",
+    "core_usage_tokens",
+    "run_total_tokens",
     "progress_heartbeat_line",
     "parse_model_label",
     "price_usage_tokens",

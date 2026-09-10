@@ -24,6 +24,41 @@ def normalize_usage_tokens(value: dict[str, Any] | None) -> dict[str, int] | Non
     return usage
 
 
+def core_usage_tokens(usage: dict[str, Any] | None) -> int:
+    """Return the shared comparison token total for a run.
+
+    Cache reads are reused context and are excluded. Cache writes remain part of
+    input because they are freshly processed prompt tokens. Reasoning tokens are
+    billed as output and are folded into output. This is the token total shown by
+    both the Arena leaderboard and the review cost ledger.
+    """
+    if not isinstance(usage, dict):
+        return 0
+    input_tokens = int(usage.get("input_tokens", 0) or 0)
+    cached_input_tokens = int(usage.get("cached_input_tokens", 0) or 0)
+    output_tokens = int(usage.get("output_tokens", 0) or 0)
+    reasoning_tokens = int(usage.get("reasoning_output_tokens", 0) or 0)
+    return max(0, input_tokens - cached_input_tokens) + output_tokens + reasoning_tokens
+
+
+def run_total_tokens(run: dict[str, Any] | None) -> int:
+    """Return the shared token total for a stored run record.
+
+    Prefers usage components so OpenCode and Codex agree, then falls back to the
+    provider-reported total when usage is missing or empty.
+    """
+    if not isinstance(run, dict):
+        return 0
+    usage = run.get("usage")
+    total = core_usage_tokens(usage) if isinstance(usage, dict) else 0
+    if total > 0:
+        return total
+    tokens_used = run.get("tokens_used")
+    if isinstance(tokens_used, int) and not isinstance(tokens_used, bool):
+        return max(0, int(tokens_used))
+    return total
+
+
 def _pricing_rate(pricing: dict[str, Any], *keys: str) -> float | None:
     for key in keys:
         value = pricing.get(key)

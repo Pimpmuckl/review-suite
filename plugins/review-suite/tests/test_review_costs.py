@@ -567,7 +567,7 @@ def test_collect_review_cost_rows_includes_orchestrator_rounds(
     row = rows[0]
     assert row.lane_sessions["review_t1"] == 2
     assert row.lane_sessions["review_followup"] == 1
-    assert row.tokens == 195
+    assert row.tokens == 115
     assert row.cost_usd == 0.00112
 
 
