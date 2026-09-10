@@ -1226,8 +1226,18 @@ def latest_rerolled_round_payload(
         seen.add(current_id)
 
 
-def ungraded_round_exposure_records(state_dir: Path) -> list[dict[str, Any]]:
-    cleanup_stale_ungraded_rounds(state_dir)
+def ungraded_round_exposure_records(
+    state_dir: Path, *, cleanup: bool = True
+) -> list[dict[str, Any]]:
+    """Return synthetic exposure records for ungraded rounds.
+
+    Stale ungraded rounds are always excluded. When cleanup is true they are
+    also dismissed on disk first; when false the call is read-only. Always
+    excluding stale rounds keeps the read-only preview consistent with a real
+    run even if dismissal fails (for example on an OSError).
+    """
+    if cleanup:
+        cleanup_stale_ungraded_rounds(state_dir)
     records: list[dict[str, Any]] = []
     payloads = iter_round_payloads(state_dir)
     replaced_round_ids = {
@@ -1239,6 +1249,8 @@ def ungraded_round_exposure_records(state_dir: Path) -> list[dict[str, Any]]:
         if str(payload.get("status") or "") not in {"sampled", "running", "completed"}:
             continue
         if _round_has_recorded_grade(payload):
+            continue
+        if round_is_stale_ungraded(payload):
             continue
         task_class = str(payload.get("task_class") or "")
         runs = [

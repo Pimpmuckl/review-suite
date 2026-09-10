@@ -28,9 +28,9 @@ def test_plain_model_uses_codex_backend() -> None:
 
 
 def test_prefixed_model_uses_opencode_backend() -> None:
-    assert split_review_backend_model("opencode::opencode-go/deepseek-flash") == (
+    assert split_review_backend_model("opencode::opencode-go/deepseek-v4.1-flash") == (
         "opencode",
-        "opencode-go/deepseek-flash",
+        "opencode-go/deepseek-v4.1-flash",
     )
 
 
@@ -97,7 +97,7 @@ def test_prepare_opencode_review_launch_uses_driver_and_no_final_message_file(
 ) -> None:
     launch = prepare_opencode_review_launch(
         tool_name="review-suite",
-        model="opencode-go/deepseek-flash",
+        model="opencode-go/deepseek-v4.1-flash",
         reasoning_effort="high",
         title="review-suite::test",
         review_root=tmp_path,
@@ -111,7 +111,7 @@ def test_prepare_opencode_review_launch_uses_driver_and_no_final_message_file(
     assert launch.command[1].endswith("opencode_driver.py")
     assert (
         launch.command[launch.command.index("--model") + 1]
-        == "opencode-go/deepseek-flash"
+        == "opencode-go/deepseek-v4.1-flash"
     )
     assert launch.command[launch.command.index("--variant") + 1] == "high"
     assert launch.command[launch.command.index("--base") + 1] == "main"
@@ -124,7 +124,7 @@ def test_prepare_opencode_review_launch_uses_driver_and_no_final_message_file(
 def test_opencode_normalizes_inherited_reasoning_to_default(tmp_path: Path) -> None:
     launch = prepare_opencode_review_launch(
         tool_name="review-suite",
-        model="opencode-go/deepseek-flash",
+        model="opencode-go/deepseek-v4.1-flash",
         reasoning_effort="medium",
         title="review-suite::test",
         review_root=tmp_path,
@@ -157,7 +157,7 @@ def test_opencode_rejects_codex_service_tier(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="service_tier"):
         prepare_opencode_review_launch(
             tool_name="review-suite",
-            model="opencode-go/deepseek-flash",
+            model="opencode-go/deepseek-v4.1-flash",
             reasoning_effort="medium",
             service_tier="fast",
             title="review-suite::test",

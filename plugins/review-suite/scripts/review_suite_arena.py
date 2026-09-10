@@ -34,6 +34,7 @@ from review_suite_core import (
     validate_codex_runtime,
     write_text,
 )
+from review_suite_core.config import default_state_dir
 from review_suite_core.orchestrator_store import orchestrator_store_lock
 from review_suite_local import (
     OPERATIONAL_STATE_FILENAME,
@@ -52,7 +53,6 @@ from review_suite_local import (
     collect_round_results,
     default_roster_path,
     default_rubric_path,
-    default_state_dir,
     ensure_clean_git_worktree,
     enrich_record_repo_names,
     find_blocking_rounds_for_caller,
@@ -206,6 +206,11 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--wsl", action="store_true")
     run.add_argument("--caller-id")
     run.add_argument("--ignore-pending-grades", action="store_true")
+    run.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview the round selection only. Does not launch reviewers, write state, or run preflight guards (pending grades, worktree, runtime).",
+    )
     run.add_argument("--rating-pool-id", help="rating pool/epoch")
     run.add_argument(
         "--rank",
@@ -223,6 +228,11 @@ def build_parser() -> argparse.ArgumentParser:
     sample.add_argument("--state-dir", default=str(default_state_dir()))
     sample.add_argument("--caller-id")
     sample.add_argument("--ignore-pending-grades", action="store_true")
+    sample.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview the round selection only. Does not write state or run preflight guards.",
+    )
     sample.add_argument("--exclude-variant-id", action="append", default=[])
 
     run = sub.add_parser("run-round")
@@ -337,36 +347,92 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _select_round_payload(
+    *,
+    roster: dict[str, object],
+    task_class: str,
+    review_cwd: Path,
+    state_dir: Path,
+    seed: int | None,
+    caller_id: str | None,
+    caller_id_source: str | None,
+    excluded_variant_ids: set[str] | None = None,
+    cleanup_stale_rounds: bool = True,
+) -> dict[str, object]:
+    records = read_jsonl(
+        state_dir / RUN_LOG_FILENAME
+    ) + ungraded_round_exposure_records(state_dir, cleanup=cleanup_stale_rounds)
+    operational_state = load_operational_state(state_dir / OPERATIONAL_STATE_FILENAME)
+    return select_pair(
+        roster=roster,
+        operational_state=operational_state,
+        records=records,
+        task_class=task_class,
+        review_cwd=review_cwd,
+        seed=seed,
+        caller_id=caller_id,
+        caller_id_source=caller_id_source,
+        excluded_variant_ids=excluded_variant_ids or set(),
+    )
+
+
+def _dry_run_round_payload(
+    payload: dict[str, object], *, task_name: str
+) -> dict[str, object]:
+    return {
+        "status": "dry_run",
+        "task": task_name,
+        "round_id": str(payload.get("round_id") or ""),
+        "selection_mode": payload.get("selection_mode"),
+        "selection_pairing": payload.get("selection_pairing"),
+        "reviewers": [
+            {
+                "slot": str(run.get("slot") or ""),
+                "variant_id": run.get("variant_id"),
+                "model": run.get("model"),
+                "reasoning_effort": run.get("reasoning_effort"),
+            }
+            for run in list(payload.get("runs") or [])
+            if isinstance(run, dict)
+        ],
+    }
+
+
 def cmd_sample(args: argparse.Namespace) -> int:
     task_class = _normalize_arena_task_class(str(args.task_class))
     caller_id, caller_id_source = resolve_caller_id(args.caller_id)
     review_cwd = _resolve_review_cwd(getattr(args, "cd", None))
     roster = load_roster(Path(args.roster))
     state_dir = Path(args.state_dir)
-    _raise_if_blocking_round_exists(
-        action="sampling another round",
-        ignore_pending_grades=bool(args.ignore_pending_grades),
-        state_dir=state_dir,
-        caller_id=caller_id,
-        review_cwd=review_cwd,
-        roster_path=Path(args.roster),
-        rubric_path=Path(getattr(args, "rubric", default_rubric_path())),
-    )
-    records = read_jsonl(
-        state_dir / RUN_LOG_FILENAME
-    ) + ungraded_round_exposure_records(state_dir)
-    operational_state = load_operational_state(state_dir / OPERATIONAL_STATE_FILENAME)
-    payload = select_pair(
+    dry_run = bool(getattr(args, "dry_run", False))
+    if not dry_run:
+        _raise_if_blocking_round_exists(
+            action="sampling another round",
+            ignore_pending_grades=bool(args.ignore_pending_grades),
+            state_dir=state_dir,
+            caller_id=caller_id,
+            review_cwd=review_cwd,
+            roster_path=Path(args.roster),
+            rubric_path=Path(getattr(args, "rubric", default_rubric_path())),
+        )
+    payload = _select_round_payload(
         roster=roster,
-        operational_state=operational_state,
-        records=records,
         task_class=task_class,
         review_cwd=review_cwd,
+        state_dir=state_dir,
         seed=args.seed,
         caller_id=caller_id,
         caller_id_source=caller_id_source,
         excluded_variant_ids=set(args.exclude_variant_id),
+        cleanup_stale_rounds=not dry_run,
     )
+    if dry_run:
+        emit_toon(
+            _dry_run_round_payload(
+                payload, task_name=_public_local_task_name(task_class)
+            )
+        )
+        return 0
     write_round(state_dir, payload)
     emit_toon(
         public_round_payload(payload, task_name=_public_local_task_name(task_class))
@@ -1434,6 +1500,7 @@ def run_benchmarked_round(
     note: str | None,
     public_task_name: str | None = None,
     allow_stage_step_down: bool = False,
+    dry_run: bool = False,
 ) -> int:
     public_task = str(public_task_name or _public_local_task_name(task_class))
     direct_grade_requested = _has_direct_grade_inputs(
@@ -1446,6 +1513,22 @@ def run_benchmarked_round(
         raise ValueError(
             "direct grading requires --task-id, --rating-pool-id, --rank, and --basis"
         )
+    if dry_run and direct_grade_requested:
+        raise ValueError("--dry-run cannot be combined with direct grading inputs")
+    if dry_run:
+        roster = load_roster(roster_path)
+        payload = _select_round_payload(
+            roster=roster,
+            task_class=task_class,
+            review_cwd=review_cwd,
+            state_dir=state_dir,
+            seed=seed,
+            caller_id=caller_id,
+            caller_id_source=caller_id_source,
+            cleanup_stale_rounds=False,
+        )
+        emit_toon(_dry_run_round_payload(payload, task_name=public_task))
+        return 0
     if direct_grade_requested:
         pending_round = _resolve_pending_round_for_direct_grade(
             state_dir=state_dir,
@@ -1497,20 +1580,14 @@ def run_benchmarked_round(
     )
     roster = load_roster(roster_path)
     rubric = load_rubric(rubric_path)
-    records = read_jsonl(
-        state_dir / RUN_LOG_FILENAME
-    ) + ungraded_round_exposure_records(state_dir)
-    operational_state = load_operational_state(state_dir / OPERATIONAL_STATE_FILENAME)
-    payload = select_pair(
+    payload = _select_round_payload(
         roster=roster,
-        operational_state=operational_state,
-        records=records,
         task_class=task_class,
         review_cwd=review_cwd,
+        state_dir=state_dir,
         seed=seed,
         caller_id=caller_id,
         caller_id_source=caller_id_source,
-        excluded_variant_ids=set(),
     )
     payload["roster_path"] = str(roster_path)
     payload["rubric_path"] = str(rubric_path)
@@ -1740,6 +1817,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         basis=args.basis,
         note=args.note,
         public_task_name=_public_local_task_name(task_class),
+        dry_run=bool(getattr(args, "dry_run", False)),
     )
 
 

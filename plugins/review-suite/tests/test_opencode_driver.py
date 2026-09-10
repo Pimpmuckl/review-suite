@@ -67,7 +67,7 @@ def _run_args(tmp_path: Path, *extra: str) -> argparse.Namespace:
     return build_parser().parse_args(
         [
             "--model",
-            "opencode-go/deepseek-flash",
+            "opencode-go/deepseek-v4.1-flash",
             "--dir",
             str(tmp_path),
             "--title",

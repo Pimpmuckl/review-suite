@@ -16,7 +16,7 @@ from .workflow_state import validated_linear_review_range
 OPENCODE_REVIEW_AGENT = "review-suite"
 OPENCODE_DEFAULT_REASONING_EFFORT = "high"
 OPENCODE_MODEL_REASONING_EFFORTS = {
-    "opencode-go/deepseek-flash": ("low", "high", "max"),
+    "opencode-go/deepseek-v4.1-flash": ("low", "high", "max"),
     "opencode-go/glm-5.3-flash": ("low", "high", "max"),
 }
 OPENCODE_REVIEW_SYSTEM_PROMPT = (
