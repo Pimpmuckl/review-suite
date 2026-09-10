@@ -40,6 +40,18 @@ def test_git_diff_command_for_commit_range() -> None:
     ]
 
 
+def test_git_show_uses_first_parent_for_single_commit_review() -> None:
+    assert _git_diff_command(_args(commit="abc")) == [
+        "git",
+        "show",
+        "--first-parent",
+        "--format=fuller",
+        "--no-ext-diff",
+        "--no-textconv",
+        "abc",
+    ]
+
+
 def test_event_stream_prefers_final_terminal_review_message() -> None:
     stdout = "\n".join(
         [
@@ -56,6 +68,21 @@ def test_event_stream_prefers_final_terminal_review_message() -> None:
 
     assert session_id == "ses_1"
     assert text == "[P1] Bug\nReview result: findings"
+
+
+def test_event_stream_rejects_incomplete_assistant_text() -> None:
+    stdout = "\n".join(
+        [
+            '{"type":"step_start","sessionID":"ses_1"}',
+            '{"type":"text","sessionID":"ses_1","part":{"text":"compaction summary"}}',
+            '{"type":"step_finish","sessionID":"ses_1"}',
+        ]
+    )
+
+    session_id, text = _parse_event_stream(stdout)
+
+    assert session_id == "ses_1"
+    assert text is None
 
 
 def test_export_parser_collects_assistant_message_parts() -> None:
