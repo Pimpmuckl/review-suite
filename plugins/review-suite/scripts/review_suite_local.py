@@ -4179,7 +4179,9 @@ def compact_benchmark_run(run: dict[str, Any]) -> dict[str, Any]:
         "usage": deepcopy(run.get("usage", {})),
         "cost_usd": run.get("cost_usd"),
     }
-    if isinstance(run.get("tokens_used"), int):
+    if isinstance(run.get("tokens_used"), int) and not isinstance(
+        run.get("tokens_used"), bool
+    ):
         compacted["tokens_used"] = int(run["tokens_used"])
     if not compacted["service_tier"]:
         compacted.pop("service_tier", None)

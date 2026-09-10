@@ -41,22 +41,35 @@ def core_usage_tokens(usage: dict[str, Any] | None) -> int:
     return max(0, input_tokens - cached_input_tokens) + output_tokens + reasoning_tokens
 
 
+_USAGE_TOKEN_KEYS = (
+    "input_tokens",
+    "cached_input_tokens",
+    "output_tokens",
+    "cache_write_tokens",
+    "reasoning_output_tokens",
+)
+
+
+def _has_structured_usage(usage: Any) -> bool:
+    return isinstance(usage, dict) and any(key in usage for key in _USAGE_TOKEN_KEYS)
+
+
 def run_total_tokens(run: dict[str, Any] | None) -> int:
     """Return the shared token total for a stored run record.
 
-    Prefers usage components so OpenCode and Codex agree, then falls back to the
-    provider-reported total when usage is missing or empty.
+    Uses the usage components when structured usage is present, even if the
+    computed total is zero, so a recorded usage breakdown is always authoritative.
+    Falls back to the provider-reported total only when usage is missing.
     """
     if not isinstance(run, dict):
         return 0
     usage = run.get("usage")
-    total = core_usage_tokens(usage) if isinstance(usage, dict) else 0
-    if total > 0:
-        return total
+    if _has_structured_usage(usage):
+        return core_usage_tokens(usage)
     tokens_used = run.get("tokens_used")
     if isinstance(tokens_used, int) and not isinstance(tokens_used, bool):
         return max(0, int(tokens_used))
-    return total
+    return 0
 
 
 def _pricing_rate(pricing: dict[str, Any], *keys: str) -> float | None:

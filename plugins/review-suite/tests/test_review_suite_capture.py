@@ -934,6 +934,31 @@ def test_run_total_tokens_prefers_usage_then_falls_back_to_tokens_used() -> None
     assert review_suite_core.run_total_tokens({}) == 0
 
 
+def test_run_total_tokens_trusts_zero_core_usage_over_tokens_used() -> None:
+    run = {
+        "usage": {"input_tokens": 100, "cached_input_tokens": 100, "output_tokens": 0},
+        "tokens_used": 5_000,
+    }
+
+    assert review_suite_core.run_total_tokens(run) == 0
+
+
+def test_run_total_tokens_rejects_bool_tokens_used() -> None:
+    assert review_suite_core.run_total_tokens({"usage": {}, "tokens_used": True}) == 0
+
+
+def test_compact_benchmark_run_keeps_int_and_drops_bool_tokens_used() -> None:
+    kept = review_suite_local.compact_benchmark_run(
+        {"variant_id": "alpha", "tokens_used": 123}
+    )
+    dropped = review_suite_local.compact_benchmark_run(
+        {"variant_id": "alpha", "tokens_used": True}
+    )
+
+    assert kept["tokens_used"] == 123
+    assert "tokens_used" not in dropped
+
+
 def test_compute_cost_and_total_tokens_treat_cached_input_as_subset() -> None:
     variant = _minimal_roster()["variants"][0]
     usage = {
