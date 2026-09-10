@@ -512,6 +512,108 @@ def test_model_override_accepts_codex_model_and_reasoning_only(tmp_path: Path) -
     assert defaults["signoff_deep_model"] == "gpt-6-astra-high"
 
 
+def test_requested_model_override_rejects_malformed_opencode() -> None:
+    with pytest.raises(ValueError, match="provider/model"):
+        review._requested_model_override(
+            argparse.Namespace(model="opencode::foo", reasoning=None)
+        )
+    with pytest.raises(ValueError, match="provider/model"):
+        review._requested_model_override(
+            argparse.Namespace(model="opencode-go/", reasoning=None)
+        )
+
+
+def test_model_override_persists_into_fast_cycle_plan(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _stub_deslop(monkeypatch)
+    _stub_review(monkeypatch)
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/model-override")
+    _commit_file(repo, "app.txt", "feature\n", "feature")
+
+    _, created = _run_review(
+        monkeypatch,
+        [
+            "--mode",
+            "fast",
+            "--model",
+            "opencode-go/deepseek-flash",
+            "--cd",
+            str(repo),
+            "--base",
+            "main",
+            "--state-dir",
+            str(state_dir),
+        ],
+    )
+
+    state = _cycle_payload(state_dir, str(created["review"]))
+    assert state["model_override"] == {"model": "opencode::opencode-go/deepseek-flash"}
+    step = state["review_plan"]["steps"][0]
+    assert step["name"] == "fast-signoff"
+    assert step["model"] == "opencode::opencode-go/deepseek-flash"
+    assert step["reasoning_effort"] == "medium"
+    assert step["service_tier"] is None
+
+
+def test_model_override_survives_restart_mode(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _stub_deslop(monkeypatch)
+    _stub_review(monkeypatch, "fast-round-1", "deep-round-1")
+    repo = tmp_path / "repo"
+    state_dir = tmp_path / "state"
+    _use_compact_normal_profile(monkeypatch, state_dir, include_deep=True)
+    _init_repo(repo)
+    _commit_file(repo, "app.txt", "base\n", "base")
+    _git(repo, "checkout", "-b", "feature/model-restart")
+    _commit_file(repo, "app.txt", "feature\n", "feature")
+
+    _, created = _run_review(
+        monkeypatch,
+        [
+            "--mode",
+            "fast",
+            "--model",
+            "opencode-go/deepseek-flash",
+            "--cd",
+            str(repo),
+            "--base",
+            "main",
+            "--state-dir",
+            str(state_dir),
+        ],
+    )
+    old_id = str(created["review"])
+    _run_review(monkeypatch, ["--id", old_id, "--state-dir", str(state_dir)])
+
+    _, restarted = _run_review(
+        monkeypatch,
+        [
+            "--id",
+            old_id,
+            "--restart-mode",
+            "deep",
+            "--reason",
+            "test",
+            "--state-dir",
+            str(state_dir),
+        ],
+    )
+
+    new_state = _cycle_payload(state_dir, str(restarted["review"]))
+    assert new_state["model_override"] == {
+        "model": "opencode::opencode-go/deepseek-flash"
+    }
+    steps = {step["name"]: step for step in new_state["review_plan"]["steps"]}
+    assert steps["deep-signoff"]["model"] == "opencode::opencode-go/deepseek-flash"
+    assert steps["deep-signoff"]["reasoning_effort"] == "xhigh"
+
+
 def _assert_github_handoff(
     action: object, *, public_id: str, state_dir: Path, blocked_by: list[str]
 ) -> None:

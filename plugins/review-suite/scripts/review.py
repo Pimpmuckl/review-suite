@@ -48,6 +48,7 @@ from review_suite_core.orchestrator_profiles import (
     SUPPORTED_MODES,
     resolve_orchestrator_profile,
 )
+from review_suite_core.review_backend import split_review_backend_model
 from review_suite_core.review_branch_status import cmd_status as cmd_branch_status
 from review_suite_core.orchestrator_runner import run_one_expensive_step
 from review_suite_core.orchestrator_state import (
@@ -1928,6 +1929,8 @@ def _requested_model_override(args: argparse.Namespace) -> dict[str, str]:
     model = str(getattr(args, "model", "") or "").strip()
     if model and "/" in model and not model.startswith(OPENCODE_MODEL_PREFIX):
         model = f"{OPENCODE_MODEL_PREFIX}{model}"
+    if model:
+        split_review_backend_model(model)
     reasoning = str(getattr(args, "reasoning", "") or "").strip()
     override: dict[str, str] = {}
     if model:
@@ -1970,6 +1973,8 @@ def _config_with_model_override(
             section["model"] = chosen_model
             if reasoning:
                 section["reasoning"] = reasoning
+            if chosen_model.startswith(OPENCODE_MODEL_PREFIX):
+                section.pop("service_tier", None)
     orchestrator["stable_defaults"] = defaults
     return merged
 
