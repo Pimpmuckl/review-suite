@@ -399,7 +399,7 @@ def cmd_sample(args: argparse.Namespace) -> int:
         caller_id_source=caller_id_source,
         excluded_variant_ids=set(args.exclude_variant_id),
     )
-    if args.dry_run:
+    if getattr(args, "dry_run", False):
         emit_toon(
             _dry_run_round_payload(
                 payload, task_name=_public_local_task_name(task_class)
@@ -1801,7 +1801,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         basis=args.basis,
         note=args.note,
         public_task_name=_public_local_task_name(task_class),
-        dry_run=bool(args.dry_run),
+        dry_run=bool(getattr(args, "dry_run", False)),
     )
 
 
