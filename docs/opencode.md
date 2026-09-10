@@ -31,7 +31,7 @@ OpenCode is launched through a small adapter with a Review Suite-owned primary r
 - denies shell, edits, subagents/tasks, web access, skills, questions, and external-directory access;
 - allows only repository read/search/LSP tools;
 - generates the bounded target patch itself and attaches it to the OpenCode run, so the model never needs shell access to inspect the diff;
-- prefers the final JSON text step containing Review Suite's terminal result marker and falls back to `opencode export <session>` if OpenCode finishes without emitting the final text event.
+- prefers the final JSON text step containing Review Suite's terminal result marker and falls back to `opencode export <session>` when that step is missing. The export fallback also preserves completed, non-summary responses without the marker for caller classification, as on the Codex path.
 
 This intentionally keeps provider quirks inside the backend. Adding another OpenCode Go model should normally be a model/configuration change, not a new execution path.
 
