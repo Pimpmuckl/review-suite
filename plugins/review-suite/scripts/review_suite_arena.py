@@ -34,6 +34,7 @@ from review_suite_core import (
     validate_codex_runtime,
     write_text,
 )
+from review_suite_core.config import default_state_dir
 from review_suite_core.orchestrator_store import orchestrator_store_lock
 from review_suite_local import (
     OPERATIONAL_STATE_FILENAME,
@@ -52,7 +53,6 @@ from review_suite_local import (
     collect_round_results,
     default_roster_path,
     default_rubric_path,
-    default_state_dir,
     ensure_clean_git_worktree,
     enrich_record_repo_names,
     find_blocking_rounds_for_caller,
