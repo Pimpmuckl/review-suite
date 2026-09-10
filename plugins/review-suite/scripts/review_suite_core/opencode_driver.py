@@ -43,6 +43,9 @@ _UNAVAILABLE_ERROR_MARKERS = (
     "unknown model",
     "invalid model",
     "no such model",
+    "model unavailable",
+    "model is not available",
+    "model is unavailable",
     "not supported",
     "does not exist",
     "unauthorized",
@@ -52,8 +55,6 @@ _UNAVAILABLE_ERROR_MARKERS = (
     "api key",
     "access denied",
     "no access",
-    "not available",
-    "unavailable",
 )
 _CAPACITY_ERROR_CODES = ("429",)
 _UNAVAILABLE_ERROR_CODES = ("401", "403")

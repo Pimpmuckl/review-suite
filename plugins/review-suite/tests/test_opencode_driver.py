@@ -413,6 +413,23 @@ def test_classify_opencode_error_maps_unavailable_signatures() -> None:
         )
         == OPENCODE_ERROR_CLASS_UNAVAILABLE
     )
+    assert (
+        classify_opencode_error(
+            returncode=1,
+            errors=[{"name": "ProviderError", "message": "Model unavailable"}],
+        )
+        == OPENCODE_ERROR_CLASS_UNAVAILABLE
+    )
+
+
+def test_classify_opencode_error_treats_service_unavailable_as_failure() -> None:
+    assert (
+        classify_opencode_error(
+            returncode=1,
+            errors=[{"name": "ProviderError", "message": "503 Service Unavailable"}],
+        )
+        == OPENCODE_ERROR_CLASS_FAILED
+    )
 
 
 def test_classify_opencode_error_defaults_to_failed_on_nonzero_exit() -> None:
