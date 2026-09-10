@@ -18,6 +18,7 @@ REVIEW_EXPORT_TIMEOUT_SECONDS = 120
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run one isolated OpenCode review.")
     parser.add_argument("--model", required=True)
+    parser.add_argument("--variant")
     parser.add_argument("--dir", required=True)
     parser.add_argument("--title", required=True)
     parser.add_argument("--base")
@@ -322,6 +323,33 @@ def _exported_review_text(
     return candidates[-1] if candidates else None
 
 
+def _opencode_run_command(
+    opencode: str,
+    args: argparse.Namespace,
+    review_root: Path,
+    patch_path: Path,
+) -> list[str]:
+    command = [
+        opencode,
+        "--pure",
+        "run",
+        "--format",
+        "json",
+        "--model",
+        args.model,
+        "--agent",
+        "review-suite",
+        "--dir",
+        str(review_root),
+        "--title",
+        args.title,
+    ]
+    if args.variant:
+        command.extend(["--variant", args.variant])
+    command.extend(["--file", str(patch_path)])
+    return command
+
+
 def _truncate(value: str, limit: int = 4000) -> str:
     text = value.strip()
     if len(text) <= limit:
@@ -349,23 +377,7 @@ def main() -> int:
     patch_path: Path | None = None
     try:
         patch_path = _write_target_patch(args, review_root)
-        command = [
-            opencode,
-            "--pure",
-            "run",
-            "--format",
-            "json",
-            "--model",
-            args.model,
-            "--agent",
-            "review-suite",
-            "--dir",
-            str(review_root),
-            "--title",
-            args.title,
-            "--file",
-            str(patch_path),
-        ]
+        command = _opencode_run_command(opencode, args, review_root, patch_path)
         proc = subprocess.run(
             command,
             cwd=review_root,

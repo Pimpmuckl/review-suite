@@ -98,7 +98,7 @@ def test_prepare_opencode_review_launch_uses_driver_and_no_final_message_file(
     launch = prepare_opencode_review_launch(
         tool_name="review-suite",
         model="opencode-go/deepseek-flash",
-        reasoning_effort="medium",
+        reasoning_effort="high",
         title="review-suite::test",
         review_root=tmp_path,
         base="main",
@@ -113,11 +113,26 @@ def test_prepare_opencode_review_launch_uses_driver_and_no_final_message_file(
         launch.command[launch.command.index("--model") + 1]
         == "opencode-go/deepseek-flash"
     )
+    assert launch.command[launch.command.index("--variant") + 1] == "high"
     assert launch.command[launch.command.index("--base") + 1] == "main"
     assert launch.final_message_path is None
     assert launch.cwd == tmp_path.resolve()
-    assert launch.effective_reasoning_effort == "provider-default"
+    assert launch.effective_reasoning_effort == "high"
     assert "Review Suite instructions:" in str(launch.stdin_text)
+
+
+def test_opencode_rejects_unsupported_reasoning_effort(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="unsupported for opencode-go/deepseek-flash"):
+        prepare_opencode_review_launch(
+            tool_name="review-suite",
+            model="opencode-go/deepseek-flash",
+            reasoning_effort="medium",
+            title="review-suite::test",
+            review_root=tmp_path,
+            base="main",
+            prompt="Review result: clean",
+            allow_unsafe_windows_wsl_fallback=False,
+        )
 
 
 def test_opencode_rejects_codex_service_tier(tmp_path: Path) -> None:

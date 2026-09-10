@@ -436,7 +436,7 @@ def test_profile_resolution_serializes_configured_arena_pool(tmp_path: Path) -> 
     assert len(arena_step["variant_ids"]) == 13
 
 
-def test_model_override_prefixes_provider_model_and_keeps_reasoning(
+def test_model_override_prefixes_provider_model_and_defaults_reasoning(
     tmp_path: Path,
 ) -> None:
     config = review.load_config(tmp_path / "state")
@@ -449,12 +449,9 @@ def test_model_override_prefixes_provider_model_and_keeps_reasoning(
     resolved = review._config_with_model_override(config, override)
     defaults = resolved["orchestrator"]["stable_defaults"]
     assert (
-        defaults["signoff_normal_model"]
-        == "opencode::opencode-go/deepseek-flash-medium"
+        defaults["signoff_normal_model"] == "opencode::opencode-go/deepseek-flash-high"
     )
-    assert (
-        defaults["signoff_deep_model"] == "opencode::opencode-go/deepseek-flash-xhigh"
-    )
+    assert defaults["signoff_deep_model"] == "opencode::opencode-go/deepseek-flash-high"
     assert resolved["normal"]["model"] == "opencode::opencode-go/deepseek-flash"
 
 
@@ -471,7 +468,7 @@ def test_model_override_drops_opencode_service_tier(tmp_path: Path) -> None:
 
     defaults = resolved["orchestrator"]["stable_defaults"]
     assert (
-        defaults["signoff_normal_model"] == "opencode::opencode-go/glm-5.3-flash-medium"
+        defaults["signoff_normal_model"] == "opencode::opencode-go/glm-5.3-flash-high"
     )
     fast_step = review.resolve_orchestrator_profile(
         resolved, mode="fast", selection="stable"
@@ -487,13 +484,25 @@ def test_model_override_drops_opencode_service_tier(tmp_path: Path) -> None:
     assert codex_step.service_tier == "fast"
 
 
-def test_opencode_model_override_rejects_reasoning(tmp_path: Path) -> None:
+def test_opencode_model_override_accepts_supported_reasoning(tmp_path: Path) -> None:
     config = review.load_config(tmp_path / "state")
 
-    with pytest.raises(ValueError, match="not supported by the OpenCode backend"):
+    resolved = review._config_with_model_override(
+        config,
+        {"model": "opencode::opencode-go/glm-5.3-flash", "reasoning": "max"},
+    )
+
+    defaults = resolved["orchestrator"]["stable_defaults"]
+    assert defaults["signoff_normal_model"] == "opencode::opencode-go/glm-5.3-flash-max"
+
+
+def test_opencode_model_override_rejects_unsupported_reasoning(tmp_path: Path) -> None:
+    config = review.load_config(tmp_path / "state")
+
+    with pytest.raises(ValueError, match="unsupported for opencode-go/glm-5.3-flash"):
         review._config_with_model_override(
             config,
-            {"model": "opencode::opencode-go/glm-5.3-flash", "reasoning": "high"},
+            {"model": "opencode::opencode-go/glm-5.3-flash", "reasoning": "medium"},
         )
 
 
@@ -556,7 +565,7 @@ def test_model_override_persists_into_fast_cycle_plan(
     step = state["review_plan"]["steps"][0]
     assert step["name"] == "fast-signoff"
     assert step["model"] == "opencode::opencode-go/deepseek-flash"
-    assert step["reasoning_effort"] == "medium"
+    assert step["reasoning_effort"] == "high"
     assert step["service_tier"] is None
 
 
@@ -611,7 +620,7 @@ def test_model_override_survives_restart_mode(
     }
     steps = {step["name"]: step for step in new_state["review_plan"]["steps"]}
     assert steps["deep-signoff"]["model"] == "opencode::opencode-go/deepseek-flash"
-    assert steps["deep-signoff"]["reasoning_effort"] == "xhigh"
+    assert steps["deep-signoff"]["reasoning_effort"] == "high"
 
 
 def _assert_github_handoff(
