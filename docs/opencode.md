@@ -46,7 +46,7 @@ OpenCode reports provider failures as structured `{"type":"error", ...}` events 
 - `unavailable` — model not found / invalid / unsupported, authentication or authorization failures;
 - `failed` — any other non-zero exit, including provider server errors that carry no recognizable message.
 
-Review Suite maps these to `selected_model_at_capacity`, `selected_model_unavailable`, and `opencode_review_failed`. All three feed the same Arena cooldown/backoff already used for Codex capacity (`30m → 2h → 6h → 12h`, escalating per consecutive failure and cleared by the next successful review). The `capacity` bucket also gets the existing single 10-second retry before the round is finalized. OpenCode runs that fail without a usable review are marked cooldown-eligible, so a repeated provider failure rests the model instead of being re-selected every round.
+Review Suite maps these to `selected_model_at_capacity`, `selected_model_unavailable`, and `opencode_review_failed`. All three feed the same Arena cooldown/backoff already used for Codex capacity (`30m → 2h → 6h → 12h`). The failure count is retained across cooldown expiry so consecutive failures keep escalating, and it is cleared by the next successful review. The `capacity` bucket also gets the existing single 10-second retry before the round is finalized. OpenCode runs that fail without a usable review are marked cooldown-eligible, so a repeated provider failure rests the model instead of being re-selected every round.
 
 Environment-level adapter failures (OpenCode CLI missing, an empty prompt, or a failed target-diff generation) are not provider failures and do not cool the variant down; they surface as tooling failures for the operator to fix.
 

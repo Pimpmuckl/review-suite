@@ -471,6 +471,7 @@ def default_operational_state() -> dict[str, Any]:
                 "probation_variant_ids": [],
                 "stable_variant_ids": [],
                 "cooldowns": {},
+                "cooldown_failures": {},
             }
             for task_class in TASK_CLASSES
         },
@@ -587,9 +588,11 @@ def load_operational_state(path: Path) -> dict[str, Any]:
                 "probation_variant_ids": [],
                 "stable_variant_ids": [],
                 "cooldowns": {},
+                "cooldown_failures": {},
             },
         )
         payload["task_classes"][task_class].setdefault("cooldowns", {})
+        payload["task_classes"][task_class].setdefault("cooldown_failures", {})
         payload["task_classes"][task_class].setdefault("champion_variant_ids", [])
         payload["task_classes"][task_class].setdefault("probation_variant_ids", [])
     _prune_expired_cooldowns(payload)
@@ -3641,6 +3644,7 @@ def _apply_capacity_cooldowns(
         operational_state = load_operational_state(state_path)
         task_state = operational_state["task_classes"][str(round_payload["task_class"])]
         cooldowns = dict(task_state.get("cooldowns") or {})
+        cooldown_failures = dict(task_state.get("cooldown_failures") or {})
         changed = False
         now = utc_now()
         now_iso = now.isoformat().replace("+00:00", "Z")
@@ -3657,13 +3661,22 @@ def _apply_capacity_cooldowns(
                 and block_reason in MARKED_COOLDOWN_BLOCK_REASONS
             ):
                 triggered_variants.add(variant_id)
-                current = cooldowns.get(variant_id) or {}
+                current = (
+                    cooldown_failures.get(variant_id) or cooldowns.get(variant_id) or {}
+                )
                 failure_count = int(current.get("failure_count", 0) or 0) + 1
-                until = now + timedelta(
-                    seconds=_capacity_cooldown_seconds(failure_count)
+                until_iso = (
+                    (now + timedelta(seconds=_capacity_cooldown_seconds(failure_count)))
+                    .isoformat()
+                    .replace("+00:00", "Z")
                 )
                 cooldowns[variant_id] = {
-                    "until": until.isoformat().replace("+00:00", "Z"),
+                    "until": until_iso,
+                    "failure_count": failure_count,
+                    "last_reason": block_reason,
+                    "last_triggered_at": now_iso,
+                }
+                cooldown_failures[variant_id] = {
                     "failure_count": failure_count,
                     "last_reason": block_reason,
                     "last_triggered_at": now_iso,
@@ -3673,7 +3686,7 @@ def _apply_capacity_cooldowns(
                         "variant_id": variant_id,
                         "reason": block_reason,
                         "failure_count": failure_count,
-                        "until": cooldowns[variant_id]["until"],
+                        "until": until_iso,
                     }
                 )
                 changed = True
@@ -3684,9 +3697,13 @@ def _apply_capacity_cooldowns(
             if variant_id in cooldowns:
                 cooldowns.pop(variant_id, None)
                 changed = True
+            if variant_id in cooldown_failures:
+                cooldown_failures.pop(variant_id, None)
+                changed = True
         if not changed:
             return updates
         task_state["cooldowns"] = cooldowns
+        task_state["cooldown_failures"] = cooldown_failures
         operational_state["generated_at"] = utc_now_iso()
         _prune_expired_cooldowns(operational_state)
         write_json(state_path, operational_state)

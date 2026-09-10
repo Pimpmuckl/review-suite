@@ -1073,6 +1073,108 @@ def test_apply_capacity_cooldowns_cools_opencode_failures(tmp_path: Path) -> Non
     assert "opencode-adapter" not in cooldowns
 
 
+def test_apply_capacity_cooldowns_escalates_after_history_expires(
+    tmp_path: Path,
+) -> None:
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    expired = "2000-01-01T00:00:00Z"
+    seed = {
+        "generated_at": expired,
+        "task_classes": {
+            "phase_review": {
+                "cooldowns": {},
+                "cooldown_failures": {
+                    "model-x": {
+                        "failure_count": 2,
+                        "last_reason": "opencode_review_failed",
+                        "last_triggered_at": expired,
+                    }
+                },
+            },
+            "pr_review": {"cooldowns": {}, "cooldown_failures": {}},
+        },
+    }
+    (state_dir / "operational_state.json").write_text(
+        json.dumps(seed), encoding="utf-8"
+    )
+
+    updates = _apply_capacity_cooldowns(
+        state_dir=state_dir,
+        round_payload={
+            "task_class": "phase_review",
+            "runs": [
+                {
+                    "variant_id": "model-x",
+                    "review_status": "opencode_failed",
+                    "grade_blocked": True,
+                    "grade_block_reason": "opencode_review_failed",
+                }
+            ],
+        },
+    )
+
+    state = json.loads(
+        (state_dir / "operational_state.json").read_text(encoding="utf-8")
+    )
+    task_state = state["task_classes"]["phase_review"]
+    assert task_state["cooldown_failures"]["model-x"]["failure_count"] == 3
+    assert updates[0]["failure_count"] == 3
+    until = datetime.fromisoformat(
+        task_state["cooldowns"]["model-x"]["until"].replace("Z", "+00:00")
+    )
+    remaining = (until - datetime.now(timezone.utc)).total_seconds()
+    assert 5.9 * 3600 < remaining <= 6 * 3600 + 5
+
+
+def test_apply_capacity_cooldowns_clears_failure_history_on_success(
+    tmp_path: Path,
+) -> None:
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    expired = "2000-01-01T00:00:00Z"
+    seed = {
+        "generated_at": expired,
+        "task_classes": {
+            "phase_review": {
+                "cooldowns": {},
+                "cooldown_failures": {
+                    "model-y": {
+                        "failure_count": 2,
+                        "last_reason": "opencode_review_failed",
+                        "last_triggered_at": expired,
+                    }
+                },
+            },
+            "pr_review": {"cooldowns": {}, "cooldown_failures": {}},
+        },
+    }
+    (state_dir / "operational_state.json").write_text(
+        json.dumps(seed), encoding="utf-8"
+    )
+
+    _apply_capacity_cooldowns(
+        state_dir=state_dir,
+        round_payload={
+            "task_class": "phase_review",
+            "runs": [
+                {
+                    "variant_id": "model-y",
+                    "review_status": "completed",
+                    "grade_blocked": False,
+                    "grade_block_reason": None,
+                }
+            ],
+        },
+    )
+
+    state = json.loads(
+        (state_dir / "operational_state.json").read_text(encoding="utf-8")
+    )
+    task_state = state["task_classes"]["phase_review"]
+    assert "model-y" not in task_state["cooldown_failures"]
+
+
 def test_ensure_clean_git_worktree_ignores_untracked_review_suite_scratch(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
