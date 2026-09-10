@@ -14,7 +14,6 @@ from .workflow_state import validated_linear_review_range
 
 
 OPENCODE_REVIEW_AGENT = "review-suite"
-OPENCODE_DEFAULT_REASONING_EFFORTS = ("low", "high", "max")
 OPENCODE_DEFAULT_REASONING_EFFORT = "high"
 OPENCODE_MODEL_REASONING_EFFORTS = {
     "opencode-go/deepseek-flash": ("low", "high", "max"),
@@ -33,15 +32,15 @@ OPENCODE_REVIEW_SYSTEM_PROMPT = (
 )
 
 
-def opencode_reasoning_efforts(model: str) -> tuple[str, ...]:
-    return OPENCODE_MODEL_REASONING_EFFORTS.get(
-        str(model or "").strip(), OPENCODE_DEFAULT_REASONING_EFFORTS
-    )
+def opencode_reasoning_efforts(model: str) -> tuple[str, ...] | None:
+    return OPENCODE_MODEL_REASONING_EFFORTS.get(str(model or "").strip())
 
 
 def validate_opencode_reasoning_effort(model: str, effort: str) -> str:
     supported = opencode_reasoning_efforts(model)
     value = str(effort or "").strip().lower()
+    if supported is None:
+        return value
     if not value:
         raise ValueError(f"thinking level is required for {model}")
     if value not in supported:
@@ -54,9 +53,21 @@ def validate_opencode_reasoning_effort(model: str, effort: str) -> str:
 
 def default_opencode_reasoning_effort(model: str) -> str:
     supported = opencode_reasoning_efforts(model)
+    if not supported:
+        return ""
     if OPENCODE_DEFAULT_REASONING_EFFORT in supported:
         return OPENCODE_DEFAULT_REASONING_EFFORT
     return supported[0]
+
+
+def opencode_reasoning_variant(model: str, effort: str) -> str | None:
+    supported = opencode_reasoning_efforts(model)
+    if not supported:
+        return None
+    value = str(effort or "").strip().lower()
+    if value in supported:
+        return value
+    return default_opencode_reasoning_effort(model)
 
 
 def _allow_gitless_review_config() -> dict[str, object]:
@@ -173,7 +184,7 @@ def prepare_opencode_review_launch(
     model_name = str(model or "").strip()
     if not model_name or "/" not in model_name:
         raise ValueError("OpenCode review model must use provider/model")
-    effort = validate_opencode_reasoning_effort(model_name, reasoning_effort)
+    variant = opencode_reasoning_variant(model_name, reasoning_effort)
 
     base_ref = str(base or "").strip()
     commit_ref = str(commit or "").strip()
@@ -198,13 +209,13 @@ def prepare_opencode_review_launch(
         str(_driver_path()),
         "--model",
         model_name,
-        "--variant",
-        effort,
         "--dir",
         str(review_root),
         "--title",
         title,
     ]
+    if variant:
+        command.extend(["--variant", variant])
     if base_ref:
         command.extend(["--base", base_ref])
     if commit_ref:
@@ -218,5 +229,5 @@ def prepare_opencode_review_launch(
         final_message_path=None,
         cwd=review_root.resolve(),
         env=opencode_review_env(),
-        effective_reasoning_effort=effort,
+        effective_reasoning_effort=variant or "provider-default",
     )
