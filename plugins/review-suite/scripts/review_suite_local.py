@@ -1081,6 +1081,7 @@ def compact_round_payload_for_storage(payload: dict[str, Any]) -> dict[str, Any]
             "stderr_path",
             "final_message_path",
             "stderr_progress_offset",
+            "_rollout_activity_epoch",
         ):
             run.pop(key, None)
     return compacted
@@ -1512,6 +1513,9 @@ def _artifact_activity_epoch(run: dict[str, Any]) -> float | None:
         stat = _path_stat(str(run.get(key) or ""))
         if stat is not None:
             times.append(float(stat.st_mtime))
+    rollout_activity = run.get("_rollout_activity_epoch")
+    if isinstance(rollout_activity, (int, float)):
+        times.append(float(rollout_activity))
     return max(times) if times else None
 
 
@@ -1661,7 +1665,10 @@ def _reviewer_deadline_reason(
     )
     rollout_path = Path(str((thread or {}).get("rollout_path") or ""))
     activity = rollout_activity_summary(rollout_path) if rollout_path.is_file() else {}
-    last_activity = activity.get("last_meaningful_at") or started
+    rollout_activity = activity.get("last_meaningful_at")
+    if rollout_activity is not None:
+        run["_rollout_activity_epoch"] = rollout_activity.timestamp()
+    last_activity = rollout_activity or started
     if (
         last_activity
         and (current - last_activity).total_seconds()
@@ -3811,7 +3818,13 @@ def _persist_cleanup_failure(state_dir: Path, payload: dict[str, Any]) -> None:
 
 def _strip_live_run_transient_fields(run: dict[str, Any]) -> dict[str, Any]:
     cleaned = deepcopy(run)
-    for key in ("pid", "stdout_path", "stderr_path", "final_message_path"):
+    for key in (
+        "pid",
+        "stdout_path",
+        "stderr_path",
+        "final_message_path",
+        "_rollout_activity_epoch",
+    ):
         cleaned.pop(key, None)
     return cleaned
 
