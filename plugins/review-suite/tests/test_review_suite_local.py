@@ -1346,6 +1346,46 @@ def test_transport_stalled_requires_reconnect_exhaustion_and_quiet_artifacts(
     )
 
 
+def test_transport_stall_respects_active_reviewer_rollout(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    stdout = tmp_path / "review.stdout"
+    stderr = tmp_path / "review.stderr"
+    rollout = tmp_path / "rollout.jsonl"
+    stdout.write_text("", encoding="utf-8")
+    stderr.write_text("ERROR: Reconnecting... 5/5\n", encoding="utf-8")
+    rollout.write_text("", encoding="utf-8")
+    old_time = 1000.0
+    __import__("os").utime(stdout, (old_time, old_time))
+    __import__("os").utime(stderr, (old_time, old_time))
+    run = {
+        "stdout_path": str(stdout),
+        "stderr_path": str(stderr),
+        "started_at": "2026-04-13T12:00:00Z",
+    }
+    active_at = datetime.fromisoformat("2026-04-13T12:20:00+00:00")
+    monkeypatch.setattr(
+        "review_suite_local._live_review_thread",
+        lambda **_: {"rollout_path": str(rollout)},
+    )
+    monkeypatch.setattr(
+        "review_suite_local.rollout_activity_summary",
+        lambda path: {"last_meaningful_at": active_at},
+    )
+
+    assert (
+        review_suite_local._reviewer_deadline_reason(
+            run=run,
+            variant={"model": "gpt-test", "reasoning_effort": "xhigh"},
+            sqlite_path=tmp_path / "state.sqlite",
+            review_cwd=tmp_path,
+            now=active_at,
+        )
+        is None
+    )
+    assert _transport_stalled(run, now_epoch=active_at.timestamp() + 60.0) is None
+
+
 def test_transport_hung_after_output_requires_quiet_captured_stdout(
     tmp_path: Path,
 ) -> None:
