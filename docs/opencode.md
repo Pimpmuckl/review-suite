@@ -18,7 +18,7 @@ model = "opencode::opencode-go/glm-5.3-flash"
 reasoning = "high"
 ```
 
-OpenCode maps `reasoning` to `opencode run --variant`. The OpenCode Go models expose `low`, `high`, and `max` thinking levels (`opencode-go/deepseek-v4.1-flash` is DeepSeek V4.1 Flash, `opencode-go/glm-5.3-flash` is GLM-5.3-Flash). An explicit `reasoning` outside that set is rejected with the supported values; an unsupported level inherited from settings is normalized to the model's default (`high`). Models without a known mapping run at the provider's default reasoning behavior and no `--variant` is sent.
+OpenCode maps `reasoning` to the `provider/model#variant` model suffix. The OpenCode Go models expose `low`, `high`, and `max` thinking levels (`opencode-go/deepseek-v4.1-flash` is DeepSeek V4.1 Flash, `opencode-go/glm-5.3-flash` is GLM-5.3-Flash). An explicit `reasoning` outside that set is rejected with the supported values; an unsupported level inherited from settings is normalized to the model's default (`high`). Models without a known mapping run at the provider's default reasoning behavior without a variant suffix.
 
 ## Runtime contract
 
@@ -26,13 +26,13 @@ The backend deliberately shares the existing Review Suite review prompt, target 
 
 OpenCode is launched through a small adapter with a Review Suite-owned primary review agent. The adapter:
 
-- runs `opencode --pure run` non-interactively;
+- runs `opencode run --standalone` non-interactively in the review checkout;
 - injects a review system prompt that mirrors Codex review's actionable-defect criteria while leaving Review Suite's output contract authoritative;
 - denies shell, edits, subagents/tasks, web access, skills, questions, and external-directory access;
 - allows only repository read/search/LSP tools;
 - generates the bounded target patch itself and attaches it to the OpenCode run, so the model never needs shell access to inspect the diff;
-- prefers the final JSON text step containing Review Suite's terminal result marker and falls back to `opencode export <session>` when that step is missing. The export fallback also preserves completed, non-summary responses without the marker for caller classification, as on the Codex path;
-- captures per-step tokens and cost from the JSON event stream, reconciles them against `opencode export <session>` (which also covers runs where OpenCode drops the final step event), and reports the provider's USD cost as authoritative.
+- prefers the final JSON text step containing Review Suite's terminal result marker and falls back to `opencode session export --standalone <session>` when that step is missing. The export fallback also preserves completed responses without the marker for caller classification, as on the Codex path;
+- captures per-step tokens and cost from the JSON event stream, reconciles them against `opencode session export --standalone <session>` (which also covers runs where OpenCode drops the final step event), and reports the provider's USD cost as authoritative.
 
 Usage is normalized to Review Suite's token shape and the provider cost is stored as-is, so Arena leaderboards and the review cost ledger account for OpenCode reviews exactly like Codex reviews. OpenCode model pricing is never looked up locally; the provider-reported cost wins when present.
 
