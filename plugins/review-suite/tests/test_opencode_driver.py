@@ -83,21 +83,34 @@ def _run_args(tmp_path: Path, *extra: str) -> argparse.Namespace:
     )
 
 
-def test_run_command_includes_variant_when_set(tmp_path: Path) -> None:
+def test_run_command_uses_opencode_2_flags_and_model_variant(tmp_path: Path) -> None:
     patch = tmp_path / "target.patch"
     command = _opencode_run_command(
-        "opencode", _run_args(tmp_path, "--variant", "high"), tmp_path, patch
+        "opencode", _run_args(tmp_path, "--variant", "high"), patch
     )
 
-    assert command[command.index("--variant") + 1] == "high"
-    assert command[-2:] == ["--file", str(patch)]
+    assert command == [
+        "opencode",
+        "run",
+        "--standalone",
+        "--format",
+        "json",
+        "--model",
+        "opencode-go/deepseek-v4.1-flash#high",
+        "--agent",
+        "review-suite",
+        "--title",
+        "review-suite::test",
+        "--file",
+        str(patch),
+    ]
 
 
 def test_run_command_omits_variant_when_unset(tmp_path: Path) -> None:
     patch = tmp_path / "target.patch"
-    command = _opencode_run_command("opencode", _run_args(tmp_path), tmp_path, patch)
+    command = _opencode_run_command("opencode", _run_args(tmp_path), patch)
 
-    assert "--variant" not in command
+    assert command[command.index("--model") + 1] == "opencode-go/deepseek-v4.1-flash"
 
 
 def test_event_stream_prefers_final_terminal_review_message() -> None:
@@ -187,36 +200,43 @@ def test_event_stream_aggregates_step_finish_usage_and_cost() -> None:
     assert result["cost_usd"] == pytest.approx(0.003)
 
 
-def test_usage_from_export_sums_assistant_messages() -> None:
+def test_usage_from_export_sums_billed_messages() -> None:
     payload = {
         "info": {"id": "ses_1"},
         "messages": [
-            {"info": {"role": "user", "cost": None, "tokens": None}},
+            {"type": "user"},
             {
-                "info": {
-                    "role": "assistant",
-                    "cost": 0.5,
-                    "tokens": {
-                        "total": 10,
-                        "input": 4,
-                        "output": 1,
-                        "reasoning": 1,
-                        "cache": {"read": 4, "write": 0},
-                    },
-                }
+                "type": "assistant",
+                "cost": 0.5,
+                "tokens": {
+                    "total": 10,
+                    "input": 4,
+                    "output": 1,
+                    "reasoning": 1,
+                    "cache": {"read": 4, "write": 0},
+                },
             },
             {
-                "info": {
-                    "role": "assistant",
-                    "cost": 0.25,
-                    "tokens": {
-                        "total": 8,
-                        "input": 2,
-                        "output": 1,
-                        "reasoning": 0,
-                        "cache": {"read": 5, "write": 0},
-                    },
-                }
+                "type": "assistant",
+                "cost": 0.25,
+                "tokens": {
+                    "total": 8,
+                    "input": 2,
+                    "output": 1,
+                    "reasoning": 0,
+                    "cache": {"read": 5, "write": 0},
+                },
+            },
+            {
+                "type": "compaction",
+                "cost": 0.125,
+                "tokens": {
+                    "total": 11,
+                    "input": 3,
+                    "output": 2,
+                    "reasoning": 1,
+                    "cache": {"read": 4, "write": 1},
+                },
             },
         ],
     }
@@ -224,30 +244,29 @@ def test_usage_from_export_sums_assistant_messages() -> None:
     usage, cost_usd = _usage_from_export(payload)
 
     assert usage == {
-        "input_tokens": 15,
-        "cached_input_tokens": 9,
-        "output_tokens": 2,
-        "reasoning_output_tokens": 1,
-        "total_tokens": 18,
+        "input_tokens": 23,
+        "cached_input_tokens": 13,
+        "output_tokens": 4,
+        "cache_write_tokens": 1,
+        "reasoning_output_tokens": 2,
+        "total_tokens": 29,
     }
-    assert cost_usd == pytest.approx(0.75)
+    assert cost_usd == pytest.approx(0.875)
 
 
 def test_usage_from_export_treats_zero_cost_as_authoritative() -> None:
     payload = {
         "messages": [
             {
-                "info": {
-                    "role": "assistant",
-                    "cost": 0,
-                    "tokens": {
-                        "total": 0,
-                        "input": 0,
-                        "output": 0,
-                        "reasoning": 0,
-                        "cache": {"read": 0, "write": 0},
-                    },
-                }
+                "type": "assistant",
+                "cost": 0,
+                "tokens": {
+                    "total": 0,
+                    "input": 0,
+                    "output": 0,
+                    "reasoning": 0,
+                    "cache": {"read": 0, "write": 0},
+                },
             }
         ]
     }
@@ -288,11 +307,9 @@ def test_usage_from_export_omits_cost_when_provider_cost_absent() -> None:
     payload = {
         "messages": [
             {
-                "info": {
-                    "role": "assistant",
-                    "tokens": {"input": 5, "output": 1},
-                    "cost": None,
-                }
+                "type": "assistant",
+                "tokens": {"input": 5, "output": 1},
+                "cost": None,
             }
         ]
     }
@@ -308,9 +325,7 @@ def test_usage_from_export_omits_cost_when_provider_cost_absent() -> None:
 
 
 def test_usage_from_export_reports_cost_without_tokens() -> None:
-    payload = {
-        "messages": [{"info": {"role": "assistant", "tokens": None, "cost": 0.25}}]
-    }
+    payload = {"messages": [{"type": "assistant", "tokens": None, "cost": 0.25}]}
 
     usage, cost_usd = _usage_from_export(payload)
 
@@ -522,8 +537,8 @@ def test_export_parser_collects_assistant_message_parts() -> None:
     payload = {
         "messages": [
             {
-                "info": {"role": "assistant"},
-                "parts": [
+                "type": "assistant",
+                "content": [
                     {"type": "text", "text": "Finding one"},
                     {"type": "text", "text": "Review result: findings"},
                 ],
@@ -546,25 +561,36 @@ def test_completed_unmarked_response_is_recovered_from_export(monkeypatch) -> No
     stream = _parse_event_stream("\n".join(map(json.dumps, events)))
     assert stream["session_id"] == "ses_1"
     assert stream["reviewer_output"] is None
-    # OpenCode 1.18.30 exports a final assistant response with finish="stop".
+    # OpenCode exports a final assistant response with finish="stop".
     payload = {
         "messages": [
             {
-                "info": {"role": "assistant", "finish": "stop", "summary": True},
-                "parts": [{"type": "text", "text": "compaction summary"}],
+                "type": "assistant",
+                "finish": "tool-calls",
+                "content": [{"type": "text", "text": "compaction summary"}],
             },
             {
-                "info": {"role": "assistant", "finish": "stop"},
-                "parts": [{"type": "text", "text": text}],
+                "type": "assistant",
+                "finish": "stop",
+                "content": [{"type": "text", "text": text}],
             },
         ]
     }
+
+    def fake_export(command, *args, **kwargs):
+        assert command == [
+            "opencode",
+            "session",
+            "export",
+            "--standalone",
+            "ses_1",
+        ]
+        return subprocess.CompletedProcess(command, 0, json.dumps(payload))
+
     monkeypatch.setattr(
         subprocess,
         "run",
-        lambda *args, **kwargs: subprocess.CompletedProcess(
-            args[0], 0, json.dumps(payload)
-        ),
+        fake_export,
     )
     assert _exported_review_text("opencode", "ses_1", Path.cwd()) == text
 
@@ -603,7 +629,7 @@ def test_driver_main_emits_error_class_metadata_on_provider_failure(
     )
 
     def fake_run(command, *args, **kwargs):
-        if command[:2] == ["opencode", "export"]:
+        if command[:3] == ["opencode", "session", "export"]:
             return subprocess.CompletedProcess(command, 1, "")
         return subprocess.CompletedProcess(command, 1, error_event)
 

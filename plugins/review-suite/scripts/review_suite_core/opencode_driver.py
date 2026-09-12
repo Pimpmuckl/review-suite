@@ -281,11 +281,13 @@ def _usage_from_export(payload: Any) -> tuple[dict[str, int], float | None]:
     saw_tokens = False
     saw_cost = False
     for message in messages:
-        info = message.get("info") if isinstance(message, dict) else None
-        if not isinstance(info, dict) or str(info.get("role") or "") != "assistant":
+        if not isinstance(message, dict) or message.get("type") not in {
+            "assistant",
+            "compaction",
+        }:
             continue
         tokens_seen, cost_seen = _add_usage_totals(
-            totals, info.get("tokens"), info.get("cost")
+            totals, message.get("tokens"), message.get("cost")
         )
         saw_tokens = saw_tokens or tokens_seen
         saw_cost = saw_cost or cost_seen
@@ -371,26 +373,18 @@ def _assistant_text_candidates(value: Any) -> list[str]:
     if not isinstance(value, dict):
         return candidates
 
-    role = str(value.get("role") or "").lower()
-    info = value.get("info")
-    if isinstance(info, dict):
-        role = str(info.get("role") or role).lower()
-    parts = value.get("parts")
-    if role == "assistant" and isinstance(parts, list):
+    content = value.get("content")
+    if value.get("type") == "assistant" and isinstance(content, list):
         text = "\n".join(
             str(part.get("text") or "")
-            for part in parts
+            for part in content
             if isinstance(part, dict)
             and str(part.get("type") or "") == "text"
             and str(part.get("text") or "")
         ).strip()
-        if (
-            text
-            and not (isinstance(info, dict) and info.get("summary"))
-            and (
-                TERMINAL_REVIEW_RESULT_PREFIX.lower() in text.lower()
-                or (isinstance(info, dict) and info.get("finish") == "stop")
-            )
+        if text and (
+            TERMINAL_REVIEW_RESULT_PREFIX.lower() in text.lower()
+            or value.get("finish") == "stop"
         ):
             candidates.append(text)
     for nested in value.values():
@@ -404,7 +398,7 @@ def _fetch_export_payload(
 ) -> dict[str, Any] | None:
     try:
         proc = subprocess.run(
-            [opencode, "export", session_id],
+            [opencode, "session", "export", "--standalone", session_id],
             cwd=review_root,
             capture_output=True,
             text=True,
@@ -437,26 +431,22 @@ def _exported_review_text(
 def _opencode_run_command(
     opencode: str,
     args: argparse.Namespace,
-    review_root: Path,
     patch_path: Path,
 ) -> list[str]:
+    model = args.model + (f"#{args.variant}" if args.variant else "")
     command = [
         opencode,
-        "--pure",
         "run",
+        "--standalone",
         "--format",
         "json",
         "--model",
-        args.model,
+        model,
         "--agent",
         "review-suite",
-        "--dir",
-        str(review_root),
         "--title",
         args.title,
     ]
-    if args.variant:
-        command.extend(["--variant", args.variant])
     command.extend(["--file", str(patch_path)])
     return command
 
@@ -501,7 +491,7 @@ def main() -> int:
     patch_path: Path | None = None
     try:
         patch_path = _write_target_patch(args, review_root)
-        command = _opencode_run_command(opencode, args, review_root, patch_path)
+        command = _opencode_run_command(opencode, args, patch_path)
         proc = subprocess.run(
             command,
             cwd=review_root,
